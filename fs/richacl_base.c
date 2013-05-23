@@ -456,6 +456,16 @@ richacl_permission(struct inode *inode, const struct richacl *acl,
 		} else
 			goto is_everyone;
 
+		/*
+		 * Apply the group file mask to entries other than OWNER@ and
+		 * EVERYONE@. This is not required for correct access checking
+		 * but ensures that we grant the same permissions as the acl
+		 * computed by richacl_apply_masks() would grant.  See
+		 * richacl_apply_masks() for a more detailed explanation.
+		 */
+		if ((acl->a_flags & ACL4_MASKED) && richace_is_allow(ace))
+			ace_mask &= acl->a_group_mask;
+
 is_owner:
 		/* The process is in the owner or group file class. */
 		in_owner_or_group_class = 1;
