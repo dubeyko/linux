@@ -524,6 +524,60 @@ out_nfserr:
 		return nfserrno(host_error);
 }
 
+#ifdef CONFIG_FS_RICHACL
+static int
+__set_richacl(struct dentry *dentry, struct richacl *racl)
+{
+	size_t buflen;
+	char *buf = NULL;
+	int error = 0;
+
+	buflen = richacl_xattr_size(racl);
+	buf = kmalloc(buflen, GFP_KERNEL);
+	error = -ENOMEM;
+	if (buf == NULL)
+		goto out;
+
+	richacl_to_xattr(racl, buf);
+	error = vfs_setxattr(dentry, RICHACL_XATTR, buf, buflen, 0);
+out:
+	kfree(buf);
+	return error;
+}
+
+static __be32
+nfsd4_set_richacl(struct dentry *dentry, struct nfs4_acl *acl)
+{
+	int host_error;
+	struct richacl *racl;
+
+	racl = nfs4_acl_nfsv4_to_richacl(acl);
+	if (IS_ERR(racl)) {
+		host_error = PTR_ERR(racl);
+		if (host_error == -EINVAL)
+			return nfserr_attrnotsupp;
+		else
+			goto out_nfserr;
+	}
+	host_error = __set_richacl(dentry, racl);
+	if (host_error < 0)
+		goto out_release;
+out_release:
+	richacl_put(racl);
+out_nfserr:
+	if (host_error == -EOPNOTSUPP)
+		return nfserr_attrnotsupp;
+	else
+		return nfserrno(host_error);
+}
+#else
+static __be32
+nfsd4_set_richacl(struct dentry *dentry, struct nfs4_acl *acl)
+{
+	return nfserr_attrnotsupp;
+}
+#endif
+
 __be32
 nfsd4_set_nfs4_acl(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		struct nfs4_acl *acl)
@@ -545,6 +599,8 @@ nfsd4_set_nfs4_acl(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	if (IS_POSIXACL(inode))
 		error = nfsd4_set_posix_acl(dentry, acl, flags);
+	else if (IS_RICHACL(inode))
+		error = nfsd4_set_richacl(dentry, acl);
 	else
 		error = nfserr_attrnotsupp;
 
