@@ -721,3 +721,38 @@ richacl_apply_masks(struct richacl **acl)
 	return retval;
 }
 EXPORT_SYMBOL_GPL(richacl_apply_masks);
+
+/**
+ * richacl_from_mode  -  create an acl which corresponds to @mode
+ * @mode:	file mode including the file type
+ */
+struct richacl *
+richacl_from_mode(mode_t mode)
+{
+	struct richacl *acl;
+	struct richace *ace;
+
+	acl = richacl_alloc(1);
+	if (!acl)
+		return NULL;
+	acl->a_flags = ACL4_MASKED;
+	acl->a_owner_mask = richacl_mode_to_mask(mode >> 6) |
+			    ACE4_POSIX_OWNER_ALLOWED;
+	acl->a_group_mask = richacl_mode_to_mask(mode >> 3);
+	acl->a_other_mask = richacl_mode_to_mask(mode);
+
+	ace = acl->a_entries;
+	ace->e_type  = ACE4_ACCESS_ALLOWED_ACE_TYPE;
+	ace->e_flags = ACE4_SPECIAL_WHO;
+	ace->e_mask = ACE4_POSIX_ALWAYS_ALLOWED |
+		      ACE4_POSIX_MODE_ALL |
+		      ACE4_POSIX_OWNER_ALLOWED;
+	/* ACE4_DELETE_CHILD is meaningless for non-directories. */
+	if (!S_ISDIR(mode))
+		ace->e_mask &= ~ACE4_DELETE_CHILD;
+	ace->u.e_who = richace_everyone_who;
+
+	return acl;
+
+}
+EXPORT_SYMBOL_GPL(richacl_from_mode);
