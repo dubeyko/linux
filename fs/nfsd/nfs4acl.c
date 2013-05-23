@@ -866,3 +866,100 @@ nfs4_acl_write_who(int who, char *p)
 EXPORT_SYMBOL(nfs4_acl_new);
 EXPORT_SYMBOL(nfs4_acl_get_whotype);
 EXPORT_SYMBOL(nfs4_acl_write_who);
+
+#ifdef CONFIG_FS_RICHACL
+/*
+ * @racl should have file mask applied using
+ * richacl_apply_masks
+ */
+struct nfs4_acl *
+nfs4_acl_richacl_to_nfsv4(struct richacl *racl)
+{
+	struct nfs4_acl *acl;
+	struct richace *race;
+	struct nfs4_ace *ace;
+
+	acl = nfs4_acl_new(racl->a_count);
+	if (acl == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	ace = acl->aces;
+	richacl_for_each_entry(race, racl) {
+		ace->type = race->e_type;
+		ace->access_mask = race->e_mask;
+		/*
+		 * FIXME!! when we support dacl remove the
+		 * clearing of ACE4_INHERITED_ACE
+		 */
+		ace->flag = race->e_flags &
+			    ~(ACE4_SPECIAL_WHO | ACE4_INHERITED_ACE);
+		if (richace_is_owner(race))
+			ace->whotype = NFS4_ACL_WHO_OWNER;
+		else if (richace_is_group(race))
+			ace->whotype = NFS4_ACL_WHO_GROUP;
+		else if (richace_is_everyone(race))
+			ace->whotype = NFS4_ACL_WHO_EVERYONE;
+		else {
+			ace->whotype = NFS4_ACL_WHO_NAMED;
+			ace->who     = race->u.e_id;
+		}
+		ace++;
+		acl->naces++;
+	}
+	return acl;
+}
+
+struct richacl *
+nfs4_acl_nfsv4_to_richacl(struct nfs4_acl *acl)
+{
+	struct richacl *racl;
+	struct richace *race;
+	struct nfs4_ace *ace;
+
+	racl = richacl_alloc(acl->naces);
+	if (racl == NULL)
+		return ERR_PTR(-ENOMEM);
+	race = racl->a_entries;
+	for (ace = acl->aces; ace < acl->aces + acl->naces; ace++) {
+		race->e_type  = ace->type;
+		race->e_flags = ace->flag;
+		race->e_mask  = ace->access_mask;
+		switch (ace->whotype) {
+		case NFS4_ACL_WHO_OWNER:
+			richace_set_who(race, richace_owner_who);
+			break;
+		case NFS4_ACL_WHO_GROUP:
+			richace_set_who(race, richace_group_who);
+			break;
+		case NFS4_ACL_WHO_EVERYONE:
+			richace_set_who(race, richace_everyone_who);
+			break;
+		case NFS4_ACL_WHO_NAMED:
+			race->u.e_id = ace->who;
+			break;
+		default:
+			richacl_put(racl);
+			return ERR_PTR(-EINVAL);
+		}
+		race++;
+	}
+	/*
+	 * NFSv4 acl don't have file mask.
+	 * Derive max mask out of ACE values
+	 */
+	richacl_compute_max_masks(racl);
+	return racl;
+}
+#else
+struct nfs4_acl *
+nfs4_acl_richacl_to_nfsv4(struct richacl *racl)
+{
+	return ERR_PTR(-EINVAL);
+}
+
+struct richacl *
+nfs4_acl_nfsv4_to_richacl(struct nfs4_acl *acl)
+{
+	return ERR_PTR(-EINVAL);
+}
+#endif

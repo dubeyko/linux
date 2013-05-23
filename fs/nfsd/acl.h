@@ -36,6 +36,7 @@
 #define LINUX_NFS4_ACL_H
 
 #include <linux/posix_acl.h>
+#include <linux/richacl.h>
 
 /* Maximum ACL we'll accept from client; chosen (somewhat arbitrarily) to
  * fit in a page: */
@@ -53,5 +54,8 @@ struct nfs4_acl *nfs4_acl_posix_to_nfsv4(struct posix_acl *,
 				struct posix_acl *, unsigned int flags);
 int nfs4_acl_nfsv4_to_posix(struct nfs4_acl *, struct posix_acl **,
 				struct posix_acl **, unsigned int flags);
+
+struct nfs4_acl *nfs4_acl_richacl_to_nfsv4(struct richacl *racl);
+struct richacl *nfs4_acl_nfsv4_to_richacl(struct nfs4_acl *acl);
 
 #endif /* LINUX_NFS4_ACL_H */
