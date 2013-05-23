@@ -3326,7 +3326,7 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	/* xattr user namespace & acls are now defaulted on */
 	set_opt(sb, XATTR_USER);
 #ifdef CONFIG_EXT4_FS_POSIX_ACL
-	set_opt(sb, POSIX_ACL);
+	sb->s_flags |= MS_POSIXACL;
 #endif
 	if ((def_mount_opts & EXT4_DEFM_JMODE) == EXT4_DEFM_JMODE_DATA)
 		set_opt(sb, JOURNAL_DATA);
@@ -3397,9 +3397,6 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		if (test_opt(sb, DELALLOC))
 			clear_opt(sb, DELALLOC);
 	}
-
-	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
-		(test_opt(sb, POSIX_ACL) ? MS_POSIXACL : 0);
 
 	if (le32_to_cpu(es->s_rev_level) == EXT4_GOOD_OLD_REV &&
 	    (EXT4_HAS_COMPAT_FEATURE(sb, ~0U) ||
@@ -4582,9 +4579,6 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 
 	if (sbi->s_mount_flags & EXT4_MF_FS_ABORTED)
 		ext4_abort(sb, "Abort forced by user");
-
-	sb->s_flags = (sb->s_flags & ~MS_POSIXACL) |
-		(test_opt(sb, POSIX_ACL) ? MS_POSIXACL : 0);
 
 	es = sbi->s_es;
 
