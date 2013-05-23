@@ -1128,7 +1128,7 @@ enum {
 	Opt_inode_readahead_blks, Opt_journal_ioprio,
 	Opt_dioread_nolock, Opt_dioread_lock,
 	Opt_discard, Opt_nodiscard, Opt_init_itable, Opt_noinit_itable,
-	Opt_max_dir_size_kb, Opt_richacl,
+	Opt_max_dir_size_kb,
 };
 
 static const match_table_t tokens = {
@@ -1203,7 +1203,6 @@ static const match_table_t tokens = {
 	{Opt_init_itable, "init_itable"},
 	{Opt_noinit_itable, "noinit_itable"},
 	{Opt_max_dir_size_kb, "max_dir_size_kb=%u"},
-	{Opt_richacl, "richacl"},
 	{Opt_removed, "check=none"},	/* mount option from ext2/3 */
 	{Opt_removed, "nocheck"},	/* mount option from ext2/3 */
 	{Opt_removed, "reservation"},	/* mount option from ext2/3 */
@@ -1237,32 +1236,27 @@ static ext4_fsblk_t get_sb_block(void **data)
 
 static void enable_acl(struct super_block *sb)
 {
-#if !defined(CONFIG_EXT4_FS_POSIX_ACL)
+#if !defined(CONFIG_EXT4_FS_POSIX_ACL) && !defined(CONFIG_EXT4_FS_RICHACL)
 	ext4_msg(sb, KERN_ERR, "acl options not supported");
 	return;
 #endif
-	sb->s_flags |= MS_POSIXACL;
+	if (EXT4_HAS_COMPAT_FEATURE(sb, EXT4_FEATURE_COMPAT_RICHACL)) {
+		sb->s_flags |= MS_RICHACL;
+		sb->s_flags &= ~MS_POSIXACL;
+	} else {
+		sb->s_flags |= MS_POSIXACL;
+		sb->s_flags &= ~MS_RICHACL;
+	}
 	return;
 }
 
 static void disable_acl(struct super_block *sb)
 {
-#if !defined(CONFIG_EXT4_FS_POSIX_ACL)
+#if !defined(CONFIG_EXT4_FS_POSIX_ACL) && !defined(CONFIG_EXT4_FS_RICHACL)
 	ext4_msg(sb, KERN_ERR, "acl options not supported");
 	return;
 #endif
-	sb->s_flags &= ~MS_POSIXACL;
-	return;
-}
-
-static void enable_richacl(struct super_block *sb)
-{
-#if !defined(CONFIG_EXT4_FS_RICHACL)
-	ext4_msg(sb, KERN_ERR, "richacl options not supported");
-	return;
-#endif
-	sb->s_flags |= MS_RICHACL;
-	sb->s_flags &= ~MS_POSIXACL;
+	sb->s_flags &= ~(MS_POSIXACL | MS_RICHACL);
 	return;
 }
 
@@ -1431,11 +1425,6 @@ static const struct mount_opts {
 	{Opt_jqfmt_vfsv0, QFMT_VFS_V0, MOPT_QFMT},
 	{Opt_jqfmt_vfsv1, QFMT_VFS_V1, MOPT_QFMT},
 	{Opt_max_dir_size_kb, 0, MOPT_GTE0},
-#ifdef CONFIG_EXT4_FS_RICHACL
-	{Opt_richacl, EXT4_MOUNT_RICHACL, MOPT_SET},
-#else
-	{Opt_richacl, 0, MOPT_NOSUPPORT},
-#endif
 	{Opt_err, 0, 0}
 };
 
@@ -1462,9 +1451,6 @@ static int handle_mount_opt(struct super_block *sb, char *opt, int token,
 	switch (token) {
 	case Opt_acl:
 		enable_acl(sb);
-		break;
-	case Opt_richacl:
-		enable_richacl(sb);
 		break;
 	case Opt_noacl:
 		disable_acl(sb);
@@ -3369,11 +3355,8 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 		set_opt(sb, NO_UID32);
 	/* xattr user namespace & acls are now defaulted on */
 	set_opt(sb, XATTR_USER);
-#ifdef CONFIG_EXT4_FS_POSIX_ACL
+#if defined(CONFIG_EXT4_FS_POSIX_ACL) || defined(CONFIG_EXT4_FS_RICHACL)
 	enable_acl(sb);
-#endif
-#ifdef CONFIG_EXT4_FS_RICHACL
-	enable_richacl(sb);
 #endif
 	if ((def_mount_opts & EXT4_DEFM_JMODE) == EXT4_DEFM_JMODE_DATA)
 		set_opt(sb, JOURNAL_DATA);
