@@ -133,3 +133,68 @@ richace_change_mask(struct richacl_alloc *x, struct richace **ace,
 	}
 	return 0;
 }
+
+/**
+ * richacl_move_everyone_aces_down  -  move everyone@ aces to the end of the acl
+ * @x:		acl and number of allocated entries
+ *
+ * Move all everyone aces to the end of the acl so that only a single everyone@
+ * allow ace remains at the end, and update the mask fields of all aces on the
+ * way.  The last ace of the resulting acl will be an everyone@ allow ace only
+ * if @acl grants any permissions to @everyone.
+ *
+ * Having at most one everyone@ allow ace at the end of the acl helps us in the
+ * following algorithms.
+ *
+ * This transformation does not alter the permissions that the acl grants.
+ */
+static int
+richacl_move_everyone_aces_down(struct richacl_alloc *x)
+{
+	struct richace *ace;
+	unsigned int allowed = 0, denied = 0;
+
+	richacl_for_each_entry(ace, x->acl) {
+		if (richace_is_inherit_only(ace))
+			continue;
+		if (richace_is_everyone(ace)) {
+			if (richace_is_allow(ace))
+				allowed |= (ace->e_mask & ~denied);
+			else if (richace_is_deny(ace))
+				denied |= (ace->e_mask & ~allowed);
+			else
+				continue;
+			if (richace_change_mask(x, &ace, 0))
+				return -1;
+		} else {
+			if (richace_is_allow(ace)) {
+				if (richace_change_mask(x, &ace, allowed |
+						(ace->e_mask & ~denied)))
+					return -1;
+			} else if (richace_is_deny(ace)) {
+				if (richace_change_mask(x, &ace, denied |
+						(ace->e_mask & ~allowed)))
+					return -1;
+			}
+		}
+	}
+	if (allowed & ~ACE4_POSIX_ALWAYS_ALLOWED) {
+		struct richace *last_ace = ace - 1;
+
+		if (x->acl->a_entries &&
+		    richace_is_everyone(last_ace) &&
+		    richace_is_allow(last_ace) &&
+		    richace_is_inherit_only(last_ace) &&
+		    last_ace->e_mask == allowed)
+			last_ace->e_flags &= ~ACE4_INHERIT_ONLY_ACE;
+		else {
+			if (richacl_insert_entry(x, &ace))
+				return -1;
+			ace->e_type = ACE4_ACCESS_ALLOWED_ACE_TYPE;
+			ace->e_flags = ACE4_SPECIAL_WHO;
+			ace->e_mask = allowed;
+			ace->u.e_who = richace_everyone_who;
+		}
+	}
+	return 0;
+}
