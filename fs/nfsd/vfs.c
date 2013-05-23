@@ -21,6 +21,7 @@
 #include <linux/delay.h>
 #include <linux/fsnotify.h>
 #include <linux/posix_acl_xattr.h>
+#include <linux/richacl_xattr.h>
 #include <linux/xattr.h>
 #include <linux/jhash.h>
 #include <linux/ima.h>
@@ -604,6 +605,52 @@ nfsd4_get_posix_acl(struct dentry *dentry)
 	return acl;
 }
 
+#ifdef CONFIG_FS_RICHACL
+static struct richacl *
+__get_richacl(struct dentry *dentry)
+{
+	int buflen;
+	void *buf = NULL;
+	struct richacl *racl;
+
+	buflen = nfsd_getxattr(dentry, RICHACL_XATTR, &buf);
+	if (buflen < 0)
+		return ERR_PTR(buflen);
+
+	racl = richacl_from_xattr(buf, buflen);
+	kfree(buf);
+	return racl;
+}
+
+static struct nfs4_acl *
+nfsd4_get_richacl(struct dentry *dentry)
+{
+	int ret;
+	struct nfs4_acl *acl;
+	struct richacl *racl;
+	racl = __get_richacl(dentry);
+	if (IS_ERR(racl) && PTR_ERR(racl) == -ENODATA)
+		racl = richacl_from_mode(dentry->d_inode->i_mode);
+	if (IS_ERR(racl))
+		return ERR_CAST(racl);
+	ret = richacl_apply_masks(&racl);
+	if (ret) {
+		acl = ERR_PTR(ret);
+		goto err_out;
+	}
+	acl = nfs4_acl_richacl_to_nfsv4(racl);
+err_out:
+	richacl_put(racl);
+	return acl;
+}
+#else
+static struct nfs4_acl *
+nfsd4_get_richacl(struct dentry *dentry)
+{
+	return ERR_PTR(-EOPNOTSUPP);
+}
+#endif
+
 int
 nfsd4_get_nfs4_acl(struct svc_rqst *rqstp,
 		   struct dentry *dentry, struct nfs4_acl **acl)
@@ -613,6 +660,8 @@ nfsd4_get_nfs4_acl(struct svc_rqst *rqstp,
 
 	if (IS_POSIXACL(inode))
 		*acl = nfsd4_get_posix_acl(dentry);
+	else if (IS_RICHACL(inode))
+		*acl = nfsd4_get_richacl(dentry);
 	else {
 		*acl = NULL;
 		error = -EOPNOTSUPP;
