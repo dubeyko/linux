@@ -241,8 +241,8 @@ struct nilfs_root {
 	struct the_nilfs *nilfs;
 	struct inode *ifile;
 
-	atomic_t inodes_count;
-	atomic_t blocks_count;
+	atomic_long_t inodes_count;
+	atomic_long_t blocks_count;
 };
 
 /* Special checkpoint number */
