@@ -171,3 +171,18 @@ config NFS_DEBUG
 	depends on NFS_FS && SUNRPC_DEBUG
 	select CRC32
 	default y
+
+config NFSV4_FS_RICHACL
+      bool "NFSV4 Rich Access Control Lists (EXPERIMENTAL)"
+      depends on NFS_V4 && EXPERIMENTAL
+      select FS_RICHACL
+      help
+	Rich ACLs are an implementation of NFSv4 ACLs, extended by file masks
+	to fit into the standard POSIX file permission model.  They are
+	designed to work seamlessly locally as well as across the NFSv4 and
+	CIFS/SMB2 network file system protocols.
+
+	To learn more about Rich ACL, visit
+	http://acl.bestbits.at/richacl/
+
+	If you don't know what Rich ACLs are, say N

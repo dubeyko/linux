@@ -71,4 +71,8 @@ int nfs4_acl_nfsv4_to_posix(struct nfs4_acl *, struct posix_acl **,
 struct nfs4_acl *nfs4_acl_richacl_to_nfsv4(struct richacl *racl);
 struct richacl *nfs4_acl_nfsv4_to_richacl(struct nfs4_acl *acl);
 
+#ifdef CONFIG_NFSV4_FS_RICHACL
+extern const struct xattr_handler nfsv4_xattr_richacl_handler;
+#endif
+
 #endif /* LINUX_NFS4_ACL_H */

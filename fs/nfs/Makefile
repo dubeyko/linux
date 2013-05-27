@@ -25,6 +25,7 @@ nfsv4-y := nfs4proc.o nfs4xdr.o nfs4state.o nfs4renewd.o nfs4super.o nfs4file.o 
 	  nfs4namespace.o nfs4getroot.o nfs4client.o
 nfsv4-$(CONFIG_SYSCTL)	+= nfs4sysctl.o
 nfsv4-$(CONFIG_NFS_V4_1)	+= nfs4session.o pnfs.o pnfs_dev.o
+nfsv4-$(CONFIG_NFSV4_FS_RICHACL)  += xattr_richacl.o
 
 obj-$(CONFIG_PNFS_FILE_LAYOUT) += nfs_layout_nfsv41_files.o
 nfs_layout_nfsv41_files-y := nfs4filelayout.o nfs4filelayoutdev.o

@@ -55,6 +55,7 @@
 #include <linux/xattr.h>
 #include <linux/utsname.h>
 #include <linux/freezer.h>
+#include <linux/nfs4_acl.h>
 
 #include "nfs4_fs.h"
 #include "delegation.h"
@@ -6843,6 +6844,9 @@ static const struct xattr_handler nfs4_xattr_nfs4_acl_handler = {
 
 const struct xattr_handler *nfs4_xattr_handlers[] = {
 	&nfs4_xattr_nfs4_acl_handler,
+#ifdef CONFIG_NFSV4_FS_RICHACL
+	&nfsv4_xattr_richacl_handler,
+#endif
 	NULL
 };
 
