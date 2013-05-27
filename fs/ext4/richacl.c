@@ -233,6 +233,59 @@ ext4_xattr_get_richacl(struct dentry *dentry, const char *name, void *buffer,
 	return size;
 }
 
+#ifdef RICHACL_DEBUG
+static size_t
+ext4_xattr_list_masked_richacl(struct dentry *dentry, char *list,
+			       size_t list_len, const char *name,
+			       size_t name_len, int type)
+{
+	return 0;
+}
+
+static int
+ext4_xattr_get_masked_richacl(struct dentry *dentry, const char *name,
+			void *buffer, size_t buffer_size, int type)
+{
+	const int name_index = EXT4_XATTR_INDEX_RICHACL;
+	struct inode *inode = dentry->d_inode;
+	struct richacl *acl;
+	void *xattr;
+	size_t size;
+	int retval;
+
+	if (!test_opt(inode->i_sb, RICHACL))
+		return -EOPNOTSUPP;
+	if (strcmp(name, "") != 0)
+		return -EINVAL;
+	retval = ext4_xattr_get(inode, name_index, "", NULL, 0);
+	if (retval <= 0)
+		return retval;
+	xattr = kmalloc(retval, GFP_KERNEL);
+	if (!xattr)
+		return -ENOMEM;
+	retval = ext4_xattr_get(inode, name_index, "", xattr, retval);
+	if (retval <= 0)
+		return retval;
+	acl = richacl_from_xattr(xattr, retval);
+	kfree(xattr);
+	if (IS_ERR(acl))
+		return PTR_ERR(acl);
+	retval = richacl_apply_masks(&acl);
+	if (retval) {
+		richacl_put(acl);
+		return retval;
+	}
+	size = richacl_xattr_size(acl);
+	if (buffer) {
+		if (size > buffer_size)
+			return -ERANGE;
+		richacl_to_xattr(acl, buffer);
+	}
+	richacl_put(acl);
+	return size;
+}
+#endif
+
 static int
 ext4_xattr_set_richacl(struct dentry *dentry, const char *name,
 		const void *value, size_t size, int flags, int type)
@@ -303,3 +356,12 @@ const struct xattr_handler ext4_richacl_xattr_handler = {
 	.get	= ext4_xattr_get_richacl,
 	.set	= ext4_xattr_set_richacl,
 };
+
+#ifdef RICHACL_DEBUG
+const struct xattr_handler ext4_masked_richacl_xattr_handler = {
+	.prefix	= "system.masked-richacl",
+	.list	= ext4_xattr_list_masked_richacl,
+	.get	= ext4_xattr_get_masked_richacl,
+	.set	= ext4_xattr_set_richacl,
+};
+#endif
