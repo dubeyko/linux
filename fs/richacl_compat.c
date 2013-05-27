@@ -16,6 +16,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/richacl.h>
+#include <linux/posix_acl.h>
 
 /**
  * struct richacl_alloc  -  remember how many entries are actually allocated
@@ -756,3 +757,169 @@ richacl_from_mode(mode_t mode)
 
 }
 EXPORT_SYMBOL_GPL(richacl_from_mode);
+
+/**
+ * richacl_append_entry  -  insert an entry in an acl towards the end
+ * @x:	acl and number of allocated entries
+ *
+ * Insert a new entry in @x->acl at end position and zero-initialize
+ * it.  This may require reallocating @x->acl.
+ */
+static struct richace *richacl_append_entry(struct richacl_alloc *x)
+{
+	struct richace *ace;
+	int n;
+
+	if (x->count != x->acl->a_count)
+		n = x->acl->a_count++;
+	else {
+		struct richacl *acl2;
+
+		n = x->acl->a_count;
+		acl2 = richacl_alloc(n + 1);
+		if (!acl2)
+			return ERR_PTR(-ENOMEM);;
+		acl2->a_flags = x->acl->a_flags;
+		acl2->a_owner_mask = x->acl->a_owner_mask;
+		acl2->a_group_mask = x->acl->a_group_mask;
+		acl2->a_other_mask = x->acl->a_other_mask;
+		memcpy(acl2->a_entries, x->acl->a_entries,
+		       n * sizeof(struct richace));
+		kfree(x->acl);
+		x->acl = acl2;
+		x->count = n + 1;
+	}
+	ace = x->acl->a_entries + n;
+	memset(ace, 0, sizeof(struct richace));
+	return ace;
+}
+
+static int posix_to_richacl(struct posix_acl *pacl, int type,
+			mode_t mode, struct richacl_alloc *x)
+{
+	int eflags;
+	struct richace *ace;
+	struct posix_acl_entry *pa, *pe;
+
+	if (type == ACL_TYPE_DEFAULT)
+		eflags =  ACE4_FILE_INHERIT_ACE |
+			ACE4_DIRECTORY_INHERIT_ACE | ACE4_INHERIT_ONLY_ACE;
+	else
+		eflags = 0;
+
+	BUG_ON(pacl->a_count < 3);
+	FOREACH_ACL_ENTRY(pa, pacl, pe) {
+
+		if (pa->e_tag == ACL_MASK)
+			/*
+			 * We can ignore ACL_MASK values. We derive the
+			 * respective values from the inode mode values
+			 */
+			continue;
+
+		/* get a slot for new ace */
+		ace = richacl_append_entry(x);
+		if (IS_ERR(ace))
+			return PTR_ERR(ace);
+
+		/* Add allow ACEs for each POSIX ACL entry */
+		ace->e_type = ACE4_ACCESS_ALLOWED_ACE_TYPE;
+		ace->e_flags = eflags;
+		ace->e_mask = richacl_mode_to_mask(pa->e_perm);
+
+		switch (pa->e_tag) {
+		case ACL_USER_OBJ:
+		{
+			richace_set_who(ace, richace_owner_who);
+			break;
+		}
+		case ACL_USER:
+		{
+			ace->u.e_id = pa->e_id;
+			break;
+		}
+		case ACL_GROUP_OBJ:
+		{
+			richace_set_who(ace, richace_group_who);
+			break;
+		}
+		case ACL_GROUP:
+		{
+			ace->e_flags |= ACE4_IDENTIFIER_GROUP;
+			ace->u.e_id = pa->e_id;
+			break;
+		}
+		case ACL_OTHER:
+		{
+			richace_set_who(ace, richace_everyone_who);
+			break;
+		}
+		} /* switch (pa->e_tag) */
+	}
+	/* set acl mask values */
+	x->acl->a_owner_mask = richacl_mode_to_mask(mode >> 6);
+	x->acl->a_group_mask = richacl_mode_to_mask(mode >> 3);
+	x->acl->a_other_mask = richacl_mode_to_mask(mode);
+
+	x->acl->a_flags = 0;
+	return 0;
+}
+
+struct richacl *map_posix_to_richacl(struct inode *inode,
+				struct posix_acl *pacl,
+				struct posix_acl *dpacl)
+{
+	int retval;
+	int size = 0;
+	struct richacl *acl;
+	struct richacl_alloc x;
+
+	if (pacl) {
+		if (posix_acl_valid(pacl) < 0)
+			return ERR_PTR(-EINVAL);
+		size += pacl->a_count;
+	}
+	if (dpacl) {
+		if (posix_acl_valid(dpacl) < 0)
+			return ERR_PTR(-EINVAL);
+		size += dpacl->a_count;
+	}
+	/* Allocate the worst case one deny, allow pair each */
+	acl = richacl_alloc(size);
+	if (acl == NULL)
+		return ERR_PTR(-ENOMEM);
+
+	x.acl = acl;
+	x.count = acl->a_count;
+	acl->a_count = 0;
+
+	if (pacl) {
+		retval = posix_to_richacl(pacl, ACL_TYPE_ACCESS,
+					  inode->i_mode, &x);
+		if (retval)
+			goto err_out;
+
+		if (__richacl_apply_masks(&x) ||
+			richacl_isolate_owner_class(&x) ||
+			richacl_isolate_group_class(&x))
+			retval = -ENOMEM;
+
+		if (retval)
+			goto err_out;
+	}
+	if (dpacl) {
+		retval = posix_to_richacl(dpacl, ACL_TYPE_DEFAULT,
+					  inode->i_mode, &x);
+		if (retval)
+			goto err_out;
+	}
+	/*
+	 * FIXME!! Remove duplicate entries and clear in the
+	 * ACE4_INHERIT_ONLY_ACE flag
+	 */
+	return x.acl;
+err_out:
+	kfree(x.acl);
+	return ERR_PTR(retval);
+}
+EXPORT_SYMBOL(map_posix_to_richacl);

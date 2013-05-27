@@ -384,5 +384,7 @@ extern struct richacl *richacl_inherit_inode(const struct richacl *,
 /* richacl_compat.c */
 extern int richacl_apply_masks(struct richacl **);
 extern struct richacl *richacl_from_mode(mode_t);
+extern struct richacl *map_posix_to_richacl(struct inode *,
+					struct posix_acl *, struct posix_acl *);
 
 #endif /* __RICHACL_H */
