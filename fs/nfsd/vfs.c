@@ -307,14 +307,25 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp, struct iattr *iap,
 {
 	struct dentry	*dentry;
 	struct inode	*inode;
-	int		accmode = NFSD_MAY_SATTR;
+	int		accmode = 0;
 	umode_t		ftype = 0;
 	__be32		err;
 	int		host_err;
 	int		size_change = 0;
 
 	if (iap->ia_valid & (ATTR_ATIME | ATTR_MTIME | ATTR_SIZE))
-		accmode |= NFSD_MAY_WRITE|NFSD_MAY_OWNER_OVERRIDE;
+		accmode |= NFSD_MAY_WRITE | NFSD_MAY_OWNER_OVERRIDE;
+
+	if (iap->ia_valid & (ATTR_MTIME_SET | ATTR_ATIME_SET |
+			     ATTR_TIMES_SET))
+		accmode |= NFSD_MAY_SET_TIMES;
+
+	if (iap->ia_valid & ATTR_MODE)
+		accmode |= NFSD_MAY_CHMOD;
+
+	if (iap->ia_valid & (ATTR_UID | ATTR_GID))
+		accmode |= NFSD_MAY_TAKE_OWNERSHIP;
+
 	if (iap->ia_valid & ATTR_SIZE)
 		ftype = S_IFREG;
 
@@ -2300,6 +2311,13 @@ nfsd_permission(struct svc_rqst *rqstp, struct svc_export *exp,
 		mask = MAY_CREATE_DIR;
 	else if (acc & NFSD_MAY_CREATE_FILE)
 		mask = MAY_CREATE_FILE;
+
+	if (acc & NFSD_MAY_TAKE_OWNERSHIP)
+		mask = MAY_TAKE_OWNERSHIP;
+	if (acc & NFSD_MAY_CHMOD)
+		mask = MAY_CHMOD;
+	if (acc & NFSD_MAY_SET_TIMES)
+		mask = MAY_SET_TIMES;
 
 	/* This assumes  NFSD_MAY_{READ,WRITE,EXEC} == MAY_{READ,WRITE,EXEC} */
 	mask |= acc & (MAY_READ|MAY_WRITE|MAY_EXEC);
