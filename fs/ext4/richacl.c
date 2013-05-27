@@ -22,13 +22,59 @@
 #include "acl.h"
 #include "richacl.h"
 
+static int ext4_map_pacl_to_richacl(struct inode *inode,
+				struct richacl **richacl)
+{
+	int retval = 0;
+	struct posix_acl *pacl = NULL, *dpacl = NULL;
+
+	*richacl  = NULL;
+	pacl = ext4_get_acl(inode, ACL_TYPE_ACCESS);
+	if (IS_ERR(pacl))
+		return PTR_ERR(pacl);
+
+	if (S_ISDIR(inode->i_mode)) {
+		dpacl = ext4_get_acl(inode, ACL_TYPE_DEFAULT);
+		if (IS_ERR(dpacl)) {
+			/* we need to fail for all errors
+			 * we will continue only with NULL dpacl
+			 * which is ENODATA on dpacl
+			 */
+			posix_acl_release(pacl);
+			return PTR_ERR(dpacl);
+		}
+	}
+
+	if (pacl == NULL && dpacl != NULL) {
+		/*
+		 * We have a default acl list. So derive the access acl
+		 * list from the mode so that we get a richacl that
+		 * include mode bits
+		 */
+		pacl = posix_acl_from_mode(inode->i_mode, GFP_KERNEL);
+	}
+
+	if (pacl == NULL && dpacl == NULL)
+		return -ENODATA;
+
+	*richacl = map_posix_to_richacl(inode, pacl, dpacl);
+
+	if (IS_ERR(*richacl)) {
+		retval  = PTR_ERR(*richacl);
+		*richacl = NULL;
+	}
+	posix_acl_release(pacl);
+	posix_acl_release(dpacl);
+	return retval;
+}
+
 struct richacl *
 ext4_get_richacl(struct inode *inode)
 {
 	const int name_index = EXT4_XATTR_INDEX_RICHACL;
 	void *value = NULL;
 	struct richacl *acl;
-	int retval;
+	int retval = 0;
 
 	if (!IS_RICHACL(inode))
 		return ERR_PTR(-EOPNOTSUPP);
@@ -41,16 +87,24 @@ ext4_get_richacl(struct inode *inode)
 		if (!value)
 			return ERR_PTR(-ENOMEM);
 		retval = ext4_xattr_get(inode, name_index, "", value, retval);
+		if (retval > 0) {
+			acl = richacl_from_xattr(value, retval);
+			if (acl == ERR_PTR(-EINVAL))
+				acl = ERR_PTR(-EIO);
+		}
+		kfree(value);
+	} else if (retval == -ENODATA) {
+		/*
+		 * Check whether we have posix acl stored.
+		 * If so convert them to richacl
+		 */
+		retval = ext4_map_pacl_to_richacl(inode, &acl);
 	}
-	if (retval > 0) {
-		acl = richacl_from_xattr(value, retval);
-		if (acl == ERR_PTR(-EINVAL))
-			acl = ERR_PTR(-EIO);
-	} else if (retval == -ENODATA || retval == -ENOSYS)
+
+	if (retval == -ENODATA || retval == -ENOSYS)
 		acl = NULL;
-	else
+	else if (retval < 0)
 		acl = ERR_PTR(retval);
-	kfree(value);
 
 	if (!IS_ERR_OR_NULL(acl))
 		set_cached_richacl(inode, acl);
