@@ -860,8 +860,12 @@ static int posix_to_richacl(struct posix_acl *pacl, int type,
 	x->acl->a_owner_mask = richacl_mode_to_mask(mode >> 6);
 	x->acl->a_group_mask = richacl_mode_to_mask(mode >> 3);
 	x->acl->a_other_mask = richacl_mode_to_mask(mode);
-
-	x->acl->a_flags = 0;
+	/*
+	 * Mark that the acl as mapped from posix
+	 * This gives user space the chance to verify
+	 * whether the mapping was correct
+	 */
+	x->acl->a_flags = ACL4_POSIX_MAPPED;
 	return 0;
 }
 
