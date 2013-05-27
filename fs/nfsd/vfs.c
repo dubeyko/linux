@@ -1381,6 +1381,7 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	__be32		err;
 	__be32		err2;
 	int		host_err;
+	int		mask;
 
 	err = nfserr_perm;
 	if (!flen)
@@ -1389,7 +1390,12 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (isdotent(fname, flen))
 		goto out;
 
-	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_CREATE);
+	if (type == S_IFDIR)
+		mask = NFSD_MAY_CREATE_DIR;
+	else
+		mask = NFSD_MAY_CREATE_FILE;
+
+	err = fh_verify(rqstp, fhp, S_IFDIR, mask | NFSD_MAY_CREATE);
 	if (err)
 		goto out;
 
@@ -1744,7 +1750,7 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	if (isdotent(fname, flen))
 		goto out;
 
-	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_CREATE);
+	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_CREATE_FILE | NFSD_MAY_CREATE);
 	if (err)
 		goto out;
 
@@ -2225,6 +2231,7 @@ nfsd_permission(struct svc_rqst *rqstp, struct svc_export *exp,
 {
 	struct inode	*inode = dentry->d_inode;
 	int		err;
+	int		mask = 0;
 
 	if ((acc & NFSD_MAY_MASK) == NFSD_MAY_NOP)
 		return 0;
@@ -2289,8 +2296,14 @@ nfsd_permission(struct svc_rqst *rqstp, struct svc_export *exp,
 	    uid_eq(inode->i_uid, current_fsuid()))
 		return 0;
 
+	if (acc & NFSD_MAY_CREATE_DIR)
+		mask = MAY_CREATE_DIR;
+	else if (acc & NFSD_MAY_CREATE_FILE)
+		mask = MAY_CREATE_FILE;
+
 	/* This assumes  NFSD_MAY_{READ,WRITE,EXEC} == MAY_{READ,WRITE,EXEC} */
-	err = inode_permission(inode, acc & (MAY_READ|MAY_WRITE|MAY_EXEC));
+	mask |= acc & (MAY_READ|MAY_WRITE|MAY_EXEC);
+	err = inode_permission(inode, mask);
 
 	/* Allow read access to binaries even when mode 111 */
 	if (err == -EACCES && S_ISREG(inode->i_mode) &&
