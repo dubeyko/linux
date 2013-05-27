@@ -239,6 +239,7 @@ ext4_xattr_set_richacl(struct dentry *dentry, const char *name,
 {
 	handle_t *handle;
 	struct richacl *acl = NULL;
+	struct posix_acl *pacl = NULL, *pdacl = NULL;
 	int retval, retries = 0;
 	struct inode *inode = dentry->d_inode;
 
@@ -259,17 +260,40 @@ ext4_xattr_set_richacl(struct dentry *dentry, const char *name,
 
 		inode->i_mode &= ~S_IRWXUGO;
 		inode->i_mode |= richacl_masks_to_mode(acl);
+		/*
+		 * check whether we have posix acl. If so delete them
+		 *
+		 */
+		if (acl->a_flags & ACL4_POSIX_MAPPED) {
+			pacl  = ext4_get_acl(inode, ACL_TYPE_ACCESS);
+			pdacl = ext4_get_acl(inode, ACL_TYPE_DEFAULT);
+			acl->a_flags &= ~ACL4_POSIX_MAPPED;
+		}
 	}
 
 retry:
 	handle = ext4_journal_start(inode, EXT4_DATA_TRANS_BLOCKS(inode->i_sb));
 	if (IS_ERR(handle))
 		return PTR_ERR(handle);
+	ext4_mark_inode_dirty(handle, inode);
+	if (pacl)
+		ext4_set_acl(handle, inode, ACL_TYPE_ACCESS, NULL);
+	if (pdacl)
+		ext4_set_acl(handle, inode, ACL_TYPE_DEFAULT, NULL);
+
 	retval = ext4_set_richacl(handle, inode, acl);
 	ext4_journal_stop(handle);
-	if (retval == -ENOSPC && ext4_should_retry_alloc(inode->i_sb, &retries))
+	if (retval == -ENOSPC &&
+	    ext4_should_retry_alloc(inode->i_sb, &retries)) {
+		posix_acl_release(pacl);
+		posix_acl_release(pdacl);
+		pacl = pdacl = NULL;
 		goto retry;
+	}
 	richacl_put(acl);
+	posix_acl_release(pacl);
+	posix_acl_release(pdacl);
+	pacl = pdacl = NULL;
 	return retval;
 }
 

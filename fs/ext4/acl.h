@@ -57,6 +57,8 @@ static inline int ext4_acl_count(size_t size)
 struct posix_acl *ext4_get_posix_acl(struct inode *inode, int type);
 extern int ext4_acl_chmod(struct inode *);
 extern int ext4_init_acl(handle_t *, struct inode *, struct inode *);
+extern int ext4_set_acl(handle_t *handle, struct inode *inode, int type,
+			struct posix_acl *acl);
 
 #else  /* CONFIG_EXT4_FS_POSIX_ACL */
 #include <linux/sched.h>
@@ -73,5 +75,12 @@ ext4_init_acl(handle_t *handle, struct inode *inode, struct inode *dir)
 {
 	return 0;
 }
+
+static inline int ext4_set_acl(handle_t *handle, struct inode *inode,
+				int type, struct posix_acl *acl)
+{
+	return 0;
+}
+
 #endif  /* CONFIG_EXT4_FS_POSIX_ACL */
 
