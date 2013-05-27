@@ -1897,6 +1897,7 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 	__be32		err;
 	int		host_err;
 
+	/* FIXME!! */
 	err = fh_verify(rqstp, ffhp, S_IFDIR, NFSD_MAY_REMOVE);
 	if (err)
 		goto out;
@@ -2006,9 +2007,19 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	err = nfserr_acces;
 	if (!flen || isdotent(fname, flen))
 		goto out;
-	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_REMOVE);
-	if (err)
-		goto out;
+	/* First check whether the directory have remove permission */
+	err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_DELETE_CHILD |
+			NFSD_MAY_REMOVE);
+	if (err) {
+		/*
+		 * If we have only exec then also we continue so that
+		 * VFS unlink operation can evaluate the permission
+		 * using MAY_DELETE_SELF rule
+		 */
+		err = fh_verify(rqstp, fhp, S_IFDIR, NFSD_MAY_EXEC);
+		if (err)
+			goto out;
+	}
 
 	host_err = fh_want_write(fhp);
 	if (host_err)
