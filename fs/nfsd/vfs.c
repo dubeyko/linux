@@ -35,7 +35,7 @@
 #endif /* CONFIG_NFSD_V3 */
 
 #ifdef CONFIG_NFSD_V4
-#include "acl.h"
+#include <linux/nfs4_acl.h>
 #include "idmap.h"
 #endif /* CONFIG_NFSD_V4 */
 

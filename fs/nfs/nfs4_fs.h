@@ -292,6 +292,17 @@ is_ds_client(struct nfs_client *clp)
 }
 #endif /* CONFIG_NFS_V4_1 */
 
+static inline int nfs4_server_supports_acls(struct nfs_server *server)
+{
+	return (server->caps & NFS_CAP_ACLS)
+		&& (server->acl_bitmask & ACL4_SUPPORT_ALLOW_ACL)
+		&& (server->acl_bitmask & ACL4_SUPPORT_DENY_ACL);
+}
+extern ssize_t nfs4_proc_get_acl(struct inode *inode,
+				 void *buf, size_t buflen);
+extern int nfs4_proc_set_acl(struct inode *inode,
+			     const void *buf, size_t buflen);
+
 extern const struct nfs4_minor_version_ops *nfs_v4_minor_ops[];
 
 extern const u32 nfs4_fattr_bitmap[3];
