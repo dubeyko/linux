@@ -100,7 +100,7 @@ static __be32 nfsd3_proc_setacl(struct svc_rqst * rqstp,
 	__be32 nfserr = 0;
 
 	fh = fh_copy(&resp->fh, &argp->fh);
-	nfserr = fh_verify(rqstp, &resp->fh, 0, NFSD_MAY_SATTR);
+	nfserr = fh_verify(rqstp, &resp->fh, 0, NFSD_MAY_WRITE);
 
 	if (!nfserr) {
 		nfserr = nfserrno( nfsd_set_posix_acl(

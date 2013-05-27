@@ -109,7 +109,7 @@ static __be32 nfsacld_proc_setacl(struct svc_rqst * rqstp,
 	dprintk("nfsd: SETACL(2acl)   %s\n", SVCFH_fmt(&argp->fh));
 
 	fh = fh_copy(&resp->fh, &argp->fh);
-	nfserr = fh_verify(rqstp, &resp->fh, 0, NFSD_MAY_SATTR);
+	nfserr = fh_verify(rqstp, &resp->fh, 0, NFSD_MAY_WRITE);
 
 	if (!nfserr) {
 		nfserr = nfserrno( nfsd_set_posix_acl(
