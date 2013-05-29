@@ -382,6 +382,32 @@ struct hfsplus_attr_inline_data {
 	u8 raw_bytes[HFSPLUS_MAX_INLINE_DATA_SIZE];
 } __packed;
 
+#define HFSPLUS_GUID_SIZE 16 /* 128-bit */
+
+/* Access Control List Entry (ACE) */
+struct hfsplus_acl_entry {
+	u8 ace_applicable[HFSPLUS_GUID_SIZE]; /* Apple-style identifier */
+	__be32 ace_flags;
+	__be32 ace_rights;
+} __packed;
+
+/* Access Control List */
+struct hfsplus_acl_record {
+	__be32 acl_entrycount;
+	__be32 acl_flags;
+	struct hfsplus_acl_entry acl_ace[0];
+} __packed;
+
+#define HFSPLUS_FILESEC_MAGIC 0x012cc16d
+
+/* HFS+ File Security information */
+struct hfsplus_filesec {
+	__be32 fsec_magic;
+	u8 fsec_owner[HFSPLUS_GUID_SIZE];
+	u8 fsec_group[HFSPLUS_GUID_SIZE];
+	struct hfsplus_acl_record fsec_acl;
+} __packed;
+
 /* A data record in the attributes tree */
 typedef union {
 	__be32 record_type;

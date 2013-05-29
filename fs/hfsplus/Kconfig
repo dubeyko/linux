@@ -11,3 +11,22 @@ config HFSPLUS_FS
 	  MacOS 8. It includes all Mac specific filesystem data such as
 	  data forks and creator codes, but it also has several UNIX
 	  style features such as file ownership and permissions.
+
+config HFSPLUS_FS_RICHACL
+	bool "HFS+ Rich Access Control Lists (EXPERIMENTAL)"
+	depends on HFSPLUS_FS && EXPERIMENTAL
+	select FS_RICHACL
+	help
+	  Rich ACLs are an implementation of NFSv4 ACLs, extended by file masks
+	  to fit into the standard POSIX file permission model.  They are
+	  designed to work seamlessly locally as well as across the NFSv4 and
+	  CIFS/SMB2 network file system protocols.
+
+	  Mac OS X beginning with version 10.4 ("Tiger") support NFSv4 ACLs,
+	  which are part of the NFSv4 standard. HFS+ stores ACLS in the form of
+	  specially named extended attributes (com.apple.system.Security).
+
+	  To learn more about Rich ACL, visit
+	  http://acl.bestbits.at/richacl/
+
+	  If you don't know what Rich ACLs are, say N

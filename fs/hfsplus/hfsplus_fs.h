@@ -10,6 +10,12 @@
 #ifndef _LINUX_HFSPLUS_FS_H
 #define _LINUX_HFSPLUS_FS_H
 
+#ifdef pr_fmt
+#undef pr_fmt
+#endif
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/fs.h>
 #include <linux/mutex.h>
 #include <linux/buffer_head.h>
@@ -24,6 +30,7 @@
 #define DBG_EXTENT	0x00000020
 #define DBG_BITMAP	0x00000040
 #define DBG_ATTR_MOD	0x00000080
+#define DBG_ACL_MOD	0x00000100
 
 #if 0
 #define DBG_MASK	(DBG_EXTENT|DBG_INODE|DBG_BNODE_MOD)
@@ -32,9 +39,40 @@
 #endif
 #define DBG_MASK	(0)
 
-#define dprint(flg, fmt, args...) \
-	if (flg & DBG_MASK) \
-		printk(fmt , ## args)
+#define hfs_dbg(flg, fmt, ...)					\
+do {								\
+	if (DBG_##flg & DBG_MASK)				\
+		printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__);	\
+} while (0)
+
+#define hfs_dbg_cont(flg, fmt, ...)				\
+do {								\
+	if (DBG_##flg & DBG_MASK)				\
+		pr_cont(fmt, ##__VA_ARGS__);			\
+} while (0)
+
+#define hfs_dbg_hexdump(flg, prefix, ptr, size)			\
+do {								\
+	if (DBG_##flg & DBG_MASK)				\
+		print_hex_dump_bytes(prefix,			\
+				DUMP_PREFIX_NONE, ptr, size);	\
+} while (0)
+
+static inline int hfs_error_dbg(unsigned int flg,
+				const unsigned char *file,
+				int line,
+				const unsigned char *func,
+				int err)
+{
+	if (DBG_##flg & DBG_MASK) {
+		hfs_dbg(flg, "(%s, %d): %s: err %d\n",
+			file, line, func, err);
+	}
+	return err;
+}
+
+#define HFS_ERR_DBG(flg, err) \
+	hfs_error_dbg(flg, __FILE__, __LINE__, __func__, err)
 
 /* Runtime config options */
 #define HFSPLUS_DEF_CR_TYPE    0x3F3F3F3F  /* '????' */
