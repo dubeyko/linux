@@ -373,11 +373,101 @@ static int sort_hfsplus_ace(struct inode *inode,
 
 
 
+static inline
+uint32_t hfsplus_ace_extract_nfsv4_type(struct hfsplus_acl_entry *hfs_ace)
+{
+	u32 ace_flags = be32_to_cpu(hfs_ace->ace_flags);
+	u32 ace_type = ace_flags & HFSPLUS_ACE_KINDMASK;
+
+	switch (ace_type) {
+	case HFSPLUS_ACE_PERMIT:
+		return NFS4_ACE_ACCESS_ALLOWED_ACE_TYPE;
+
+	case HFSPLUS_ACE_DENY:
+		return NFS4_ACE_ACCESS_DENIED_ACE_TYPE;
+
+	case HFSPLUS_ACE_AUDIT:
+		return NFS4_ACE_SYSTEM_AUDIT_ACE_TYPE;
+
+	case HFSPLUS_ACE_ALARM:
+		return NFS4_ACE_SYSTEM_ALARM_ACE_TYPE;
+	}
+
+	BUG();
+	return -1;
+}
+
+static uint32_t convert_rights[32] = {
+		0,
+		NFS4_ACE_READ_DATA,
+		NFS4_ACE_WRITE_DATA,
+		NFS4_ACE_EXECUTE,
+		NFS4_ACE_DELETE,
+		NFS4_ACE_APPEND_DATA,
+		NFS4_ACE_DELETE_CHILD,
+		NFS4_ACE_READ_ATTRIBUTES,
+		NFS4_ACE_WRITE_ATTRIBUTES,
+		NFS4_ACE_READ_NAMED_ATTRS,
+		NFS4_ACE_WRITE_NAMED_ATTRS,
+		NFS4_ACE_READ_ACL,
+		NFS4_ACE_WRITE_ACL,
+		NFS4_ACE_WRITE_OWNER,
+		
+};
+
+static inline
+uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
+{
+	u32 rights = be32_to_cpu(hfs_ace->ace_rights);
+	uint32_t access_mask = 0;
 
 
 
 
-struct richacl *hfsplus_richacl_from_xattr(struct inode *inode,
+
+
+
+
+}
+
+
+
+
+
+static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct hfsplus_filesec *filesec)
+{
+	struct nfs4_acl *acl;
+	struct nfs4_ace *ace;
+	u32 acl_entries_count = be32_to_cpu(fsec_acl->acl_entrycount);
+	struct hfsplus_acl_entry *hfs_ace = fsec_acl->acl_ace;
+	struct hfsplus_acl_entry *end = hfs_ace + acl_entries_count;
+
+	hfs_dbg(ACL_MOD, "[%s]: filesec %p, entries_count %u\n",
+			__func__, filesec, entries_count);
+
+	acl = nfs4_acl_new(acl_entries_count);
+	if (acl == NULL)
+		return ERR_PTR(HFS_ERR_DBG(ACL_MOD, -ENOMEM));
+
+	ace = acl->aces;
+	for (; hfs_ace < end; hfs_ace++) {
+		ace->type = hfsplus_ace_extract_nfsv4_type(hfs_ace);
+		ace->access_mask = hfsplus_ace_rights_to_nfsv4(hfs_ace);
+		ace->flag = hfsplus_ace_flags_to_nfsv4(hfs_ace);
+		ace->whotype = hfsplus_ace_extract_nfsv4_whotype(hfs_ace);
+		hfsplus_ace_extract_id(hfs_ace, ace);
+		ace++;
+		acl->naces++;
+	}
+	return acl;
+}
+
+
+
+
+
+
+static struct richacl *hfsplus_richacl_from_xattr(struct inode *inode,
 					struct user_namespace *user_ns,
 					void *value,
 					size_t size)
