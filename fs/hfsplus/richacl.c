@@ -399,19 +399,19 @@ uint32_t hfsplus_ace_extract_nfsv4_type(struct hfsplus_acl_entry *hfs_ace)
 
 static uint32_t convert_rights[32] = {
 	0,				/* 0 */
-	NFS4_ACE_READ_DATA,		/* 1 */
-	NFS4_ACE_WRITE_DATA,		/* 2 */
-	NFS4_ACE_EXECUTE,		/* 3 */
-	NFS4_ACE_DELETE,		/* 4 */
-	NFS4_ACE_APPEND_DATA,		/* 5 */
-	NFS4_ACE_DELETE_CHILD,		/* 6 */
-	NFS4_ACE_READ_ATTRIBUTES,	/* 7 */
-	NFS4_ACE_WRITE_ATTRIBUTES,	/* 8 */
-	NFS4_ACE_READ_NAMED_ATTRS,	/* 9 */
-	NFS4_ACE_WRITE_NAMED_ATTRS,	/* 10 */
-	NFS4_ACE_READ_ACL,		/* 11 */
-	NFS4_ACE_WRITE_ACL,		/* 12 */
-	NFS4_ACE_WRITE_OWNER,		/* 13 */
+	NFS4_ACE_READ_DATA,		/* HFSPLUS_VNODE_READ_DATA */
+	NFS4_ACE_WRITE_DATA,		/* HFSPLUS_VNODE_WRITE_DATA */
+	NFS4_ACE_EXECUTE,		/* HFSPLUS_VNODE_EXECUTE */
+	NFS4_ACE_DELETE,		/* HFSPLUS_VNODE_DELETE */
+	NFS4_ACE_APPEND_DATA,		/* HFSPLUS_VNODE_APPEND_DATA */
+	NFS4_ACE_DELETE_CHILD,		/* HFSPLUS_VNODE_DELETE_CHILD */
+	NFS4_ACE_READ_ATTRIBUTES,	/* HFSPLUS_VNODE_READ_ATTRIBUTES */
+	NFS4_ACE_WRITE_ATTRIBUTES,	/* HFSPLUS_VNODE_WRITE_ATTRIBUTES */
+	NFS4_ACE_READ_NAMED_ATTRS,	/* HFSPLUS_VNODE_READ_EXTATTRIBUTES */
+	NFS4_ACE_WRITE_NAMED_ATTRS,	/* HFSPLUS_VNODE_WRITE_EXTATTRIBUTES */
+	NFS4_ACE_READ_ACL,		/* HFSPLUS_VNODE_READ_SECURITY */
+	NFS4_ACE_WRITE_ACL,		/* HFSPLUS_VNODE_WRITE_SECURITY */
+	NFS4_ACE_WRITE_OWNER,		/* HFSPLUS_VNODE_TAKE_OWNERSHIP */
 	0,				/* 14 */
 	0,				/* 15 */
 	0,				/* 16 */
@@ -419,10 +419,10 @@ static uint32_t convert_rights[32] = {
 	0,				/* 18 */
 	0,				/* 19 */
 	0,				/* 20 */
-	NFS4_ACE_MASK_ALL,		/* 21 */
-	NFS4_ACE_GENERIC_EXECUTE,	/* 22 */
-	NFS4_ACE_GENERIC_WRITE,		/* 23 */
-	NFS4_ACE_GENERIC_READ,		/* 24 */
+	NFS4_ACE_MASK_ALL,		/* HFSPLUS_ACE_GENERIC_ALL */
+	NFS4_ACE_GENERIC_EXECUTE,	/* HFSPLUS_ACE_GENERIC_EXECUTE */
+	NFS4_ACE_GENERIC_WRITE,		/* HFSPLUS_ACE_GENERIC_WRITE */
+	NFS4_ACE_GENERIC_READ,		/* HFSPLUS_ACE_GENERIC_READ */
 	0,				/* 25 */
 	0,				/* 26 */
 	0,				/* 27 */
@@ -440,25 +440,27 @@ uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 {
 	u32 rights = be32_to_cpu(hfs_ace->ace_rights);
 	uint32_t access_mask = 0;
-	u32 start_bit, end_bit;
+	u32 start_bit, end_bit, cur_bit;
 
 	hfs_dbg(ACL_MOD, "[%s]: hfs+ rights %#x\n", __func__, rights);
+
+	if (rights & ACE_RIGHTS_MASK) {
+		end_bit = ffs(HFSPLUS_VNODE_TAKE_OWNERSHIP) + 1;
+		for (cur_bit = 1; cur_bit < end_bit; cur_bit++) {
+			if ((rights >> cur_bit) & 0x1)
+				access_mask |= convert_rights[cur_bit];
+		}
+	}
 
 	if (rights & ACE_GENERIC_RIGHTS_MASK) {
 		start_bit = ffs(HFSPLUS_ACE_GENERIC_ALL);
 		end_bit = ffs(HFSPLUS_ACE_GENERIC_READ) + 1;
-		for (u32 cur_bit = start_bit; cur_bit < end_bit; cur_bit++) {
+		for (cur_bit = start_bit; cur_bit < end_bit; cur_bit++) {
 			if ((rights >> cur_bit) & 0x1) {
 				access_mask |= convert_rights[cur_bit];
 				if (cur_bit == start_bit)
 					break;
 			}
-		}
-	} else if (rights & ACE_RIGHTS_MASK) {
-		end_bit = ffs(HFSPLUS_VNODE_TAKE_OWNERSHIP) + 1;
-		for (u32 cur_bit = 1; cur_bit < end_bit; cur_bit++) {
-			if ((rights >> cur_bit) & 0x1)
-				access_mask |= convert_rights[cur_bit];
 		}
 	}
 
@@ -467,6 +469,33 @@ uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 	return access_mask;
 }
 
+static __u8 convert_rights[16] = {
+	0,				/* 0 */
+	0,				/* 1 */
+	0,				/* 2 */
+	0,				/* 3 */
+	0,				/* HFSPLUS_ACE_INHERITED */
+	NFS4_ACE_FILE_INHERIT_ACE,	/* HFSPLUS_ACE_FILE_INHERIT */
+	NFS4_ACE_DIRECTORY_INHERIT_ACE,	/* HFSPLUS_ACE_DIRECTORY_INHERIT */
+	NFS4_ACE_NO_PROPAGATE_INHERIT_ACE, /* HFSPLUS_ACE_LIMIT_INHERIT */
+	NFS4_ACE_INHERIT_ONLY_ACE,	/* HFSPLUS_ACE_ONLY_INHERIT */
+	NFS4_ACE_SUCCESSFUL_ACCESS_ACE_FLAG, /* HFSPLUS_ACE_SUCCESS */
+	NFS4_ACE_FAILED_ACCESS_ACE_FLAG, /* HFSPLUS_ACE_FAILURE */
+	0,				/* 11 */
+	0,				/* 12 */
+	0,				/* 13 */
+	0,				/* 14 */
+	0,				/* 15 */
+};
+
+static inline
+uint32_t hfsplus_ace_flags_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
+{
+
+
+
+
+}
 
 
 
