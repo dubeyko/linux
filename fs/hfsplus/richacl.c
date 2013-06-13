@@ -469,7 +469,7 @@ uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 	return access_mask;
 }
 
-static __u8 convert_rights[16] = {
+static u8 convert_flags[16] = {
 	0,				/* 0 */
 	0,				/* 1 */
 	0,				/* 2 */
@@ -489,18 +489,52 @@ static __u8 convert_rights[16] = {
 };
 
 static inline
-uint32_t hfsplus_ace_flags_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
+uint32_t hfsplus_ace_flags_to_nfsv4(struct inode *inode,
+					struct hfsplus_acl_entry *hfs_ace)
 {
+	u32 ace_flags = be32_to_cpu(hfs_ace->ace_flags);
+	ace_flags &= ~HFSPLUS_ACE_KINDMASK;
+	uint32_t flags = 0;
+	u32 start_bit, end_bit, cur_bit;
 
+	hfs_dbg(ACL_MOD, "[%s]: hfs+ flags %#x\n", __func__, ace_flags);
 
+	start_bit = ffs(HFSPLUS_ACE_FILE_INHERIT);
+	end_bit = ffs(HFSPLUS_ACE_FAILURE) + 1;
+	for (cur_bit = start_bit; cur_bit < end_bit; cur_bit++) {
+		if ((ace_flags >> cur_bit) & 0x1)
+			flags |= convert_flags[cur_bit];
+	}
+	if (S_ISDIR(inode->i_mode))
+		flags |= NFS4_ACE_IDENTIFIER_GROUP;
 
+	hfs_dbg(ACL_MOD, "[%s]: NFSv4 flags %#x\n", __func__, flags);
 
+	return flags;
+}
+
+static inline
+uint32_t hfsplus_ace_extract_nfsv4_whotype(struct inode *inode,
+					    struct hfsplus_acl_entry *hfs_ace)
+{
+	if (is_owner_ace(hfs_ace))
+		return NFS4_ACL_WHO_OWNER;
+	else if(is_group_owner_ace(inode, hfs_ace))
+		return NFS4_ACL_WHO_GROUP;
+	else if (is_other_ace(inode, hfs_ace))
+		return NFS4_ACL_WHO_EVERYONE;
+	else if (is_user_ace(hfs_ace) || is_group_ace(hfs_ace))
+		return NFS4_ACL_WHO_NAMED;
+
+	BUG();
+	return -1;
 }
 
 
 
 
-static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct hfsplus_filesec *filesec)
+static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct inode *inode,
+						struct hfsplus_filesec *filesec)
 {
 	struct nfs4_acl *acl;
 	struct nfs4_ace *ace;
@@ -519,7 +553,7 @@ static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct hfsplus_filesec *filesec)
 	for (; hfs_ace < end; hfs_ace++) {
 		ace->type = hfsplus_ace_extract_nfsv4_type(hfs_ace);
 		ace->access_mask = hfsplus_ace_rights_to_nfsv4(hfs_ace);
-		ace->flag = hfsplus_ace_flags_to_nfsv4(hfs_ace);
+		ace->flag = hfsplus_ace_flags_to_nfsv4(inode, hfs_ace);
 		ace->whotype = hfsplus_ace_extract_nfsv4_whotype(hfs_ace);
 		hfsplus_ace_extract_id(hfs_ace, ace);
 		ace++;
