@@ -10,7 +10,7 @@
 
 #include "hfsplus_fs.h"
 #include "xattr.h"
-#include "richacl.h"
+#include "nfs4_acl.h"
 
 #define HFSPLUS_ACE_ID_MASK 0xFFFFFFFF
 
@@ -369,10 +369,6 @@ static int sort_hfsplus_ace(struct inode *inode,
 	return 0;
 }
 
-
-
-
-
 static inline
 uint32_t hfsplus_ace_extract_nfsv4_type(struct hfsplus_acl_entry *hfs_ace)
 {
@@ -435,8 +431,7 @@ static uint32_t convert_rights[32] = {
 #define ACE_GENERIC_RIGHTS_MASK		0x1E000000
 #define ACE_RIGHTS_MASK			0x3FFE
 
-static inline
-uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
+static uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 {
 	u32 rights = be32_to_cpu(hfs_ace->ace_rights);
 	uint32_t access_mask = 0;
@@ -488,8 +483,7 @@ static u8 convert_flags[16] = {
 	0,				/* 15 */
 };
 
-static inline
-uint32_t hfsplus_ace_flags_to_nfsv4(struct inode *inode,
+static uint32_t hfsplus_ace_flags_to_nfsv4(struct inode *inode,
 					struct hfsplus_acl_entry *hfs_ace)
 {
 	u32 ace_flags = be32_to_cpu(hfs_ace->ace_flags);
@@ -530,8 +524,18 @@ uint32_t hfsplus_ace_extract_nfsv4_whotype(struct inode *inode,
 	return -1;
 }
 
-
-
+static inline
+void hfsplus_ace_extract_id(struct inode *inode,
+					struct hfsplus_acl_entry *hfs_ace,
+					struct nfs4_ace *ace)
+{
+	if (is_owner_ace(hfs_ace))
+		ace->who_uid = i_uid_read(inode);
+	else if (is_group_owner_ace(inode, hfs_ace))
+		ace->who_gid = i_gid_read(inode);
+	else
+		ace->who_uid = extract_uid_from_ace(hfs_ace);
+}
 
 static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct inode *inode,
 						struct hfsplus_filesec *filesec)
@@ -539,11 +543,15 @@ static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct inode *inode,
 	struct nfs4_acl *acl;
 	struct nfs4_ace *ace;
 	u32 acl_entries_count = be32_to_cpu(fsec_acl->acl_entrycount);
-	struct hfsplus_acl_entry *hfs_ace = fsec_acl->acl_ace;
-	struct hfsplus_acl_entry *end = hfs_ace + acl_entries_count;
+	struct hfsplus_acl_entry *hfs_ace, *end;
 
 	hfs_dbg(ACL_MOD, "[%s]: filesec %p, entries_count %u\n",
 			__func__, filesec, entries_count);
+
+	hfs_ace = hfsplus_acl_record_from_xattr(value, size);
+	if (unlikely(IS_ERR(hfs_ace)))
+		return HFS_ERR_DBG(ACL_MOD, (int)PTR_ERR(hfs_ace));
+	end = hfs_ace + acl_entries_count;
 
 	acl = nfs4_acl_new(acl_entries_count);
 	if (acl == NULL)
@@ -562,22 +570,17 @@ static struct nfs4_acl *hfsplus_acl_to_nfsv4(struct inode *inode,
 	return acl;
 }
 
-
-
-
-
-
-static struct richacl *hfsplus_richacl_from_xattr(struct inode *inode,
-					struct user_namespace *user_ns,
-					void *value,
-					size_t size)
+static struct richacl *
+hfsplus_richacl_from_xattr(struct inode *inode,
+				struct user_namespace *user_ns,
+				void *value,
+				size_t size)
 {
 	int err = 0;
+	struct nfs4_acl *nfs4acl = NULL;
 	struct richacl *acl = NULL;
 	struct hfsplus_filesec *filesec =
 			(struct hfsplus_filesec *)value;
-	const struct hfsplus_acl_record *raw_acl_rec;
-	const struct hfsplus_acl_entry *ace;
 	u32 acl_entries_count = 0;
 	ssize_t calculated_size = 0;
 	unsigned int flags = 0;
@@ -589,12 +592,6 @@ static struct richacl *hfsplus_richacl_from_xattr(struct inode *inode,
 	if (!value)
 		return NULL;
 
-	raw_acl_rec = hfsplus_acl_record_from_xattr(value, size);
-	if (unlikely(IS_ERR(raw_acl_rec))) {
-		HFS_ERR_DBG(ACL_MOD, (int)PTR_ERR(raw_acl_rec));
-		return NULL;
-	}
-
 	acl_entries_count = be32_to_cpu(raw_acl_rec->acl_entrycount);
 
 	calculated_size = sizeof(struct hfsplus_filesec) +
@@ -603,14 +600,16 @@ static struct richacl *hfsplus_richacl_from_xattr(struct inode *inode,
 	if (unlikely(err))
 		return ERR_PTR(HFS_ERR_DBG(ACL_MOD, err));
 
+	nfs4acl = hfsplus_acl_to_nfsv4(inode, filesec);
+	if (unlikely(nfs4acl == NULL))
+		return ERR_PTR(HFS_ERR_DBG(ACL_MOD, -ENOMEM));
+	else if (unlikely(IS_ERR(nfs4acl)))
+		return ERR_PTR(HFS_ERR_DBG(ACL_MOD, (int)PTR_ERR(nfs4acl)));
 
+	acl = nfs4_acl_nfsv4_to_richacl(nfs4acl);
 
-failed_conversion:
-	if (acl)
-		posix_acl_release(pacl);
-
-
-	return ERR_PTR(err);
+	kfree(nfs4acl);
+	return acl;
 }
 
 
