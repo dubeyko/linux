@@ -67,6 +67,12 @@ config NILFS2_DEBUG_SEGMENTS_SUBSYSTEM
 	  This option enables debugging output in segbuf.c, segment.c
 	  modules.
 
+config NILFS2_DEBUG_GC_SUBSYSTEM
+	bool "Enable GC subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in gcinode.c module.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG

@@ -59,6 +59,12 @@
 #define DBG_SEGBUF	0x00002000
 #define DBG_SEGMENT	0x00004000
 
+/*
+ * These flags enable debugging output in modules that
+ * implement GC subsystem functionality (gcinode.c).
+ */
+#define DBG_GCINODE	0x00008000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -74,6 +80,9 @@ static u32 DBG_MASK = (
 #ifdef CONFIG_NILFS2_DEBUG_SEGMENTS_SUBSYSTEM
 	DBG_SEGBUF | DBG_SEGMENT |
 #endif /* CONFIG_NILFS2_DEBUG_SEGMENTS_SUBSYSTEM */
+#ifdef CONFIG_NILFS2_DEBUG_GC_SUBSYSTEM
+	DBG_GCINODE | DBG_IOCTL |
+#endif /* CONFIG_NILFS2_DEBUG_GC_SUBSYSTEM */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
