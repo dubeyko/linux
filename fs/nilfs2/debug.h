@@ -27,6 +27,14 @@
 #include <linux/printk.h>
 
 /*
+ * This flag enables writing in system log messages about internal
+ * errors of NILFS2 driver. Every such message records file, function,
+ * line and code of error. These types of debugging messages can be
+ * very usefull for understanding and analyzing reasons of an issue.
+ */
+#define DBG_SHOW_ERR	0x10000000
+
+/*
  * These flags enable debugging output in modules that
  * implement base file system operations functionality
  * (super.c, the_nilfs.c, namei.c, ioctl.c, inode.c,
@@ -124,6 +132,9 @@
 
 /* Definition of flags' set for debugging */
 static u32 DBG_MASK = (
+#ifdef CONFIG_NILFS2_DEBUG_SHOW_ERRORS
+	DBG_SHOW_ERR |
+#endif /* CONFIG_NILFS2_DEBUG_SHOW_ERRORS */
 #ifdef CONFIG_NILFS2_DEBUG_BASE_OPERATIONS
 	DBG_SUPER | DBG_THE_NILFS | DBG_NAMEI |
 	DBG_IOCTL | DBG_INODE | DBG_FILE | DBG_DIR |
@@ -210,11 +221,38 @@ static u32 DBG_MASK = (
 		} \
 	} while (0)
 
+static inline int nilfs2_error_dbg(unsigned int flg,
+				    const unsigned char *file,
+				    int line,
+				    const unsigned char *func,
+				    int err)
+{
+	bool can_show_err = DBG_MASK & DBG_SHOW_ERR;
+	bool should_show_err = flg & DBG_SHOW_ERR;
+
+	if (can_show_err && should_show_err) {
+		printk(KERN_DEBUG "NILFS DBGERR (%s, %d): %s: err %d\n",
+			file, line, func, err);
+	}
+	return err;
+}
+
 #else /* CONFIG_NILFS2_DEBUG */
 
 #define nilfs2_debug(flg, fmt, ...)	no_printk(fmt, ##__VA_ARGS__)
 #define nilfs2_hexdump(flg, prefix, ptr, size)	no_printk(prefix)
+static inline int nilfs2_error_dbg(unsigned int flg,
+				    const unsigned char *file,
+				    int line,
+				    const unsigned char *func,
+				    int err)
+{
+	return err;
+}
 
 #endif /* CONFIG_NILFS2_DEBUG */
+
+#define NILFS_ERR_DBG(err) \
+	nilfs2_error_dbg(DBG_SHOW_ERR, __FILE__, __LINE__, __func__, err)
 
 #endif	/* _NILFS_DEBUG_H */

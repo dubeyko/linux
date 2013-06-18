@@ -36,6 +36,15 @@ config NILFS2_DEBUG
 
 if NILFS2_DEBUG
 
+config NILFS2_DEBUG_SHOW_ERRORS
+	bool "Show internal errors"
+	default n
+	help
+	  This option enables writing in system log messages about internal
+	  errors of NILFS2 driver. Every such message records file, function,
+	  line and code of error. These types of debugging messages can be
+	  very usefull for understanding and analyzing reasons of an issue.
+
 config NILFS2_DEBUG_DUMP_STACK
 	bool "Enable dump stack output"
 	default n
