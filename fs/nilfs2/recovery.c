@@ -126,7 +126,7 @@ static int nilfs_compute_checksum(struct the_nilfs *nilfs,
 
 			bh = __bread(nilfs->ns_bdev, ++start, blocksize);
 			if (!bh)
-				return -EIO;
+				return NILFS_ERR_DBG(-EIO);
 			check_bytes -= size;
 			size = min_t(u64, check_bytes, blocksize);
 			crc = crc32_le(crc, bh->b_data, size);
@@ -365,8 +365,10 @@ static int nilfs_scan_dsync_log(struct the_nilfs *nilfs, sector_t start_blocknr,
 	sumbytes = le32_to_cpu(sum->ss_sumbytes);
 	blocknr = start_blocknr + DIV_ROUND_UP(sumbytes, nilfs->ns_blocksize);
 	bh = __bread(nilfs->ns_bdev, start_blocknr, nilfs->ns_blocksize);
-	if (unlikely(!bh))
+	if (unlikely(!bh)) {
+		NILFS_ERR_DBG(err);
 		goto out;
+	}
 
 	offset = le16_to_cpu(sum->ss_bytes);
 	for (;;) {
@@ -375,8 +377,10 @@ static int nilfs_scan_dsync_log(struct the_nilfs *nilfs, sector_t start_blocknr,
 
 		finfo = nilfs_read_summary_info(nilfs, &bh, &offset,
 						sizeof(*finfo));
-		if (unlikely(!finfo))
+		if (unlikely(!finfo)) {
+			NILFS_ERR_DBG(err);
 			goto out;
+		}
 
 		ino = le64_to_cpu(finfo->fi_ino);
 		nblocks = le32_to_cpu(finfo->fi_nblocks);
@@ -389,12 +393,14 @@ static int nilfs_scan_dsync_log(struct the_nilfs *nilfs, sector_t start_blocknr,
 
 			binfo = nilfs_read_summary_info(nilfs, &bh, &offset,
 							sizeof(*binfo));
-			if (unlikely(!binfo))
+			if (unlikely(!binfo)) {
+				NILFS_ERR_DBG(err);
 				goto out;
+			}
 
 			rb = kmalloc(sizeof(*rb), GFP_NOFS);
 			if (unlikely(!rb)) {
-				err = -ENOMEM;
+				err = NILFS_ERR_DBG(-ENOMEM);
 				goto out;
 			}
 			rb->ino = ino;
@@ -409,8 +415,10 @@ static int nilfs_scan_dsync_log(struct the_nilfs *nilfs, sector_t start_blocknr,
 		blocknr += nnodeblk; /* always 0 for data sync logs */
 		nilfs_skip_summary_info(nilfs, &bh, &offset, sizeof(__le64),
 					nnodeblk);
-		if (unlikely(!bh))
+		if (unlikely(!bh)) {
+			NILFS_ERR_DBG(err);
 			goto out;
+		}
 	}
 	err = 0;
  out:
@@ -442,7 +450,7 @@ static int nilfs_segment_list_add(struct list_head *head, __u64 segnum)
 			"head %p, segnum %llu\n", head, segnum);
 
 	if (unlikely(!ent))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	ent->segnum = segnum;
 	INIT_LIST_HEAD(&ent->list);
@@ -488,13 +496,17 @@ static int nilfs_prepare_segment_for_recovery(struct the_nilfs *nilfs,
 	 * The next segment is invalidated by this recovery.
 	 */
 	err = nilfs_sufile_free(sufile, segnum[1]);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	for (i = 1; i < 4; i++) {
 		err = nilfs_segment_list_add(head, segnum[i]);
-		if (unlikely(err))
+		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			goto failed;
+		}
 	}
 
 	/*
@@ -504,8 +516,10 @@ static int nilfs_prepare_segment_for_recovery(struct the_nilfs *nilfs,
 	list_for_each_entry_safe(ent, n, head, list) {
 		if (ent->segnum != segnum[0]) {
 			err = nilfs_sufile_scrap(sufile, ent->segnum);
-			if (unlikely(err))
+			if (unlikely(err)) {
+				NILFS_ERR_DBG(err);
 				goto failed;
+			}
 		}
 		list_del(&ent->list);
 		kfree(ent);
@@ -513,8 +527,10 @@ static int nilfs_prepare_segment_for_recovery(struct the_nilfs *nilfs,
 
 	/* Allocate new segments for recovery */
 	err = nilfs_sufile_alloc(sufile, &segnum[0]);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	nilfs->ns_pseg_offset = 0;
 	nilfs->ns_seg_seq = ri->ri_seq + 2;
@@ -541,7 +557,7 @@ static int nilfs_recovery_copy_block(struct the_nilfs *nilfs,
 
 	bh_org = __bread(nilfs->ns_bdev, rb->blocknr, nilfs->ns_blocksize);
 	if (unlikely(!bh_org))
-		return -EIO;
+		return NILFS_ERR_DBG(-EIO);
 
 	kaddr = kmap_atomic(page);
 	memcpy(kaddr + bh_offset(bh_org), bh_org->b_data, bh_org->b_size);
@@ -571,7 +587,7 @@ static int nilfs_recover_dsync_blocks(struct the_nilfs *nilfs,
 	list_for_each_entry_safe(rb, n, head, list) {
 		inode = nilfs_iget(sb, root, rb->ino);
 		if (IS_ERR(inode)) {
-			err = PTR_ERR(inode);
+			err = NILFS_ERR_DBG((int)PTR_ERR(inode));
 			inode = NULL;
 			goto failed_inode;
 		}
@@ -581,6 +597,7 @@ static int nilfs_recover_dsync_blocks(struct the_nilfs *nilfs,
 					0, &page, nilfs_get_block);
 		if (unlikely(err)) {
 			loff_t isize = inode->i_size;
+			NILFS_ERR_DBG(err);
 			if (pos + blocksize > isize)
 				nilfs_write_failed(inode->i_mapping,
 							pos + blocksize);
@@ -588,12 +605,16 @@ static int nilfs_recover_dsync_blocks(struct the_nilfs *nilfs,
 		}
 
 		err = nilfs_recovery_copy_block(nilfs, rb, page);
-		if (unlikely(err))
+		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			goto failed_page;
+		}
 
 		err = nilfs_set_file_dirty(inode, 1);
-		if (unlikely(err))
+		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			goto failed_page;
+		}
 
 		block_write_end(NULL, inode->i_mapping, pos, blocksize,
 				blocksize, page, NULL);
@@ -669,14 +690,14 @@ static int nilfs_do_roll_forward(struct the_nilfs *nilfs,
 		brelse(bh_sum);
 		bh_sum = nilfs_read_log_header(nilfs, pseg_start, &sum);
 		if (!bh_sum) {
-			err = -EIO;
+			err = NILFS_ERR_DBG(-EIO);
 			goto failed;
 		}
 
 		ret = nilfs_validate_log(nilfs, seg_seq, bh_sum, sum);
 		if (ret) {
 			if (ret == NILFS_SEG_FAIL_IO) {
-				err = -EIO;
+				err = NILFS_ERR_DBG(-EIO);
 				goto failed;
 			}
 			goto strayed;
@@ -707,14 +728,18 @@ static int nilfs_do_roll_forward(struct the_nilfs *nilfs,
 
 			err = nilfs_scan_dsync_log(nilfs, pseg_start, sum,
 						   &dsync_blocks);
-			if (unlikely(err))
+			if (unlikely(err)) {
+				NILFS_ERR_DBG(err);
 				goto failed;
+			}
 			if (flags & NILFS_SS_LOGEND) {
 				err = nilfs_recover_dsync_blocks(
 					nilfs, sb, root, &dsync_blocks,
 					&nsalvaged_blocks);
-				if (unlikely(err))
+				if (unlikely(err)) {
+					NILFS_ERR_DBG(err);
 					goto failed;
+				}
 				state = RF_INIT_ST;
 			}
 			break; /* Fall through to try_next_pseg */
@@ -753,7 +778,7 @@ static int nilfs_do_roll_forward(struct the_nilfs *nilfs,
 	return err;
 
  confused:
-	err = -EINVAL;
+	err = NILFS_ERR_DBG(-EINVAL);
  failed:
 	printk(KERN_ERR
 	       "NILFS (device %s): Error roll-forwarding "
@@ -830,30 +855,36 @@ int nilfs_salvage_orphan_logs(struct the_nilfs *nilfs,
 	if (unlikely(err)) {
 		printk(KERN_ERR
 		       "NILFS: error loading the latest checkpoint.\n");
-		return err;
+		return NILFS_ERR_DBG(err);
 	}
 
 	err = nilfs_do_roll_forward(nilfs, sb, root, ri);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	if (ri->ri_need_recovery == NILFS_RECOVERY_ROLLFORWARD_DONE) {
 		err = nilfs_prepare_segment_for_recovery(nilfs, sb, ri);
 		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			printk(KERN_ERR "NILFS: Error preparing segments for "
 			       "recovery.\n");
 			goto failed;
 		}
 
 		err = nilfs_attach_log_writer(sb, root);
-		if (unlikely(err))
+		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			goto failed;
+		}
 
 		set_nilfs_discontinued(nilfs);
 		err = nilfs_construct_segment(sb);
 		nilfs_detach_log_writer(sb);
 
 		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			printk(KERN_ERR "NILFS: Oops! recovery failed. "
 			       "(err=%d)\n", err);
 			goto failed;

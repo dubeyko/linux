@@ -124,7 +124,7 @@ int nilfs_segbuf_extend_segsum(struct nilfs_segment_buffer *segbuf)
 	bh = sb_getblk(segbuf->sb_super,
 		       segbuf->sb_pseg_start + segbuf->sb_sum.nsumblk);
 	if (unlikely(!bh))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	nilfs_segbuf_add_segsum_buffer(segbuf, bh);
 	return 0;
@@ -142,7 +142,7 @@ int nilfs_segbuf_extend_payload(struct nilfs_segment_buffer *segbuf,
 	bh = sb_getblk(segbuf->sb_super,
 		       segbuf->sb_pseg_start + segbuf->sb_sum.nblocks);
 	if (unlikely(!bh))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	nilfs_segbuf_add_payload_buffer(segbuf, bh);
 	*bhp = bh;
@@ -163,7 +163,7 @@ int nilfs_segbuf_reset(struct nilfs_segment_buffer *segbuf, unsigned flags,
 	segbuf->sb_sum.nblocks = segbuf->sb_sum.nsumblk = 0;
 	err = nilfs_segbuf_extend_segsum(segbuf);
 	if (unlikely(err))
-		return err;
+		return NILFS_ERR_DBG(err);
 
 	segbuf->sb_sum.flags = flags;
 	segbuf->sb_sum.sumbytes = sizeof(struct nilfs_segment_summary);
@@ -329,8 +329,10 @@ int nilfs_write_logs(struct list_head *logs, struct the_nilfs *nilfs)
 
 	list_for_each_entry(segbuf, logs, sb_list) {
 		ret = nilfs_segbuf_write(segbuf, nilfs);
-		if (ret)
+		if (ret) {
+			NILFS_ERR_DBG(ret);
 			break;
+		}
 	}
 	return ret;
 }
@@ -345,7 +347,7 @@ int nilfs_wait_on_logs(struct list_head *logs)
 		if (err && !ret)
 			ret = err;
 	}
-	return ret;
+	return (ret < 0) ? NILFS_ERR_DBG(ret) : ret;
 }
 
 /**
@@ -408,7 +410,7 @@ static int nilfs_segbuf_submit_bio(struct nilfs_segment_buffer *segbuf,
 		segbuf->sb_nbio--;
 		if (unlikely(atomic_read(&segbuf->sb_err))) {
 			bio_put(bio);
-			err = -EIO;
+			err = NILFS_ERR_DBG(-EIO);
 			goto failed;
 		}
 	}
@@ -419,7 +421,7 @@ static int nilfs_segbuf_submit_bio(struct nilfs_segment_buffer *segbuf,
 	submit_bio(mode, bio);
 	if (bio_flagged(bio, BIO_EOPNOTSUPP)) {
 		bio_put(bio);
-		err = -EOPNOTSUPP;
+		err = NILFS_ERR_DBG(-EOPNOTSUPP);
 		goto failed;
 	}
 	segbuf->sb_nbio++;
@@ -495,7 +497,7 @@ static int nilfs_segbuf_submit_bh(struct nilfs_segment_buffer *segbuf,
 		wi->bio = nilfs_alloc_seg_bio(wi->nilfs, wi->blocknr + wi->end,
 					      wi->nr_vecs);
 		if (unlikely(!wi->bio))
-			return -ENOMEM;
+			return NILFS_ERR_DBG(-ENOMEM);
 	}
 
 	len = bio_add_page(wi->bio, bh->b_page, bh->b_size, bh_offset(bh));
@@ -508,6 +510,8 @@ static int nilfs_segbuf_submit_bh(struct nilfs_segment_buffer *segbuf,
 	/* never submit current bh */
 	if (likely(!err))
 		goto repeat;
+	else
+		NILFS_ERR_DBG(err);
 	return err;
 }
 
@@ -539,14 +543,18 @@ static int nilfs_segbuf_write(struct nilfs_segment_buffer *segbuf,
 
 	list_for_each_entry(bh, &segbuf->sb_segsum_buffers, b_assoc_buffers) {
 		res = nilfs_segbuf_submit_bh(segbuf, &wi, bh, rw);
-		if (unlikely(res))
+		if (unlikely(res)) {
+			NILFS_ERR_DBG(res);
 			goto failed_bio;
+		}
 	}
 
 	list_for_each_entry(bh, &segbuf->sb_payload_buffers, b_assoc_buffers) {
 		res = nilfs_segbuf_submit_bh(segbuf, &wi, bh, rw);
-		if (unlikely(res))
+		if (unlikely(res)) {
+			NILFS_ERR_DBG(res);
 			goto failed_bio;
+		}
 	}
 
 	if (wi.bio) {
@@ -556,6 +564,8 @@ static int nilfs_segbuf_write(struct nilfs_segment_buffer *segbuf,
 		 */
 		rw |= REQ_SYNC;
 		res = nilfs_segbuf_submit_bio(segbuf, &wi, rw);
+		if (unlikely(res))
+			NILFS_ERR_DBG(res);
 	}
 
  failed_bio:
@@ -588,7 +598,7 @@ static int nilfs_segbuf_wait(struct nilfs_segment_buffer *segbuf)
 
 	if (unlikely(atomic_read(&segbuf->sb_err) > 0)) {
 		printk(KERN_ERR "NILFS: IO error writing segment\n");
-		err = -EIO;
+		err = NILFS_ERR_DBG(-EIO);
 	}
 	return err;
 }

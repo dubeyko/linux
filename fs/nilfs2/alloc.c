@@ -68,7 +68,7 @@ int nilfs_palloc_init_blockgroup(struct inode *inode, unsigned entry_size)
 
 	mi->mi_bgl = kmalloc(sizeof(*mi->mi_bgl), GFP_NOFS);
 	if (!mi->mi_bgl)
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	bgl_lock_init(mi->mi_bgl);
 
@@ -279,7 +279,8 @@ static int nilfs_palloc_get_block(struct inode *inode, unsigned long blkoff,
 		prev->bh = *bhp;
 		prev->blkoff = blkoff;
 		spin_unlock(lock);
-	}
+	} else
+		NILFS_ERR_DBG(ret);
 	return ret;
 }
 
@@ -445,7 +446,7 @@ static int nilfs_palloc_find_available_slot(struct inode *inode,
 				return pos;
 		}
 	}
-	return -ENOSPC;
+	return NILFS_ERR_DBG(-ENOSPC);
 }
 
 /**
@@ -502,7 +503,7 @@ int nilfs_palloc_prepare_alloc_entry(struct inode *inode,
 		}
 		ret = nilfs_palloc_get_desc_block(inode, group, 1, &desc_bh);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		desc_kaddr = kmap(desc_bh->b_page);
 		desc = nilfs_palloc_block_get_group_desc(
 			inode, group, desc_bh, desc_kaddr);
@@ -513,8 +514,10 @@ int nilfs_palloc_prepare_alloc_entry(struct inode *inode,
 			    > 0) {
 				ret = nilfs_palloc_get_bitmap_block(
 					inode, group, 1, &bitmap_bh);
-				if (ret < 0)
+				if (ret < 0) {
+					NILFS_ERR_DBG(ret);
 					goto out_desc;
+				}
 				bitmap_kaddr = kmap(bitmap_bh->b_page);
 				bitmap = bitmap_kaddr + bh_offset(bitmap_bh);
 				pos = nilfs_palloc_find_available_slot(
@@ -545,7 +548,7 @@ int nilfs_palloc_prepare_alloc_entry(struct inode *inode,
 	}
 
 	/* no entries left */
-	return -ENOSPC;
+	return NILFS_ERR_DBG(-ENOSPC);
 
  out_desc:
 	kunmap(desc_bh->b_page);
@@ -675,11 +678,11 @@ int nilfs_palloc_prepare_free_entry(struct inode *inode,
 	group = nilfs_palloc_group(inode, req->pr_entry_nr, &group_offset);
 	ret = nilfs_palloc_get_desc_block(inode, group, 1, &desc_bh);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 	ret = nilfs_palloc_get_bitmap_block(inode, group, 1, &bitmap_bh);
 	if (ret < 0) {
 		brelse(desc_bh);
-		return ret;
+		return NILFS_ERR_DBG(ret);
 	}
 
 	req->pr_desc_bh = desc_bh;
@@ -750,12 +753,12 @@ int nilfs_palloc_freev(struct inode *inode, __u64 *entry_nrs, size_t nitems)
 		group = nilfs_palloc_group(inode, entry_nrs[i], &group_offset);
 		ret = nilfs_palloc_get_desc_block(inode, group, 0, &desc_bh);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		ret = nilfs_palloc_get_bitmap_block(inode, group, 0,
 						    &bitmap_bh);
 		if (ret < 0) {
 			brelse(desc_bh);
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		}
 		desc_kaddr = kmap(desc_bh->b_page);
 		desc = nilfs_palloc_block_get_group_desc(

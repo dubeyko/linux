@@ -93,11 +93,13 @@ int nilfs_dat_prepare_alloc(struct inode *dat, struct nilfs_palloc_req *req)
 
 	ret = nilfs_palloc_prepare_alloc_entry(dat, req);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	ret = nilfs_dat_prepare_entry(dat, req, 1);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		nilfs_palloc_abort_alloc_entry(dat, req);
+	}
 
 	return ret;
 }
@@ -164,6 +166,8 @@ int nilfs_dat_prepare_start(struct inode *dat, struct nilfs_palloc_req *req)
 			dat->i_ino, req->pr_entry_nr);
 
 	ret = nilfs_dat_prepare_entry(dat, req, 0);
+	if (unlikely(ret))
+		NILFS_ERR_DBG(ret);
 	WARN_ON(ret == -ENOENT);
 	return ret;
 }
@@ -202,6 +206,7 @@ int nilfs_dat_prepare_end(struct inode *dat, struct nilfs_palloc_req *req)
 
 	ret = nilfs_dat_prepare_entry(dat, req, 0);
 	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		WARN_ON(ret == -ENOENT);
 		return ret;
 	}
@@ -216,6 +221,7 @@ int nilfs_dat_prepare_end(struct inode *dat, struct nilfs_palloc_req *req)
 	if (blocknr == 0) {
 		ret = nilfs_palloc_prepare_free_entry(dat, req);
 		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			nilfs_dat_abort_entry(dat, req);
 			return ret;
 		}
@@ -290,8 +296,10 @@ int nilfs_dat_prepare_update(struct inode *dat,
 	ret = nilfs_dat_prepare_end(dat, oldreq);
 	if (!ret) {
 		ret = nilfs_dat_prepare_alloc(dat, newreq);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			nilfs_dat_abort_end(dat, oldreq);
+		}
 	}
 	return ret;
 }
@@ -407,7 +415,7 @@ int nilfs_dat_move(struct inode *dat, __u64 vblocknr, sector_t blocknr)
 
 	ret = nilfs_palloc_get_entry_block(dat, vblocknr, 0, &entry_bh);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	/*
 	 * The given disk block number (blocknr) is not yet written to
@@ -421,7 +429,7 @@ int nilfs_dat_move(struct inode *dat, __u64 vblocknr, sector_t blocknr)
 		ret = nilfs_mdt_freeze_buffer(dat, entry_bh);
 		if (ret) {
 			brelse(entry_bh);
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		}
 	}
 
@@ -434,7 +442,7 @@ int nilfs_dat_move(struct inode *dat, __u64 vblocknr, sector_t blocknr)
 		       (unsigned long long)le64_to_cpu(entry->de_end));
 		kunmap_atomic(kaddr);
 		brelse(entry_bh);
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 	WARN_ON(blocknr == 0);
 	entry->de_blocknr = cpu_to_le64(blocknr);
@@ -481,7 +489,7 @@ int nilfs_dat_translate(struct inode *dat, __u64 vblocknr, sector_t *blocknrp)
 
 	ret = nilfs_palloc_get_entry_block(dat, vblocknr, 0, &entry_bh);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	if (!nilfs_doing_gc() && buffer_nilfs_redirected(entry_bh)) {
 		bh = nilfs_mdt_get_frozen_buffer(dat, entry_bh);
@@ -496,7 +504,7 @@ int nilfs_dat_translate(struct inode *dat, __u64 vblocknr, sector_t *blocknrp)
 	entry = nilfs_palloc_block_get_entry(dat, vblocknr, entry_bh, kaddr);
 	blocknr = le64_to_cpu(entry->de_blocknr);
 	if (blocknr == 0) {
-		ret = -ENOENT;
+		ret = NILFS_ERR_DBG(-ENOENT);
 		goto out;
 	}
 	*blocknrp = blocknr;
@@ -526,7 +534,7 @@ ssize_t nilfs_dat_get_vinfo(struct inode *dat, void *buf, unsigned visz,
 		ret = nilfs_palloc_get_entry_block(dat, vinfo->vi_vblocknr,
 						   0, &entry_bh);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		kaddr = kmap_atomic(entry_bh->b_page);
 		/* last virtual block number in this block */
 		first = vinfo->vi_vblocknr;
@@ -576,17 +584,21 @@ int nilfs_dat_read(struct super_block *sb, size_t entry_size,
 
 	dat = nilfs_iget_locked(sb, NULL, NILFS_DAT_INO);
 	if (unlikely(!dat))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 	if (!(dat->i_state & I_NEW))
 		goto out;
 
 	err = nilfs_mdt_init(dat, NILFS_MDT_GFP, sizeof(*di));
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	err = nilfs_palloc_init_blockgroup(dat, entry_size);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	di = NILFS_DAT_I(dat);
 	lockdep_set_class(&di->mi.mi_sem, &dat_lock_key);
@@ -594,8 +606,10 @@ int nilfs_dat_read(struct super_block *sb, size_t entry_size,
 	nilfs_mdt_setup_shadow_map(dat, &di->shadow);
 
 	err = nilfs_read_inode_common(dat, raw_inode);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	unlock_new_inode(dat);
  out:

@@ -77,11 +77,15 @@ int nilfs_ifile_create_inode(struct inode *ifile, ino_t *out_ino,
 	req.pr_entry_bh = NULL;
 
 	ret = nilfs_palloc_prepare_alloc_entry(ifile, &req);
-	if (!ret) {
+	if (unlikely(ret))
+		NILFS_ERR_DBG(ret);
+	else {
 		ret = nilfs_palloc_get_entry_block(ifile, req.pr_entry_nr, 1,
 						   &req.pr_entry_bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			nilfs_palloc_abort_alloc_entry(ifile, &req);
+		}
 	}
 	if (ret < 0) {
 		brelse(req.pr_entry_bh);
@@ -124,11 +128,15 @@ int nilfs_ifile_delete_inode(struct inode *ifile, ino_t ino)
 			ifile->i_ino, ino);
 
 	ret = nilfs_palloc_prepare_free_entry(ifile, &req);
-	if (!ret) {
+	if (unlikely(ret))
+			NILFS_ERR_DBG(ret);
+	else {
 		ret = nilfs_palloc_get_entry_block(ifile, req.pr_entry_nr, 0,
 						   &req.pr_entry_bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			nilfs_palloc_abort_free_entry(ifile, &req);
+		}
 	}
 	if (ret < 0) {
 		brelse(req.pr_entry_bh);
@@ -162,13 +170,15 @@ int nilfs_ifile_get_inode_block(struct inode *ifile, ino_t ino,
 	if (unlikely(!NILFS_VALID_INODE(sb, ino))) {
 		nilfs_error(sb, __func__, "bad inode number: %lu",
 			    (unsigned long) ino);
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 
 	err = nilfs_palloc_get_entry_block(ifile, ino, 0, out_bh);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		nilfs_warning(sb, __func__, "unable to read inode: %lu",
 			      (unsigned long) ino);
+	}
 	return err;
 }
 
@@ -195,24 +205,30 @@ int nilfs_ifile_read(struct super_block *sb, struct nilfs_root *root,
 
 	ifile = nilfs_iget_locked(sb, root, NILFS_IFILE_INO);
 	if (unlikely(!ifile))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 	if (!(ifile->i_state & I_NEW))
 		goto out;
 
 	err = nilfs_mdt_init(ifile, NILFS_MDT_GFP,
 			     sizeof(struct nilfs_ifile_info));
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	err = nilfs_palloc_init_blockgroup(ifile, inode_size);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	nilfs_palloc_setup_cache(ifile, &NILFS_IFILE_I(ifile)->palloc_cache);
 
 	err = nilfs_read_inode_common(ifile, raw_inode);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	unlock_new_inode(ifile);
  out:

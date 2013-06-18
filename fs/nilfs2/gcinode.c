@@ -82,7 +82,7 @@ int nilfs_gccache_submit_read_data(struct inode *inode, sector_t blkoff,
 
 	bh = nilfs_grab_buffer(inode, inode->i_mapping, blkoff, 0);
 	if (unlikely(!bh))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	if (buffer_uptodate(bh))
 		goto out;
@@ -92,6 +92,7 @@ int nilfs_gccache_submit_read_data(struct inode *inode, sector_t blkoff,
 
 		err = nilfs_dat_translate(nilfs->ns_dat, vbn, &pbn);
 		if (unlikely(err)) { /* -EIO, -ENOMEM, -ENOENT */
+			NILFS_ERR_DBG(err);
 			brelse(bh);
 			goto failed;
 		}
@@ -154,6 +155,8 @@ int nilfs_gccache_submit_read_node(struct inode *inode, sector_t pbn,
 					vbn ? : pbn, pbn, READ, out_bh, &pbn);
 	if (ret == -EEXIST) /* internal code (cache hit) */
 		ret = 0;
+	else if (unlikely(ret))
+		NILFS_ERR_DBG(ret);
 	return ret;
 }
 
@@ -161,13 +164,13 @@ int nilfs_gccache_wait_and_mark_dirty(struct buffer_head *bh)
 {
 	wait_on_buffer(bh);
 	if (!buffer_uptodate(bh))
-		return -EIO;
+		return NILFS_ERR_DBG(-EIO);
 	if (buffer_dirty(bh))
-		return -EEXIST;
+		return NILFS_ERR_DBG(-EEXIST);
 
 	if (buffer_nilfs_node(bh) && nilfs_btree_broken_node_block(bh)) {
 		clear_buffer_uptodate(bh);
-		return -EIO;
+		return NILFS_ERR_DBG(-EIO);
 	}
 	mark_buffer_dirty(bh);
 	return 0;

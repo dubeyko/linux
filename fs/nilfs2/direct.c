@@ -57,10 +57,10 @@ static int nilfs_direct_lookup(const struct nilfs_bmap *direct,
 			"bmap: ", direct, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX || level != 1)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 	ptr = nilfs_direct_get_ptr(direct, key);
 	if (ptr == NILFS_BMAP_INVALID_PTR)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK), "ptr %llu\n", ptr);
 
@@ -84,16 +84,16 @@ static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 			"bmap: ", direct, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 	ptr = nilfs_direct_get_ptr(direct, key);
 	if (ptr == NILFS_BMAP_INVALID_PTR)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 
 	if (NILFS_BMAP_USE_VBN(direct)) {
 		dat = nilfs_bmap_get_dat(direct);
 		ret = nilfs_dat_translate(dat, ptr, &blocknr);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		ptr = blocknr;
 	}
 
@@ -105,7 +105,7 @@ static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 		if (dat) {
 			ret = nilfs_dat_translate(dat, ptr2, &blocknr);
 			if (ret < 0)
-				return ret;
+				return NILFS_ERR_DBG(ret);
 			ptr2 = blocknr;
 		}
 		if (ptr2 != ptr + cnt)
@@ -152,9 +152,9 @@ static int nilfs_direct_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 			"bmap: ", bmap, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 	if (nilfs_direct_get_ptr(bmap, key) != NILFS_BMAP_INVALID_PTR)
-		return -EEXIST;
+		return NILFS_ERR_DBG(-EEXIST);
 
 	if (NILFS_BMAP_USE_VBN(bmap)) {
 		req.bpr_ptr = nilfs_direct_find_target_v(bmap, key);
@@ -176,7 +176,8 @@ static int nilfs_direct_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 			nilfs_bmap_set_target_v(bmap, key, req.bpr_ptr);
 
 		nilfs_inode_add_blocks(bmap->b_inode, 1);
-	}
+	} else
+		NILFS_ERR_DBG(ret);
 	return ret;
 }
 
@@ -194,7 +195,7 @@ static int nilfs_direct_delete(struct nilfs_bmap *bmap, __u64 key)
 
 	if (key > NILFS_DIRECT_KEY_MAX ||
 	    nilfs_direct_get_ptr(bmap, key) == NILFS_BMAP_INVALID_PTR)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 
 	dat = NILFS_BMAP_USE_VBN(bmap) ? nilfs_bmap_get_dat(bmap) : NULL;
 	req.bpr_ptr = nilfs_direct_get_ptr(bmap, key);
@@ -204,7 +205,8 @@ static int nilfs_direct_delete(struct nilfs_bmap *bmap, __u64 key)
 		nilfs_bmap_commit_end_ptr(bmap, &req, dat);
 		nilfs_direct_set_ptr(bmap, key, NILFS_BMAP_INVALID_PTR);
 		nilfs_inode_sub_blocks(bmap->b_inode, 1);
-	}
+	} else
+		NILFS_ERR_DBG(ret);
 	return ret;
 }
 
@@ -219,7 +221,7 @@ static int nilfs_direct_last_key(const struct nilfs_bmap *direct, __u64 *keyp)
 			lastkey = key;
 
 	if (lastkey == NILFS_DIRECT_KEY_MAX + 1)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 
 	*keyp = lastkey;
 
@@ -275,7 +277,7 @@ int nilfs_direct_delete_and_convert(struct nilfs_bmap *bmap,
 	/* delete */
 	ret = bmap->b_ops->bop_delete(bmap, key);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	/* free resources */
 	if (bmap->b_ops->bop_clear != NULL)
@@ -323,7 +325,8 @@ static int nilfs_direct_propagate(struct nilfs_bmap *bmap,
 		newreq.pr_entry_nr = ptr;
 		ret = nilfs_dat_prepare_update(dat, &oldreq, &newreq);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
+
 		nilfs_dat_commit_update(dat, &oldreq, &newreq,
 					bmap->b_ptr_type == NILFS_BMAP_PTR_VS);
 		set_buffer_nilfs_volatile(bh);
@@ -359,7 +362,8 @@ static int nilfs_direct_assign_v(struct nilfs_bmap *direct,
 		nilfs_dat_commit_start(dat, &req.bpr_req, blocknr);
 		binfo->bi_v.bi_vblocknr = cpu_to_le64(ptr);
 		binfo->bi_v.bi_blkoff = cpu_to_le64(key);
-	}
+	} else
+		NILFS_ERR_DBG(ret);
 	return ret;
 }
 
@@ -406,13 +410,13 @@ static int nilfs_direct_assign(struct nilfs_bmap *bmap,
 	if (unlikely(key > NILFS_DIRECT_KEY_MAX)) {
 		printk(KERN_CRIT "%s: invalid key: %llu\n", __func__,
 		       (unsigned long long)key);
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 	ptr = nilfs_direct_get_ptr(bmap, key);
 	if (unlikely(ptr == NILFS_BMAP_INVALID_PTR)) {
 		printk(KERN_CRIT "%s: invalid pointer: %llu\n", __func__,
 		       (unsigned long long)ptr);
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 
 	return NILFS_BMAP_USE_VBN(bmap) ?

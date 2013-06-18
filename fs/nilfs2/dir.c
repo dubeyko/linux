@@ -222,7 +222,7 @@ static struct page *nilfs_get_page(struct inode *dir, unsigned long n)
 
 fail:
 	nilfs_put_page(page);
-	return ERR_PTR(-EIO);
+	return ERR_PTR(NILFS_ERR_DBG(-EIO));
 }
 
 /*
@@ -308,7 +308,7 @@ static int nilfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 			nilfs_error(sb, __func__, "bad page in #%lu",
 				    inode->i_ino);
 			filp->f_pos += PAGE_CACHE_SIZE - offset;
-			ret = -EIO;
+			ret = NILFS_ERR_DBG(-EIO);
 			goto done;
 		}
 		kaddr = page_address(page);
@@ -319,7 +319,7 @@ static int nilfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 			if (de->rec_len == 0) {
 				nilfs_error(sb, __func__,
 					    "zero-length directory entry");
-				ret = -EIO;
+				ret = NILFS_ERR_DBG(-EIO);
 				nilfs_put_page(page);
 				goto done;
 			}
@@ -511,8 +511,10 @@ int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 
 		page = nilfs_get_page(dir, n);
 		err = PTR_ERR(page);
-		if (IS_ERR(page))
+		if (IS_ERR(page)) {
+			NILFS_ERR_DBG(err);
 			goto out;
+		}
 		lock_page(page);
 		kaddr = page_address(page);
 		dir_end = kaddr + nilfs_last_byte(dir, n);
@@ -530,10 +532,10 @@ int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 			if (de->rec_len == 0) {
 				nilfs_error(dir->i_sb, __func__,
 					    "zero-length directory entry");
-				err = -EIO;
+				err = NILFS_ERR_DBG(-EIO);
 				goto out_unlock;
 			}
-			err = -EEXIST;
+			err = NILFS_ERR_DBG(-EEXIST);
 			if (nilfs_match(namelen, name, de))
 				goto out_unlock;
 			name_len = NILFS_DIR_REC_LEN(de->name_len);
@@ -554,8 +556,10 @@ got_it:
 	from = (char *)de - (char *)page_address(page);
 	to = from + rec_len;
 	err = nilfs_prepare_chunk(page, from, to);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto out_unlock;
+	}
 	if (de->inode) {
 		struct nilfs_dir_entry *de1;
 
@@ -603,7 +607,7 @@ int nilfs_delete_entry(struct nilfs_dir_entry *dir, struct page *page)
 		if (de->rec_len == 0) {
 			nilfs_error(inode->i_sb, __func__,
 				    "zero-length directory entry");
-			err = -EIO;
+			err = NILFS_ERR_DBG(-EIO);
 			goto out;
 		}
 		pde = de;
@@ -641,10 +645,11 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 			parent->i_ino, inode->i_ino);
 
 	if (!page)
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	err = nilfs_prepare_chunk(page, 0, chunk_size);
 	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		unlock_page(page);
 		goto fail;
 	}

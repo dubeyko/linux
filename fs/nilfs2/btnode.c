@@ -88,7 +88,7 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 
 	bh = nilfs_grab_buffer(inode, btnc, blocknr, 1 << BH_NILFS_Node);
 	if (unlikely(!bh))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	err = -EEXIST; /* internal code */
 	page = bh->b_page;
@@ -105,6 +105,7 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 			err = nilfs_dat_translate(nilfs->ns_dat, blocknr,
 						  &pblocknr);
 			if (unlikely(err)) {
+				NILFS_ERR_DBG(err);
 				brelse(bh);
 				goto out_locked;
 			}
@@ -114,6 +115,7 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 	if (mode == READA) {
 		if (pblocknr != *submit_ptr + 1 || !trylock_buffer(bh)) {
 			err = -EBUSY; /* internal code */
+			NILFS_ERR_DBG(err);
 			brelse(bh);
 			goto out_locked;
 		}
@@ -123,6 +125,7 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 	if (buffer_uptodate(bh)) {
 		unlock_buffer(bh);
 		err = -EEXIST; /* internal code */
+		NILFS_ERR_DBG(err);
 		goto found;
 	}
 	set_buffer_mapped(bh);
@@ -209,8 +212,10 @@ int nilfs_btnode_prepare_change_key(struct address_space *btnc,
 		 */
 retry:
 		err = radix_tree_preload(GFP_NOFS & ~__GFP_HIGHMEM);
-		if (err)
+		if (err) {
+			NILFS_ERR_DBG(err);
 			goto failed_unlock;
+		}
 		/* BUG_ON(oldkey != obh->b_page->index); */
 		if (unlikely(oldkey != obh->b_page->index))
 			NILFS_PAGE_BUG(obh->b_page,
@@ -230,19 +235,23 @@ retry:
 		radix_tree_preload_end();
 		if (!err)
 			return 0;
-		else if (err != -EEXIST)
+		else if (err != -EEXIST) {
+			NILFS_ERR_DBG(err);
 			goto failed_unlock;
+		}
 
 		err = invalidate_inode_pages2_range(btnc, newkey, newkey);
 		if (!err)
 			goto retry;
+		else
+			NILFS_ERR_DBG(err);
 		/* fallback to copy mode */
 		unlock_page(obh->b_page);
 	}
 
 	nbh = nilfs_btnode_create_block(btnc, newkey);
 	if (!nbh)
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 
 	BUG_ON(nbh == obh);
 	ctxt->newbh = nbh;

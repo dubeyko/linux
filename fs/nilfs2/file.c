@@ -47,15 +47,20 @@ int nilfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 
 	err = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (err)
-		return err;
+		return NILFS_ERR_DBG(err);
 	mutex_lock(&inode->i_mutex);
 
 	if (nilfs_inode_dirty(inode)) {
-		if (datasync)
+		if (datasync) {
 			err = nilfs_construct_dsync_segment(inode->i_sb, inode,
 							    0, LLONG_MAX);
-		else
+			if (unlikely(err))
+				NILFS_ERR_DBG(err);
+		} else {
 			err = nilfs_construct_segment(inode->i_sb);
+			if (unlikely(err))
+				NILFS_ERR_DBG(err);
+		}
 	}
 	mutex_unlock(&inode->i_mutex);
 
@@ -64,6 +69,8 @@ int nilfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 		err = blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
 		if (err != -EIO)
 			err = 0;
+		else
+			NILFS_ERR_DBG(err);
 	}
 	return err;
 }
@@ -78,14 +85,15 @@ static int nilfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	nilfs2_debug((DBG_FILE | DBG_DUMP_STACK), "i_ino %lu\n", inode->i_ino);
 
 	if (unlikely(nilfs_near_disk_full(inode->i_sb->s_fs_info)))
-		return VM_FAULT_SIGBUS; /* -ENOSPC */
+		return NILFS_ERR_DBG(VM_FAULT_SIGBUS); /* -ENOSPC */
 
 	sb_start_pagefault(inode->i_sb);
 	lock_page(page);
 	if (page->mapping != inode->i_mapping ||
 	    page_offset(page) >= i_size_read(inode) || !PageUptodate(page)) {
 		unlock_page(page);
-		ret = -EFAULT;	/* make the VM retry the fault */
+		/* make the VM retry the fault */
+		ret = NILFS_ERR_DBG(-EFAULT);
 		goto out;
 	}
 
@@ -119,12 +127,15 @@ static int nilfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	 */
 	ret = nilfs_transaction_begin(inode->i_sb, &ti, 1);
 	/* never returns -ENOMEM, but may return -ENOSPC */
-	if (unlikely(ret))
+	if (unlikely(ret)) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	file_update_time(vma->vm_file);
 	ret = __block_page_mkwrite(vma, vmf, nilfs_get_block);
 	if (ret) {
+		NILFS_ERR_DBG(ret);
 		nilfs_transaction_abort(inode->i_sb);
 		goto out;
 	}

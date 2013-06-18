@@ -308,7 +308,7 @@ repeat:
 		dpage = grab_cache_page(dmap, page->index);
 		if (unlikely(!dpage)) {
 			/* No empty page is added to the page cache */
-			err = -ENOMEM;
+			err = NILFS_ERR_DBG(-ENOMEM);
 			unlock_page(page);
 			break;
 		}

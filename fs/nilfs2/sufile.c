@@ -210,19 +210,23 @@ int nilfs_sufile_updatev(struct inode *sufile, __u64 *segnumv, size_t nsegs,
 		}
 	}
 	if (nerr > 0) {
-		ret = -EINVAL;
+		ret = NILFS_ERR_DBG(-EINVAL);
 		goto out_sem;
 	}
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 
 	seg = segnumv;
 	blkoff = nilfs_sufile_get_blkoff(sufile, *seg);
 	ret = nilfs_mdt_get_block(sufile, blkoff, create, NULL, &bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_header;
+	}
 
 	for (;;) {
 		dofunc(sufile, *seg, header_bh, bh);
@@ -237,8 +241,10 @@ int nilfs_sufile_updatev(struct inode *sufile, __u64 *segnumv, size_t nsegs,
 		/* get different block */
 		brelse(bh);
 		ret = nilfs_mdt_get_block(sufile, blkoff, create, NULL, &bh);
-		if (unlikely(ret < 0))
+		if (unlikely(ret < 0)) {
+			NILFS_ERR_DBG(ret);
 			goto out_header;
+		}
 	}
 	brelse(bh);
 
@@ -268,19 +274,22 @@ int nilfs_sufile_update(struct inode *sufile, __u64 segnum, int create,
 	if (unlikely(segnum >= nilfs_sufile_get_nsegments(sufile))) {
 		printk(KERN_WARNING "%s: invalid segment number: %llu\n",
 		       __func__, (unsigned long long)segnum);
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 
 	ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, create, &bh);
 	if (!ret) {
 		dofunc(sufile, segnum, header_bh, bh);
 		brelse(bh);
-	}
+	} else
+		NILFS_ERR_DBG(ret);
 	brelse(header_bh);
 
  out_sem:
@@ -316,7 +325,8 @@ int nilfs_sufile_set_alloc_range(struct inode *sufile, __u64 start, __u64 end)
 		sui->allocmin = start;
 		sui->allocmax = end;
 		ret = 0;
-	}
+	} else
+		NILFS_ERR_DBG(ret);
 	up_write(&NILFS_MDT(sufile)->mi_sem);
 	return ret;
 }
@@ -357,8 +367,10 @@ int nilfs_sufile_alloc(struct inode *sufile, __u64 *segnump)
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 	kaddr = kmap_atomic(header_bh->b_page);
 	header = kaddr + bh_offset(header_bh);
 	ncleansegs = le64_to_cpu(header->sh_ncleansegs);
@@ -394,8 +406,10 @@ int nilfs_sufile_alloc(struct inode *sufile, __u64 *segnump)
 		}
 		ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, 1,
 							   &su_bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			goto out_header;
+		}
 		kaddr = kmap_atomic(su_bh->b_page);
 		su = nilfs_sufile_block_get_segment_usage(
 			sufile, segnum, su_bh, kaddr);
@@ -430,7 +444,7 @@ int nilfs_sufile_alloc(struct inode *sufile, __u64 *segnump)
 	}
 
 	/* no segments left */
-	ret = -ENOSPC;
+	ret = NILFS_ERR_DBG(-ENOSPC);
 
  out_header:
 	brelse(header_bh);
@@ -584,8 +598,10 @@ int nilfs_sufile_set_segment_usage(struct inode *sufile, __u64 segnum,
 
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 	ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, 0, &bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 
 	kaddr = kmap_atomic(bh->b_page);
 	su = nilfs_sufile_block_get_segment_usage(sufile, segnum, bh, kaddr);
@@ -636,8 +652,10 @@ int nilfs_sufile_get_stat(struct inode *sufile, struct nilfs_sustat *sustat)
 	down_read(&NILFS_MDT(sufile)->mi_sem);
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 
 	kaddr = kmap_atomic(header_bh->b_page);
 	header = kaddr + bh_offset(header_bh);
@@ -727,12 +745,16 @@ static int nilfs_sufile_truncate_range(struct inode *sufile,
 	nsegs = nilfs_sufile_get_nsegments(sufile);
 
 	ret = -EINVAL;
-	if (start > end || start >= nsegs)
+	if (start > end || start >= nsegs) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	segusages_per_block = nilfs_sufile_segment_usages_per_block(sufile);
 	ncleaned = 0;
@@ -745,8 +767,10 @@ static int nilfs_sufile_truncate_range(struct inode *sufile,
 		ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, 0,
 							   &su_bh);
 		if (ret < 0) {
-			if (ret != -ENOENT)
+			if (ret != -ENOENT) {
+				NILFS_ERR_DBG(ret);
 				goto out_header;
+			}
 			/* hole */
 			continue;
 		}
@@ -758,7 +782,7 @@ static int nilfs_sufile_truncate_range(struct inode *sufile,
 			if ((le32_to_cpu(su->su_flags) &
 			     ~(1UL << NILFS_SEGMENT_USAGE_ERROR)) ||
 			    nilfs_segment_is_active(nilfs, segnum + j)) {
-				ret = -EBUSY;
+				ret = NILFS_ERR_DBG(-EBUSY);
 				kunmap_atomic(kaddr);
 				brelse(su_bh);
 				goto out_header;
@@ -834,19 +858,25 @@ int nilfs_sufile_resize(struct inode *sufile, __u64 newnsegs)
 
 	ret = -ENOSPC;
 	nrsvsegs = nilfs_nrsvsegs(nilfs, newnsegs);
-	if (newnsegs < nsegs && nsegs - newnsegs + nrsvsegs > sui->ncleansegs)
+	if (newnsegs < nsegs && nsegs - newnsegs + nrsvsegs > sui->ncleansegs) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	if (newnsegs > nsegs) {
 		sui->ncleansegs += newnsegs - nsegs;
 	} else /* newnsegs < nsegs */ {
 		ret = nilfs_sufile_truncate_range(sufile, newnsegs, nsegs - 1);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			goto out_header;
+		}
 
 		sui->ncleansegs -= nsegs - newnsegs;
 	}
@@ -916,8 +946,10 @@ ssize_t nilfs_sufile_get_suinfo(struct inode *sufile, __u64 segnum, void *buf,
 		ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, 0,
 							   &su_bh);
 		if (ret < 0) {
-			if (ret != -ENOENT)
+			if (ret != -ENOENT) {
+				NILFS_ERR_DBG(ret);
 				goto out;
+			}
 			/* hole */
 			memset(si, 0, sisz * n);
 			si = (void *)si + sisz * n;
@@ -972,24 +1004,30 @@ int nilfs_sufile_read(struct super_block *sb, size_t susize,
 
 	sufile = nilfs_iget_locked(sb, NULL, NILFS_SUFILE_INO);
 	if (unlikely(!sufile))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 	if (!(sufile->i_state & I_NEW))
 		goto out;
 
 	err = nilfs_mdt_init(sufile, NILFS_MDT_GFP, sizeof(*sui));
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	nilfs_mdt_set_entry_size(sufile, susize,
 				 sizeof(struct nilfs_sufile_header));
 
 	err = nilfs_read_inode_common(sufile, raw_inode);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	err = nilfs_sufile_get_header_block(sufile, &header_bh);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	sui = NILFS_SUI(sufile);
 	kaddr = kmap_atomic(header_bh->b_page);

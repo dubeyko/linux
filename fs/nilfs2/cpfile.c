@@ -207,23 +207,27 @@ int nilfs_cpfile_get_checkpoint(struct inode *cpfile,
 
 	if (unlikely(cno < 1 || cno > nilfs_mdt_cno(cpfile) ||
 		     (cno < nilfs_mdt_cno(cpfile) && create)))
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 
 	down_write(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_header_block(cpfile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 	ret = nilfs_cpfile_get_checkpoint_block(cpfile, cno, create, &cp_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_header;
+	}
 	kaddr = kmap(cp_bh->b_page);
 	cp = nilfs_cpfile_block_get_checkpoint(cpfile, cno, cp_bh, kaddr);
 	if (nilfs_checkpoint_invalid(cp)) {
 		if (!create) {
 			kunmap(cp_bh->b_page);
 			brelse(cp_bh);
-			ret = -ENOENT;
+			ret = NILFS_ERR_DBG(-ENOENT);
 			goto out_header;
 		}
 		/* a newly-created checkpoint */
@@ -315,14 +319,16 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 		printk(KERN_ERR "%s: invalid range of checkpoint numbers: "
 		       "[%llu, %llu)\n", __func__,
 		       (unsigned long long)start, (unsigned long long)end);
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 
 	down_write(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_header_block(cpfile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 	tnicps = 0;
 	nss = 0;
 
@@ -330,8 +336,10 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 		ncps = nilfs_cpfile_checkpoints_in_block(cpfile, cno, end);
 		ret = nilfs_cpfile_get_checkpoint_block(cpfile, cno, 0, &cp_bh);
 		if (ret < 0) {
-			if (ret != -ENOENT)
+			if (ret != -ENOENT) {
+				NILFS_ERR_DBG(ret);
 				break;
+			}
 			/* skip hole */
 			ret = 0;
 			continue;
@@ -366,6 +374,8 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 								   cpfile, cno);
 					if (ret == 0)
 						continue;
+					else
+						NILFS_ERR_DBG(ret);
 					printk(KERN_ERR
 					       "%s: cannot delete block\n",
 					       __func__);
@@ -390,7 +400,7 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 
 	brelse(header_bh);
 	if (nss > 0)
-		ret = -EBUSY;
+		ret = NILFS_ERR_DBG(-EBUSY);
 
  out_sem:
 	up_write(&NILFS_MDT(cpfile)->mi_sem);
@@ -434,16 +444,18 @@ static ssize_t nilfs_cpfile_do_get_cpinfo(struct inode *cpfile, __u64 *cnop,
 			"i_ino %lu, cnop %p, buf %p, cisz %u, nci %zu\n",
 			cpfile->i_ino, cnop, buf, cisz, nci);
 
-	if (cno == 0)
-		return -ENOENT; /* checkpoint number 0 is invalid */
+	if (cno == 0) /* checkpoint number 0 is invalid */
+		return NILFS_ERR_DBG(-ENOENT);
 	down_read(&NILFS_MDT(cpfile)->mi_sem);
 
 	for (n = 0; cno < cur_cno && n < nci; cno += ncps) {
 		ncps = nilfs_cpfile_checkpoints_in_block(cpfile, cno, cur_cno);
 		ret = nilfs_cpfile_get_checkpoint_block(cpfile, cno, 0, &bh);
 		if (ret < 0) {
-			if (ret != -ENOENT)
+			if (ret != -ENOENT) {
+				NILFS_ERR_DBG(ret);
 				goto out;
+			}
 			continue; /* skip hole */
 		}
 
@@ -492,8 +504,10 @@ static ssize_t nilfs_cpfile_do_get_ssinfo(struct inode *cpfile, __u64 *cnop,
 
 	if (curr == 0) {
 		ret = nilfs_cpfile_get_header_block(cpfile, &bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			goto out;
+		}
 		kaddr = kmap_atomic(bh->b_page);
 		header = nilfs_cpfile_block_get_header(cpfile, bh, kaddr);
 		curr = le64_to_cpu(header->ch_snapshot_list.ssl_next);
@@ -513,6 +527,8 @@ static ssize_t nilfs_cpfile_do_get_ssinfo(struct inode *cpfile, __u64 *cnop,
 	if (unlikely(ret < 0)) {
 		if (ret == -ENOENT)
 			ret = 0; /* No snapshots (started from a hole block) */
+		else
+			NILFS_ERR_DBG(ret);
 		goto out;
 	}
 	kaddr = kmap_atomic(bh->b_page);
@@ -536,6 +552,7 @@ static ssize_t nilfs_cpfile_do_get_ssinfo(struct inode *cpfile, __u64 *cnop,
 			ret = nilfs_cpfile_get_checkpoint_block(cpfile, next,
 								0, &bh);
 			if (unlikely(ret < 0)) {
+				NILFS_ERR_DBG(ret);
 				WARN_ON(ret == -ENOENT);
 				goto out;
 			}
@@ -571,7 +588,7 @@ ssize_t nilfs_cpfile_get_cpinfo(struct inode *cpfile, __u64 *cnop, int mode,
 	case NILFS_SNAPSHOT:
 		return nilfs_cpfile_do_get_ssinfo(cpfile, cnop, buf, cisz, nci);
 	default:
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 }
 
@@ -594,9 +611,9 @@ int nilfs_cpfile_delete_checkpoint(struct inode *cpfile, __u64 cno)
 	if (nci < 0)
 		return nci;
 	else if (nci == 0 || ci.ci_cno != cno)
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 	else if (nilfs_cpinfo_snapshot(&ci))
-		return -EBUSY;
+		return NILFS_ERR_DBG(-EBUSY);
 
 	return nilfs_cpfile_delete_checkpoints(cpfile, cno, cno + 1);
 }
@@ -640,17 +657,19 @@ static int nilfs_cpfile_set_snapshot(struct inode *cpfile, __u64 cno)
 			"i_ino %lu, cno %llu\n",
 			cpfile->i_ino, cno);
 
-	if (cno == 0)
-		return -ENOENT; /* checkpoint number 0 is invalid */
+	if (cno == 0) /* checkpoint number 0 is invalid */
+		return NILFS_ERR_DBG(-ENOENT);
 	down_write(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_checkpoint_block(cpfile, cno, 0, &cp_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 	kaddr = kmap_atomic(cp_bh->b_page);
 	cp = nilfs_cpfile_block_get_checkpoint(cpfile, cno, cp_bh, kaddr);
 	if (nilfs_checkpoint_invalid(cp)) {
-		ret = -ENOENT;
+		ret = NILFS_ERR_DBG(-ENOENT);
 		kunmap_atomic(kaddr);
 		goto out_cp;
 	}
@@ -662,8 +681,10 @@ static int nilfs_cpfile_set_snapshot(struct inode *cpfile, __u64 cno)
 	kunmap_atomic(kaddr);
 
 	ret = nilfs_cpfile_get_header_block(cpfile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_cp;
+	}
 	kaddr = kmap_atomic(header_bh->b_page);
 	header = nilfs_cpfile_block_get_header(cpfile, header_bh, kaddr);
 	list = &header->ch_snapshot_list;
@@ -680,8 +701,10 @@ static int nilfs_cpfile_set_snapshot(struct inode *cpfile, __u64 cno)
 			brelse(curr_bh);
 			ret = nilfs_cpfile_get_checkpoint_block(cpfile, curr,
 								0, &curr_bh);
-			if (ret < 0)
+			if (ret < 0) {
+				NILFS_ERR_DBG(ret);
 				goto out_header;
+			}
 			kaddr = kmap_atomic(curr_bh->b_page);
 		}
 		curr_blkoff = prev_blkoff;
@@ -695,8 +718,10 @@ static int nilfs_cpfile_set_snapshot(struct inode *cpfile, __u64 cno)
 	if (prev != 0) {
 		ret = nilfs_cpfile_get_checkpoint_block(cpfile, prev, 0,
 							&prev_bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			goto out_curr;
+		}
 	} else {
 		prev_bh = header_bh;
 		get_bh(prev_bh);
@@ -762,17 +787,19 @@ static int nilfs_cpfile_clear_snapshot(struct inode *cpfile, __u64 cno)
 			"i_ino %lu, cno %llu\n",
 			cpfile->i_ino, cno);
 
-	if (cno == 0)
-		return -ENOENT; /* checkpoint number 0 is invalid */
+	if (cno == 0) /* checkpoint number 0 is invalid */
+		return NILFS_ERR_DBG(-ENOENT);
 	down_write(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_checkpoint_block(cpfile, cno, 0, &cp_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 	kaddr = kmap_atomic(cp_bh->b_page);
 	cp = nilfs_cpfile_block_get_checkpoint(cpfile, cno, cp_bh, kaddr);
 	if (nilfs_checkpoint_invalid(cp)) {
-		ret = -ENOENT;
+		ret = NILFS_ERR_DBG(-ENOENT);
 		kunmap_atomic(kaddr);
 		goto out_cp;
 	}
@@ -788,13 +815,17 @@ static int nilfs_cpfile_clear_snapshot(struct inode *cpfile, __u64 cno)
 	kunmap_atomic(kaddr);
 
 	ret = nilfs_cpfile_get_header_block(cpfile, &header_bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_cp;
+	}
 	if (next != 0) {
 		ret = nilfs_cpfile_get_checkpoint_block(cpfile, next, 0,
 							&next_bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			goto out_header;
+		}
 	} else {
 		next_bh = header_bh;
 		get_bh(next_bh);
@@ -802,8 +833,10 @@ static int nilfs_cpfile_clear_snapshot(struct inode *cpfile, __u64 cno)
 	if (prev != 0) {
 		ret = nilfs_cpfile_get_checkpoint_block(cpfile, prev, 0,
 							&prev_bh);
-		if (ret < 0)
+		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			goto out_next;
+		}
 	} else {
 		prev_bh = header_bh;
 		get_bh(prev_bh);
@@ -886,18 +919,23 @@ int nilfs_cpfile_is_snapshot(struct inode *cpfile, __u64 cno)
 	/* CP number is invalid if it's zero or larger than the
 	largest	exist one.*/
 	if (cno == 0 || cno >= nilfs_mdt_cno(cpfile))
-		return -ENOENT;
+		return NILFS_ERR_DBG(-ENOENT);
 	down_read(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_checkpoint_block(cpfile, cno, 0, &bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 	kaddr = kmap_atomic(bh->b_page);
 	cp = nilfs_cpfile_block_get_checkpoint(cpfile, cno, bh, kaddr);
 	if (nilfs_checkpoint_invalid(cp))
-		ret = -ENOENT;
-	else
+		ret = NILFS_ERR_DBG(-ENOENT);
+	else {
 		ret = nilfs_checkpoint_snapshot(cp);
+		if (unlikely(ret))
+			NILFS_ERR_DBG(ret);
+	}
 	kunmap_atomic(kaddr);
 	brelse(bh);
 
@@ -941,14 +979,17 @@ int nilfs_cpfile_change_cpmode(struct inode *cpfile, __u64 cno, int mode)
 			 * with a read/write mount and are protected from the
 			 * cleaner.
 			 */
-			ret = -EBUSY;
-		else
+			ret = NILFS_ERR_DBG(-EBUSY);
+		else {
 			ret = nilfs_cpfile_clear_snapshot(cpfile, cno);
+			if (unlikely(ret))
+				NILFS_ERR_DBG(ret);
+		}
 		return ret;
 	case NILFS_SNAPSHOT:
 		return nilfs_cpfile_set_snapshot(cpfile, cno);
 	default:
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 	}
 }
 
@@ -981,8 +1022,10 @@ int nilfs_cpfile_get_stat(struct inode *cpfile, struct nilfs_cpstat *cpstat)
 	down_read(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_header_block(cpfile, &bh);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto out_sem;
+	}
 	kaddr = kmap_atomic(bh->b_page);
 	header = nilfs_cpfile_block_get_header(cpfile, bh, kaddr);
 	cpstat->cs_cno = nilfs_mdt_cno(cpfile);
@@ -1021,20 +1064,24 @@ int nilfs_cpfile_read(struct super_block *sb, size_t cpsize,
 
 	cpfile = nilfs_iget_locked(sb, NULL, NILFS_CPFILE_INO);
 	if (unlikely(!cpfile))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 	if (!(cpfile->i_state & I_NEW))
 		goto out;
 
 	err = nilfs_mdt_init(cpfile, NILFS_MDT_GFP, 0);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	nilfs_mdt_set_entry_size(cpfile, cpsize,
 				 sizeof(struct nilfs_cpfile_header));
 
 	err = nilfs_read_inode_common(cpfile, raw_inode);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed;
+	}
 
 	unlock_new_inode(cpfile);
  out:

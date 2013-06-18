@@ -109,8 +109,10 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
 
 		bh_result->b_blocknr = 0;
 		err = nilfs_transaction_begin(inode->i_sb, &ti, 1);
-		if (unlikely(err))
+		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			goto out;
+		}
 		err = nilfs_bmap_insert(ii->i_bmap, (unsigned long)blkoff,
 					(unsigned long)bh_result);
 		if (unlikely(err != 0)) {
@@ -129,7 +131,8 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
 				       inode->i_ino,
 				       (unsigned long long)blkoff);
 				err = 0;
-			}
+			} else
+				NILFS_ERR_DBG(err);
 			nilfs_transaction_abort(inode->i_sb);
 			goto out;
 		}
@@ -143,10 +146,9 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
 	} else if (ret == -ENOENT) {
 		/* not found is not error (e.g. hole); must return without
 		   the mapped state flag. */
-		;
-	} else {
-		err = ret;
-	}
+		NILFS_ERR_DBG(ret);
+	} else
+		err = NILFS_ERR_DBG(ret);
 
  out:
 	return err;
@@ -203,13 +205,16 @@ static int nilfs_writepages(struct address_space *mapping,
 
 	if (inode->i_sb->s_flags & MS_RDONLY) {
 		nilfs_clear_dirty_pages(mapping, false);
-		return -EROFS;
+		return NILFS_ERR_DBG(-EROFS);
 	}
 
-	if (wbc->sync_mode == WB_SYNC_ALL)
+	if (wbc->sync_mode == WB_SYNC_ALL) {
 		err = nilfs_construct_dsync_segment(inode->i_sb, inode,
 						    wbc->range_start,
 						    wbc->range_end);
+		if (err)
+			NILFS_ERR_DBG(err);
+	}
 	return err;
 }
 
@@ -233,7 +238,7 @@ static int nilfs_writepage(struct page *page, struct writeback_control *wbc)
 		 */
 		nilfs_clear_dirty_page(page, false);
 		unlock_page(page);
-		return -EROFS;
+		return NILFS_ERR_DBG(-EROFS);
 	}
 
 	redirty_page_for_writepage(wbc, page);
@@ -242,7 +247,7 @@ static int nilfs_writepage(struct page *page, struct writeback_control *wbc)
 	if (wbc->sync_mode == WB_SYNC_ALL) {
 		err = nilfs_construct_segment(inode->i_sb);
 		if (unlikely(err))
-			return err;
+			return NILFS_ERR_DBG(err);
 	} else if (wbc->for_reclaim)
 		nilfs_flush_segment(inode->i_sb, inode->i_ino);
 
@@ -317,11 +322,12 @@ static int nilfs_write_begin(struct file *file, struct address_space *mapping,
 
 	err = nilfs_transaction_begin(inode->i_sb, NULL, 1);
 	if (unlikely(err))
-		return err;
+		return NILFS_ERR_DBG(err);
 
 	err = block_write_begin(mapping, pos, len, flags, pagep,
 				nilfs_get_block);
 	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		nilfs_write_failed(mapping, pos + len);
 		nilfs_transaction_abort(inode->i_sb);
 	}
@@ -347,6 +353,8 @@ static int nilfs_write_end(struct file *file, struct address_space *mapping,
 				   fsdata);
 	nilfs_set_file_dirty(inode, nr_dirty);
 	err = nilfs_transaction_commit(inode->i_sb);
+	if (unlikely(err))
+		NILFS_ERR_DBG(err);
 	return err ? : copied;
 }
 
@@ -427,8 +435,10 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 	ii->i_root = root;
 
 	err = nilfs_ifile_create_inode(root->ifile, &ino, &ii->i_bh);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		goto failed_ifile_create_inode;
+	}
 	/* reference count of i_bh inherits from nilfs_mdt_read_block() */
 
 	atomic_inc(&root->inodes_count);
@@ -438,8 +448,10 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 
 	if (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode)) {
 		err = nilfs_bmap_read(ii->i_bmap, NULL);
-		if (err < 0)
+		if (err < 0) {
+			NILFS_ERR_DBG(err);
 			goto failed_bmap;
+		}
 
 		set_bit(NILFS_I_BMAP, &ii->i_state);
 		/* No lock is needed; iget() ensures it. */
@@ -458,10 +470,12 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 	insert_inode_hash(inode);
 
 	err = nilfs_init_acl(inode, dir);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		goto failed_acl; /* never occur. When supporting
 				    nilfs_init_acl(), proper cancellation of
 				    above jobs should be considered */
+	}
 
 	return inode;
 
@@ -525,8 +539,10 @@ int nilfs_read_inode_common(struct inode *inode,
 	inode->i_atime.tv_nsec = le32_to_cpu(raw_inode->i_mtime_nsec);
 	inode->i_ctime.tv_nsec = le32_to_cpu(raw_inode->i_ctime_nsec);
 	inode->i_mtime.tv_nsec = le32_to_cpu(raw_inode->i_mtime_nsec);
-	if (inode->i_nlink == 0 && inode->i_mode == 0)
-		return -EINVAL; /* this inode is deleted */
+	if (inode->i_nlink == 0 && inode->i_mode == 0) {
+		/* this inode is deleted */
+		return NILFS_ERR_DBG(-EINVAL);
+	}
 
 	inode->i_blocks = le64_to_cpu(raw_inode->i_blocks);
 	ii->i_flags = le32_to_cpu(raw_inode->i_flags);
@@ -542,7 +558,7 @@ int nilfs_read_inode_common(struct inode *inode,
 	    S_ISLNK(inode->i_mode)) {
 		err = nilfs_bmap_read(ii->i_bmap, raw_inode);
 		if (err < 0)
-			return err;
+			return NILFS_ERR_DBG(err);
 		set_bit(NILFS_I_BMAP, &ii->i_state);
 		/* No lock is needed; iget() ensures it. */
 	}
@@ -564,14 +580,18 @@ static int __nilfs_read_inode(struct super_block *sb,
 
 	down_read(&NILFS_MDT(nilfs->ns_dat)->mi_sem);
 	err = nilfs_ifile_get_inode_block(root->ifile, ino, &bh);
-	if (unlikely(err))
+	if (unlikely(err)) {
+		NILFS_ERR_DBG(err);
 		goto bad_inode;
+	}
 
 	raw_inode = nilfs_ifile_map_inode(root->ifile, ino, bh);
 
 	err = nilfs_read_inode_common(inode, raw_inode);
-	if (err)
+	if (err) {
+		NILFS_ERR_DBG(err);
 		goto failed_unmap;
+	}
 
 	if (S_ISREG(inode->i_mode)) {
 		inode->i_op = &nilfs_file_inode_operations;
@@ -681,14 +701,14 @@ struct inode *nilfs_iget(struct super_block *sb, struct nilfs_root *root,
 
 	inode = nilfs_iget_locked(sb, root, ino);
 	if (unlikely(!inode))
-		return ERR_PTR(-ENOMEM);
+		return ERR_PTR(NILFS_ERR_DBG(-ENOMEM));
 	if (!(inode->i_state & I_NEW))
 		return inode;
 
 	err = __nilfs_read_inode(sb, root, ino, inode);
 	if (unlikely(err)) {
 		iget_failed(inode);
-		return ERR_PTR(err);
+		return ERR_PTR(NILFS_ERR_DBG(err));
 	}
 	unlock_new_inode(inode);
 	return inode;
@@ -709,14 +729,14 @@ struct inode *nilfs_iget_for_gc(struct super_block *sb, unsigned long ino,
 
 	inode = iget5_locked(sb, ino, nilfs_iget_test, nilfs_iget_set, &args);
 	if (unlikely(!inode))
-		return ERR_PTR(-ENOMEM);
+		return ERR_PTR(NILFS_ERR_DBG(-ENOMEM));
 	if (!(inode->i_state & I_NEW))
 		return inode;
 
 	err = nilfs_init_gcinode(inode);
 	if (unlikely(err)) {
 		iget_failed(inode);
-		return ERR_PTR(err);
+		return ERR_PTR(NILFS_ERR_DBG(err));
 	}
 	unlock_new_inode(inode);
 	return inode;
@@ -811,8 +831,10 @@ repeat:
 	ret = nilfs_bmap_last_key(ii->i_bmap, &b);
 	if (ret == -ENOENT)
 		return;
-	else if (ret < 0)
+	else if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		goto failed;
+	}
 
 	if (b < from)
 		return;
@@ -823,6 +845,8 @@ repeat:
 	if (!ret || (ret == -ENOMEM &&
 		     nilfs_bmap_truncate(ii->i_bmap, b) == 0))
 		goto repeat;
+	else
+		NILFS_ERR_DBG(ret);
 
 failed:
 	nilfs_warning(ii->vfs_inode.i_sb, __func__,
@@ -925,6 +949,8 @@ void nilfs_evict_inode(struct inode *inode)
 	ret = nilfs_ifile_delete_inode(ii->i_root->ifile, inode->i_ino);
 	if (!ret)
 		atomic_dec(&ii->i_root->inodes_count);
+	else
+		NILFS_ERR_DBG(ret);
 
 	nilfs_clear_inode(inode);
 
@@ -948,11 +974,11 @@ int nilfs_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	err = inode_change_ok(inode, iattr);
 	if (err)
-		return err;
+		return NILFS_ERR_DBG(err);
 
 	err = nilfs_transaction_begin(sb, &ti, 0);
 	if (unlikely(err))
-		return err;
+		return NILFS_ERR_DBG(err);
 
 	if ((iattr->ia_valid & ATTR_SIZE) &&
 	    iattr->ia_size != i_size_read(inode)) {
@@ -966,8 +992,10 @@ int nilfs_setattr(struct dentry *dentry, struct iattr *iattr)
 
 	if (iattr->ia_valid & ATTR_MODE) {
 		err = nilfs_acl_chmod(inode);
-		if (unlikely(err))
+		if (unlikely(err)) {
+			NILFS_ERR_DBG(err);
 			goto out_err;
+		}
 	}
 
 	return nilfs_transaction_commit(sb);
@@ -986,8 +1014,10 @@ int nilfs_permission(struct inode *inode, int mask)
 			inode->i_ino, i_size_read(inode), mask);
 
 	if ((mask & MAY_WRITE) && root &&
-	    root->cno != NILFS_CPTREE_CURRENT_CNO)
-		return -EROFS; /* snapshot is not writable */
+	    root->cno != NILFS_CPTREE_CURRENT_CNO) {
+		/* snapshot is not writable */
+		return NILFS_ERR_DBG(-EROFS);
+	}
 
 	return generic_permission(inode, mask);
 }
@@ -1007,7 +1037,7 @@ int nilfs_load_inode_block(struct inode *inode, struct buffer_head **pbh)
 		err = nilfs_ifile_get_inode_block(ii->i_root->ifile,
 						  inode->i_ino, pbh);
 		if (unlikely(err))
-			return err;
+			return NILFS_ERR_DBG(err);
 		spin_lock(&nilfs->ns_inode_lock);
 		if (ii->i_bh == NULL)
 			ii->i_bh = *pbh;
@@ -1068,8 +1098,8 @@ int nilfs_set_file_dirty(struct inode *inode, unsigned nr_dirty)
 				      "cannot get inode (ino=%lu)\n",
 				      inode->i_ino);
 			spin_unlock(&nilfs->ns_inode_lock);
-			return -EINVAL; /* NILFS_I_DIRTY may remain for
-					   freeing inode */
+			/* NILFS_I_DIRTY may remain for freeing inode */
+			return NILFS_ERR_DBG(-EINVAL);
 		}
 		list_move_tail(&ii->i_dirty, &nilfs->ns_dirty_files);
 		set_bit(NILFS_I_QUEUED, &ii->i_state);
@@ -1091,7 +1121,7 @@ int nilfs_mark_inode_dirty(struct inode *inode)
 	if (unlikely(err)) {
 		nilfs_warning(inode->i_sb, __func__,
 			      "failed to reget inode block.\n");
-		return err;
+		return NILFS_ERR_DBG(err);
 	}
 	nilfs_update_inode(inode, ibh);
 	mark_buffer_dirty(ibh);
@@ -1153,7 +1183,7 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 
 	ret = fiemap_check_flags(fieinfo, FIEMAP_FLAG_SYNC);
 	if (ret)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	mutex_lock(&inode->i_mutex);
 
@@ -1174,8 +1204,11 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 				/* End of the current extent */
 				ret = fiemap_fill_next_extent(
 					fieinfo, logical, phys, size, flags);
-				if (ret)
+				if (ret) {
+					if (ret < 0)
+						NILFS_ERR_DBG(ret);
 					break;
+				}
 			}
 			if (blkoff > end_blkoff)
 				break;
@@ -1209,8 +1242,10 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		if (n < 0) {
 			int past_eof;
 
-			if (unlikely(n != -ENOENT))
+			if (unlikely(n != -ENOENT)) {
+				NILFS_ERR_DBG(n);
 				break; /* error */
+			}
 
 			/* HOLE */
 			blkoff++;
@@ -1224,8 +1259,11 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 
 				ret = fiemap_fill_next_extent(
 					fieinfo, logical, phys, size, flags);
-				if (ret)
+				if (ret) {
+					if (ret < 0)
+						NILFS_ERR_DBG(ret);
 					break;
+				}
 				size = 0;
 			}
 			if (blkoff > end_blkoff || past_eof)

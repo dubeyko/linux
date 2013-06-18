@@ -44,6 +44,9 @@ static int nilfs_bmap_convert_error(struct nilfs_bmap *bmap,
 {
 	struct inode *inode = bmap->b_inode;
 
+	if (err)
+		NILFS_ERR_DBG(err);
+
 	if (err == -EINVAL) {
 		nilfs_error(inode->i_sb, fname,
 			    "broken bmap (inode number=%lu)\n", inode->i_ino);
@@ -87,6 +90,7 @@ int nilfs_bmap_lookup_at_level(struct nilfs_bmap *bmap, __u64 key, int level,
 	ret = bmap->b_ops->bop_lookup(bmap, key, level, ptrp);
 	if (ret < 0) {
 		ret = nilfs_bmap_convert_error(bmap, __func__, ret);
+		NILFS_ERR_DBG(ret);
 		goto out;
 	}
 	if (NILFS_BMAP_USE_VBN(bmap)) {
@@ -94,6 +98,8 @@ int nilfs_bmap_lookup_at_level(struct nilfs_bmap *bmap, __u64 key, int level,
 					  &blocknr);
 		if (!ret)
 			*ptrp = blocknr;
+		else
+			NILFS_ERR_DBG(ret);
 	}
 
 	nilfs2_debug(DBG_BMAP, "ptr %llu\n", *ptrp);
@@ -137,15 +143,18 @@ static int nilfs_bmap_do_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 			n = bmap->b_ops->bop_gather_data(
 				bmap, keys, ptrs, NILFS_BMAP_SMALL_HIGH + 1);
 			if (n < 0)
-				return n;
+				return NILFS_ERR_DBG(n);
 			ret = nilfs_btree_convert_and_insert(
 				bmap, key, ptr, keys, ptrs, n);
 			if (ret == 0)
 				bmap->b_u.u_flags |= NILFS_BMAP_LARGE;
 
+			if (ret < 0)
+				NILFS_ERR_DBG(ret);
+
 			return ret;
 		} else if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 	}
 
 	return bmap->b_ops->bop_insert(bmap, key, ptr);
@@ -202,15 +211,18 @@ static int nilfs_bmap_do_delete(struct nilfs_bmap *bmap, __u64 key)
 			n = bmap->b_ops->bop_gather_data(
 				bmap, keys, ptrs, NILFS_BMAP_LARGE_LOW + 1);
 			if (n < 0)
-				return n;
+				return NILFS_ERR_DBG(n);
 			ret = nilfs_direct_delete_and_convert(
 				bmap, key, keys, ptrs, n);
 			if (ret == 0)
 				bmap->b_u.u_flags &= ~NILFS_BMAP_LARGE;
 
+			if (ret < 0)
+				NILFS_ERR_DBG(ret);
+
 			return ret;
 		} else if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 	}
 
 	return bmap->b_ops->bop_delete(bmap, key);
@@ -280,6 +292,7 @@ static int nilfs_bmap_do_truncate(struct nilfs_bmap *bmap, unsigned long key)
 
 	ret = bmap->b_ops->bop_last_key(bmap, &lastkey);
 	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		if (ret == -ENOENT)
 			ret = 0;
 		return ret;
@@ -288,9 +301,10 @@ static int nilfs_bmap_do_truncate(struct nilfs_bmap *bmap, unsigned long key)
 	while (key <= lastkey) {
 		ret = nilfs_bmap_do_delete(bmap, lastkey);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 		ret = bmap->b_ops->bop_last_key(bmap, &lastkey);
 		if (ret < 0) {
+			NILFS_ERR_DBG(ret);
 			if (ret == -ENOENT)
 				ret = 0;
 			return ret;
@@ -479,6 +493,10 @@ int nilfs_bmap_test_and_clear_dirty(struct nilfs_bmap *bmap)
 	ret = nilfs_bmap_dirty(bmap);
 	nilfs_bmap_clear_dirty(bmap);
 	up_write(&bmap->b_sem);
+
+	if (ret < 0)
+		NILFS_ERR_DBG(ret);
+
 	return ret;
 }
 

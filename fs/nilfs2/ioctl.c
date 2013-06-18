@@ -59,11 +59,11 @@ static int nilfs_ioctl_wrap_copy(struct the_nilfs *nilfs,
 		return 0;
 
 	if (argv->v_size > PAGE_SIZE)
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 
 	buf = (void *)__get_free_pages(GFP_NOFS, 0);
 	if (unlikely(!buf))
-		return -ENOMEM;
+		return NILFS_ERR_DBG(-ENOMEM);
 	maxmembs = PAGE_SIZE / argv->v_size;
 
 	ret = 0;
@@ -75,20 +75,20 @@ static int nilfs_ioctl_wrap_copy(struct the_nilfs *nilfs,
 		if ((dir & _IOC_WRITE) &&
 		    copy_from_user(buf, base + argv->v_size * i,
 				   argv->v_size * n)) {
-			ret = -EFAULT;
+			ret = NILFS_ERR_DBG(-EFAULT);
 			break;
 		}
 		ppos = pos;
 		nr = dofunc(nilfs, &pos, argv->v_flags, buf, argv->v_size,
 			       n);
 		if (nr < 0) {
-			ret = nr;
+			ret = NILFS_ERR_DBG(nr);
 			break;
 		}
 		if ((dir & _IOC_READ) &&
 		    copy_to_user(base + argv->v_size * i, buf,
 				 argv->v_size * nr)) {
-			ret = -EFAULT;
+			ret = NILFS_ERR_DBG(-EFAULT);
 			break;
 		}
 		total += nr;
@@ -125,14 +125,14 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 			inode->i_ino, filp, argp);
 
 	if (!inode_owner_or_capable(inode))
-		return -EACCES;
+		return NILFS_ERR_DBG(-EACCES);
 
 	if (get_user(flags, (int __user *)argp))
-		return -EFAULT;
+		return NILFS_ERR_DBG(-EFAULT);
 
 	ret = mnt_want_write_file(filp);
 	if (ret)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	flags = nilfs_mask_flags(inode->i_mode, flags);
 
@@ -146,12 +146,16 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 	 */
 	ret = -EPERM;
 	if (((flags ^ oldflags) & (FS_APPEND_FL | FS_IMMUTABLE_FL)) &&
-	    !capable(CAP_LINUX_IMMUTABLE))
+	    !capable(CAP_LINUX_IMMUTABLE)) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = nilfs_transaction_begin(inode->i_sb, &ti, 0);
-	if (ret)
+	if (ret) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	NILFS_I(inode)->i_flags = (oldflags & ~FS_FL_USER_MODIFIABLE) |
 		(flags & FS_FL_USER_MODIFIABLE);
@@ -190,24 +194,27 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 			inode->i_ino, filp, cmd, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return NILFS_ERR_DBG(-EPERM);
 
 	ret = mnt_want_write_file(filp);
 	if (ret)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	ret = -EFAULT;
-	if (copy_from_user(&cpmode, argp, sizeof(cpmode)))
+	if (copy_from_user(&cpmode, argp, sizeof(cpmode))) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	mutex_lock(&nilfs->ns_snapshot_mount_mutex);
 
 	nilfs_transaction_begin(inode->i_sb, &ti, 0);
 	ret = nilfs_cpfile_change_cpmode(
 		nilfs->ns_cpfile, cpmode.cm_cno, cpmode.cm_mode);
-	if (unlikely(ret < 0))
+	if (unlikely(ret < 0)) {
+		NILFS_ERR_DBG(ret);
 		nilfs_transaction_abort(inode->i_sb);
-	else
+	} else
 		nilfs_transaction_commit(inode->i_sb); /* never fails */
 
 	mutex_unlock(&nilfs->ns_snapshot_mount_mutex);
@@ -230,21 +237,24 @@ nilfs_ioctl_delete_checkpoint(struct inode *inode, struct file *filp,
 			inode->i_ino, filp, cmd, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return NILFS_ERR_DBG(-EPERM);
 
 	ret = mnt_want_write_file(filp);
 	if (ret)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	ret = -EFAULT;
-	if (copy_from_user(&cno, argp, sizeof(cno)))
+	if (copy_from_user(&cno, argp, sizeof(cno))) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	nilfs_transaction_begin(inode->i_sb, &ti, 0);
 	ret = nilfs_cpfile_delete_checkpoint(nilfs->ns_cpfile, cno);
-	if (unlikely(ret < 0))
+	if (unlikely(ret < 0)) {
+		NILFS_ERR_DBG(ret);
 		nilfs_transaction_abort(inode->i_sb);
-	else
+	} else
 		nilfs_transaction_commit(inode->i_sb); /* never fails */
 out:
 	mnt_drop_write_file(filp);
@@ -266,7 +276,8 @@ nilfs_ioctl_do_get_cpinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 	ret = nilfs_cpfile_get_cpinfo(nilfs->ns_cpfile, posp, flags, buf,
 				      size, nmembs);
 	up_read(&nilfs->ns_segctor_sem);
-	return ret;
+
+	return (ret < 0) ? NILFS_ERR_DBG(ret) : ret;
 }
 
 static int nilfs_ioctl_get_cpstat(struct inode *inode, struct file *filp,
@@ -284,10 +295,10 @@ static int nilfs_ioctl_get_cpstat(struct inode *inode, struct file *filp,
 	ret = nilfs_cpfile_get_stat(nilfs->ns_cpfile, &cpstat);
 	up_read(&nilfs->ns_segctor_sem);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	if (copy_to_user(argp, &cpstat, sizeof(cpstat)))
-		ret = -EFAULT;
+		ret = NILFS_ERR_DBG(-EFAULT);
 	return ret;
 }
 
@@ -306,7 +317,8 @@ nilfs_ioctl_do_get_suinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 	ret = nilfs_sufile_get_suinfo(nilfs->ns_sufile, *posp, buf, size,
 				      nmembs);
 	up_read(&nilfs->ns_segctor_sem);
-	return ret;
+
+	return (ret < 0) ? NILFS_ERR_DBG(ret) : ret;
 }
 
 static int nilfs_ioctl_get_sustat(struct inode *inode, struct file *filp,
@@ -324,10 +336,10 @@ static int nilfs_ioctl_get_sustat(struct inode *inode, struct file *filp,
 	ret = nilfs_sufile_get_stat(nilfs->ns_sufile, &sustat);
 	up_read(&nilfs->ns_segctor_sem);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	if (copy_to_user(argp, &sustat, sizeof(sustat)))
-		ret = -EFAULT;
+		ret = NILFS_ERR_DBG(-EFAULT);
 	return ret;
 }
 
@@ -345,7 +357,7 @@ nilfs_ioctl_do_get_vinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 	down_read(&nilfs->ns_segctor_sem);
 	ret = nilfs_dat_get_vinfo(nilfs->ns_dat, buf, size, nmembs);
 	up_read(&nilfs->ns_segctor_sem);
-	return ret;
+	return (ret < 0) ? NILFS_ERR_DBG(ret) : ret;
 }
 
 static ssize_t
@@ -370,7 +382,7 @@ nilfs_ioctl_do_get_bdescs(struct the_nilfs *nilfs, __u64 *posp, int flags,
 		if (ret < 0) {
 			if (ret != -ENOENT) {
 				up_read(&nilfs->ns_segctor_sem);
-				return ret;
+				return NILFS_ERR_DBG(ret);
 			}
 			bdescs[i].bd_blocknr = 0;
 		}
@@ -391,18 +403,18 @@ static int nilfs_ioctl_get_bdescs(struct inode *inode, struct file *filp,
 			inode->i_ino, filp, cmd, argp);
 
 	if (copy_from_user(&argv, argp, sizeof(argv)))
-		return -EFAULT;
+		return NILFS_ERR_DBG(-EFAULT);
 
 	if (argv.v_size != sizeof(struct nilfs_bdesc))
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 
 	ret = nilfs_ioctl_wrap_copy(nilfs, &argv, _IOC_DIR(cmd),
 				    nilfs_ioctl_do_get_bdescs);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	if (copy_to_user(argp, &argv, sizeof(argv)))
-		ret = -EFAULT;
+		ret = NILFS_ERR_DBG(-EFAULT);
 	return ret;
 }
 
@@ -437,7 +449,7 @@ static int nilfs_ioctl_move_inode_block(struct inode *inode,
 			       (unsigned long long)vdesc->vd_offset,
 			       (unsigned long long)vdesc->vd_blocknr,
 			       (unsigned long long)vdesc->vd_vblocknr);
-		return ret;
+		return NILFS_ERR_DBG(ret);
 	}
 	if (unlikely(!list_empty(&bh->b_assoc_buffers))) {
 		printk(KERN_CRIT "%s: conflicting %s buffer: ino=%llu, "
@@ -449,7 +461,7 @@ static int nilfs_ioctl_move_inode_block(struct inode *inode,
 		       (unsigned long long)vdesc->vd_blocknr,
 		       (unsigned long long)vdesc->vd_vblocknr);
 		brelse(bh);
-		return -EEXIST;
+		return NILFS_ERR_DBG(-EEXIST);
 	}
 	list_add_tail(&bh->b_assoc_buffers, buffers);
 	return 0;
@@ -476,7 +488,7 @@ static int nilfs_ioctl_move_blocks(struct super_block *sb,
 		cno = vdesc->vd_cno;
 		inode = nilfs_iget_for_gc(sb, ino, cno);
 		if (IS_ERR(inode)) {
-			ret = PTR_ERR(inode);
+			ret = NILFS_ERR_DBG((int)PTR_ERR(inode));
 			goto failed;
 		}
 		if (list_empty(&NILFS_I(inode)->i_dirty)) {
@@ -494,6 +506,7 @@ static int nilfs_ioctl_move_blocks(struct super_block *sb,
 			ret = nilfs_ioctl_move_inode_block(inode, vdesc,
 							   &buffers);
 			if (unlikely(ret < 0)) {
+				NILFS_ERR_DBG(ret);
 				iput(inode);
 				goto failed;
 			}
@@ -507,6 +520,7 @@ static int nilfs_ioctl_move_blocks(struct super_block *sb,
 	list_for_each_entry_safe(bh, n, &buffers, b_assoc_buffers) {
 		ret = nilfs_gccache_wait_and_mark_dirty(bh);
 		if (unlikely(ret < 0)) {
+			NILFS_ERR_DBG(ret);
 			WARN_ON(ret == -EEXIST);
 			goto failed;
 		}
@@ -538,7 +552,7 @@ static int nilfs_ioctl_delete_checkpoints(struct the_nilfs *nilfs,
 		ret = nilfs_cpfile_delete_checkpoints(
 			cpfile, periods[i].p_start, periods[i].p_end);
 		if (ret < 0)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 	}
 	return nmembs;
 }
@@ -553,6 +567,8 @@ static int nilfs_ioctl_free_vblocknrs(struct the_nilfs *nilfs,
 			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
 
 	ret = nilfs_dat_freev(nilfs->ns_dat, buf, nmembs);
+	if (ret < 0)
+		NILFS_ERR_DBG(ret);
 
 	return (ret < 0) ? ret : nmembs;
 }
@@ -576,7 +592,7 @@ static int nilfs_ioctl_mark_blocks_dirty(struct the_nilfs *nilfs,
 						 &bdescs[i].bd_blocknr);
 		if (ret < 0) {
 			if (ret != -ENOENT)
-				return ret;
+				return NILFS_ERR_DBG(ret);
 			bdescs[i].bd_blocknr = 0;
 		}
 		if (bdescs[i].bd_blocknr != bdescs[i].bd_oblocknr)
@@ -587,14 +603,14 @@ static int nilfs_ioctl_mark_blocks_dirty(struct the_nilfs *nilfs,
 							 bdescs[i].bd_offset);
 			if (ret < 0) {
 				WARN_ON(ret == -ENOENT);
-				return ret;
+				return NILFS_ERR_DBG(ret);
 			}
 		} else {
 			ret = nilfs_bmap_mark(bmap, bdescs[i].bd_offset,
 					      bdescs[i].bd_level);
 			if (ret < 0) {
 				WARN_ON(ret == -ENOENT);
-				return ret;
+				return NILFS_ERR_DBG(ret);
 			}
 		}
 	}
@@ -617,6 +633,7 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *nilfs,
 		 * independently.
 		 */
 		msg = "cannot delete checkpoints";
+		NILFS_ERR_DBG(ret);
 		goto failed;
 	}
 	ret = nilfs_ioctl_free_vblocknrs(nilfs, &argv[2], kbufs[2]);
@@ -626,6 +643,7 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *nilfs,
 		 * using a copy-on-write technique.
 		 */
 		msg = "cannot delete virtual blocks from DAT file";
+		NILFS_ERR_DBG(ret);
 		goto failed;
 	}
 	ret = nilfs_ioctl_mark_blocks_dirty(nilfs, &argv[3], kbufs[3]);
@@ -634,6 +652,7 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *nilfs,
 		 * can safely abort because the operation is nondestructive.
 		 */
 		msg = "cannot mark copying blocks dirty";
+		NILFS_ERR_DBG(ret);
 		goto failed;
 	}
 	return 0;
@@ -666,22 +685,28 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 			inode->i_ino, filp, cmd, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return NILFS_ERR_DBG(-EPERM);
 
 	ret = mnt_want_write_file(filp);
 	if (ret)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	ret = -EFAULT;
-	if (copy_from_user(argv, argp, sizeof(argv)))
+	if (copy_from_user(argv, argp, sizeof(argv))) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = -EINVAL;
 	nsegs = argv[4].v_nmembs;
-	if (argv[4].v_size != argsz[4])
+	if (argv[4].v_size != argsz[4]) {
+		NILFS_ERR_DBG(ret);
 		goto out;
-	if (nsegs > UINT_MAX / sizeof(__u64))
+	}
+	if (nsegs > UINT_MAX / sizeof(__u64)) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	/*
 	 * argv[4] points to segment numbers this ioctl cleans.  We
@@ -691,21 +716,27 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 	kbufs[4] = memdup_user((void __user *)(unsigned long)argv[4].v_base,
 			       nsegs * sizeof(__u64));
 	if (IS_ERR(kbufs[4])) {
-		ret = PTR_ERR(kbufs[4]);
+		ret = NILFS_ERR_DBG((int)PTR_ERR(kbufs[4]));
 		goto out;
 	}
 	nilfs = inode->i_sb->s_fs_info;
 
 	for (n = 0; n < 4; n++) {
 		ret = -EINVAL;
-		if (argv[n].v_size != argsz[n])
+		if (argv[n].v_size != argsz[n]) {
+			NILFS_ERR_DBG(ret);
 			goto out_free;
+		}
 
-		if (argv[n].v_nmembs > nsegs * nilfs->ns_blocks_per_segment)
+		if (argv[n].v_nmembs > nsegs * nilfs->ns_blocks_per_segment) {
+			NILFS_ERR_DBG(ret);
 			goto out_free;
+		}
 
-		if (argv[n].v_nmembs >= UINT_MAX / argv[n].v_size)
+		if (argv[n].v_nmembs >= UINT_MAX / argv[n].v_size) {
+			NILFS_ERR_DBG(ret);
 			goto out_free;
+		}
 
 		len = argv[n].v_size * argv[n].v_nmembs;
 		base = (void __user *)(unsigned long)argv[n].v_base;
@@ -716,11 +747,11 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 
 		kbufs[n] = vmalloc(len);
 		if (!kbufs[n]) {
-			ret = -ENOMEM;
+			ret = NILFS_ERR_DBG(-ENOMEM);
 			goto out_free;
 		}
 		if (copy_from_user(kbufs[n], base, len)) {
-			ret = -EFAULT;
+			ret = NILFS_ERR_DBG(-EFAULT);
 			vfree(kbufs[n]);
 			goto out_free;
 		}
@@ -733,18 +764,21 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 	 * nilfs_ioctl_move_blocks should be atomic operation.
 	 */
 	if (test_and_set_bit(THE_NILFS_GC_RUNNING, &nilfs->ns_flags)) {
-		ret = -EBUSY;
+		ret = NILFS_ERR_DBG(-EBUSY);
 		goto out_free;
 	}
 
 	ret = nilfs_ioctl_move_blocks(inode->i_sb, &argv[0], kbufs[0]);
-	if (ret < 0)
+	if (ret < 0) {
+		NILFS_ERR_DBG(ret);
 		printk(KERN_ERR "NILFS: GC failed during preparation: "
 			"cannot read source blocks: err=%d\n", ret);
-	else {
+	} else {
 		if (nilfs_sb_need_update(nilfs))
 			set_nilfs_discontinued(nilfs);
 		ret = nilfs_clean_segments(inode->i_sb, argv, kbufs);
+		if (ret < 0)
+			NILFS_ERR_DBG(ret);
 	}
 
 	nilfs_remove_all_gcinodes(nilfs);
@@ -772,13 +806,13 @@ static int nilfs_ioctl_sync(struct inode *inode, struct file *filp,
 
 	ret = nilfs_construct_segment(inode->i_sb);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	nilfs = inode->i_sb->s_fs_info;
 	if (nilfs_test_opt(nilfs, BARRIER)) {
 		ret = blkdev_issue_flush(inode->i_sb->s_bdev, GFP_KERNEL, NULL);
 		if (ret == -EIO)
-			return ret;
+			return NILFS_ERR_DBG(ret);
 	}
 
 	if (argp != NULL) {
@@ -786,7 +820,7 @@ static int nilfs_ioctl_sync(struct inode *inode, struct file *filp,
 		cno = nilfs->ns_cno - 1;
 		up_read(&nilfs->ns_segctor_sem);
 		if (copy_to_user(argp, &cno, sizeof(cno)))
-			return -EFAULT;
+			return NILFS_ERR_DBG(-EFAULT);
 	}
 	return 0;
 }
@@ -801,18 +835,26 @@ static int nilfs_ioctl_resize(struct inode *inode, struct file *filp,
 			"i_ino %lu, filp %p, argp %p\n",
 			inode->i_ino, filp, argp);
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN)) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = mnt_want_write_file(filp);
-	if (ret)
+	if (ret) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = -EFAULT;
-	if (copy_from_user(&newsize, argp, sizeof(newsize)))
+	if (copy_from_user(&newsize, argp, sizeof(newsize))) {
+		NILFS_ERR_DBG(ret);
 		goto out_drop_write;
+	}
 
 	ret = nilfs_resize_fs(inode->i_sb, newsize);
+	if (ret < 0)
+		NILFS_ERR_DBG(ret);
 
 out_drop_write:
 	mnt_drop_write_file(filp);
@@ -831,16 +873,22 @@ static int nilfs_ioctl_set_alloc_range(struct inode *inode, void __user *argp)
 	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, argp %p\n", inode->i_ino, argp);
 
-	if (!capable(CAP_SYS_ADMIN))
+	if (!capable(CAP_SYS_ADMIN)) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = -EFAULT;
-	if (copy_from_user(range, argp, sizeof(__u64[2])))
+	if (copy_from_user(range, argp, sizeof(__u64[2]))) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	ret = -ERANGE;
-	if (range[1] > i_size_read(inode->i_sb->s_bdev->bd_inode))
+	if (range[1] > i_size_read(inode->i_sb->s_bdev->bd_inode)) {
+		NILFS_ERR_DBG(ret);
 		goto out;
+	}
 
 	segbytes = nilfs->ns_blocks_per_segment * nilfs->ns_blocksize;
 
@@ -851,6 +899,8 @@ static int nilfs_ioctl_set_alloc_range(struct inode *inode, void __user *argp)
 	maxseg--;
 
 	ret = nilfs_sufile_set_alloc_range(nilfs->ns_sufile, minseg, maxseg);
+	if (unlikely(ret < 0))
+		NILFS_ERR_DBG(ret);
 out:
 	return ret;
 }
@@ -873,17 +923,17 @@ static int nilfs_ioctl_get_info(struct inode *inode, struct file *filp,
 			inode->i_ino, filp, cmd, argp, membsz, dofunc);
 
 	if (copy_from_user(&argv, argp, sizeof(argv)))
-		return -EFAULT;
+		return NILFS_ERR_DBG(-EFAULT);
 
 	if (argv.v_size < membsz)
-		return -EINVAL;
+		return NILFS_ERR_DBG(-EINVAL);
 
 	ret = nilfs_ioctl_wrap_copy(nilfs, &argv, _IOC_DIR(cmd), dofunc);
 	if (ret < 0)
-		return ret;
+		return NILFS_ERR_DBG(ret);
 
 	if (copy_to_user(argp, &argv, sizeof(argv)))
-		ret = -EFAULT;
+		ret = NILFS_ERR_DBG(-EFAULT);
 	return ret;
 }
 
