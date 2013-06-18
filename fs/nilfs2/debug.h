@@ -98,6 +98,17 @@
  */
 #define DBG_DUMP_STACK	0x20000000
 
+/*
+ * This flag enables output from frequently called functions or
+ * detailed debugging output from function's body. Please, be
+ * cautious with enabling the option. Because it can be resulted
+ * in huge amount of debugging messages in system log and
+ * performance decreasing. Please, remember that superfluos output
+ * option is depended implicitly from options that enable output of
+ * concrete modules of NILFS2 driver.
+ */
+#define DBG_SPAM	0x40000000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -129,6 +140,9 @@ static u32 DBG_MASK = (
 #ifdef CONFIG_NILFS2_DEBUG_DUMP_STACK
 	DBG_DUMP_STACK |
 #endif /* CONFIG_NILFS2_DEBUG_DUMP_STACK */
+#ifdef CONFIG_NILFS2_DEBUG_SHOW_SPAM
+	DBG_SPAM |
+#endif /* CONFIG_NILFS2_DEBUG_SHOW_SPAM */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
@@ -143,10 +157,16 @@ static u32 DBG_MASK = (
 
 #define nilfs2_debug(flg, f, a...) \
 	do { \
+		bool can_print_spam = DBG_MASK & DBG_SPAM; \
+		bool is_spam = flg & DBG_SPAM; \
 		bool can_dump_stack = DBG_MASK & DBG_DUMP_STACK; \
 		bool should_dump_stack = flg & DBG_DUMP_STACK; \
 		if ((flg & NILFS2_SUBSYS_MASK) & DBG_MASK) { \
-			nilfs2_printk(f, ## a); \
+			if (is_spam) { \
+				if (can_print_spam) \
+					nilfs2_printk(f, ## a); \
+			} else \
+				nilfs2_printk(f, ## a); \
 			if (can_dump_stack && should_dump_stack) \
 				dump_stack(); \
 		} \

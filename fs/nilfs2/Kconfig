@@ -107,6 +107,18 @@ config NILFS2_DEBUG_BUFFER_MANAGEMENT
 	help
 	  This option enables debugging output in page.c module.
 
+config NILFS2_DEBUG_SHOW_SPAM
+	bool "Enable superfluous debugging output"
+	default n
+	help
+	  This option enables output from frequently called functions or
+	  detailed debugging output from function's body. Please, be
+	  cautious with enabling the option. Because it can be resulted
+	  in huge amount of debugging messages in system log and
+	  performance decreasing. Please, remember that superfluos output
+	  option is depended implicitly from options that enable output of
+	  concrete modules of NILFS2 driver.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG
