@@ -76,6 +76,10 @@ int nilfs_gccache_submit_read_data(struct inode *inode, sector_t blkoff,
 	struct buffer_head *bh;
 	int err;
 
+	nilfs2_debug(DBG_GCINODE,
+		"i_ino %lu, blkoff %lu, pbn %lu, vbn %llu, out_bh %p\n",
+		inode->i_ino, blkoff, pbn, vbn, out_bh);
+
 	bh = nilfs_grab_buffer(inode, inode->i_mapping, blkoff, 0);
 	if (unlikely(!bh))
 		return -ENOMEM;
@@ -142,6 +146,10 @@ int nilfs_gccache_submit_read_node(struct inode *inode, sector_t pbn,
 {
 	int ret;
 
+	nilfs2_debug(DBG_GCINODE,
+		"i_ino %lu, pbn %lu, vbn %llu, out_bh %p\n",
+		inode->i_ino, pbn, vbn, out_bh);
+
 	ret = nilfs_btnode_submit_block(&NILFS_I(inode)->i_btnode_cache,
 					vbn ? : pbn, pbn, READ, out_bh, &pbn);
 	if (ret == -EEXIST) /* internal code (cache hit) */
@@ -169,6 +177,8 @@ int nilfs_init_gcinode(struct inode *inode)
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 
+	nilfs2_debug(DBG_GCINODE, "i_ino %lu\n", inode->i_ino);
+
 	inode->i_mode = S_IFREG;
 	mapping_set_gfp_mask(inode->i_mapping, GFP_NOFS);
 	inode->i_mapping->a_ops = &empty_aops;
@@ -190,6 +200,7 @@ void nilfs_remove_all_gcinodes(struct the_nilfs *nilfs)
 
 	while (!list_empty(head)) {
 		ii = list_first_entry(head, struct nilfs_inode_info, i_dirty);
+		nilfs2_debug(DBG_GCINODE, "i_ino %lu\n", ii->vfs_inode.i_ino);
 		list_del_init(&ii->i_dirty);
 		truncate_inode_pages(&ii->vfs_inode.i_data, 0);
 		nilfs_btnode_cache_clear(&ii->i_btnode_cache);
