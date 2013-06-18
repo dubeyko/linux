@@ -53,6 +53,13 @@ config NILFS2_DEBUG_BASE_OPERATIONS
 	  This option enables debugging output in super.c, the_nilfs.c,
 	  namei.c, ioctl.c, inode.c, file.c, dir.c modules.
 
+config NILFS2_DEBUG_MDT_FILES
+	bool "Enable metadata (MDT) files subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in mdt.c, cpfile.c, dat.c,
+	  ifile.c, sufile.c modules.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG

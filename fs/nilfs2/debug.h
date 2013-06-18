@@ -40,6 +40,17 @@
 #define DBG_FILE	0x00000040
 #define DBG_DIR		0x00000080
 
+/*
+ * These flags enable debugging output in modules that
+ * implement metadata (MDT) files functionality
+ * (mdt.c, cpfile.c, dat.c, ifile.c, sufile.c).
+ */
+#define DBG_MDT		0x00000100
+#define DBG_CPFILE	0x00000200
+#define DBG_DAT		0x00000400
+#define DBG_IFILE	0x00000800
+#define DBG_SUFILE	0x00001000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -48,7 +59,11 @@ static u32 DBG_MASK = (
 	DBG_SUPER | DBG_THE_NILFS | DBG_NAMEI |
 	DBG_IOCTL | DBG_INODE | DBG_FILE | DBG_DIR |
 #endif /* CONFIG_NILFS2_DEBUG_BASE_OPERATIONS */
-0);
+#ifdef CONFIG_NILFS2_DEBUG_MDT_FILES
+	DBG_MDT | DBG_CPFILE | DBG_DAT |
+	DBG_IFILE | DBG_SUFILE |
+#endif /* CONFIG_NILFS2_DEBUG_MDT_FILES */
+	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
 #define NILFS2_DBG_OUT_MASK	0xF0000000
