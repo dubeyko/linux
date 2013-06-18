@@ -47,6 +47,12 @@ __nilfs_get_page_block(struct page *page, unsigned long block, pgoff_t index,
 	unsigned long first_block;
 	struct buffer_head *bh;
 
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu, block %lu, index %lu, "
+			"blkbits %d, b_state %#lx\n",
+			page->mapping->host->i_ino,
+			block, index, blkbits, b_state);
+
 	if (!page_has_buffers(page))
 		create_empty_buffers(page, 1 << blkbits, b_state);
 
@@ -67,6 +73,10 @@ struct buffer_head *nilfs_grab_buffer(struct inode *inode,
 	pgoff_t index = blkoff >> (PAGE_CACHE_SHIFT - blkbits);
 	struct page *page;
 	struct buffer_head *bh;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu, blkoff %lu, b_state %#lx\n",
+			inode->i_ino, blkoff, b_state);
 
 	page = grab_cache_page(mapping, index);
 	if (unlikely(!page))
@@ -89,6 +99,10 @@ struct buffer_head *nilfs_grab_buffer(struct inode *inode,
 void nilfs_forget_buffer(struct buffer_head *bh)
 {
 	struct page *page = bh->b_page;
+
+	nilfs2_debug(DBG_PAGE,
+		"i_ino %lu, bh->b_blocknr %lu, bh->b_size %lu\n",
+		page->mapping->host->i_ino, bh->b_blocknr, bh->b_size);
 
 	lock_buffer(bh);
 	clear_buffer_nilfs_volatile(bh);
@@ -118,6 +132,10 @@ void nilfs_copy_buffer(struct buffer_head *dbh, struct buffer_head *sbh)
 	unsigned long bits;
 	struct page *spage = sbh->b_page, *dpage = dbh->b_page;
 	struct buffer_head *bh;
+
+	nilfs2_debug(DBG_PAGE,
+			"dbh->b_blocknr %lu, sbh->b_blocknr %lu\n",
+			dbh->b_blocknr, sbh->b_blocknr);
 
 	kaddr0 = kmap_atomic(spage);
 	kaddr1 = kmap_atomic(dpage);
@@ -156,6 +174,9 @@ void nilfs_copy_buffer(struct buffer_head *dbh, struct buffer_head *sbh)
 int nilfs_page_buffers_clean(struct page *page)
 {
 	struct buffer_head *bh, *head;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu\n", page->mapping->host->i_ino);
 
 	bh = head = page_buffers(page);
 	do {
@@ -214,6 +235,13 @@ static void nilfs_copy_page(struct page *dst, struct page *src, int copy_dirty)
 	struct buffer_head *dbh, *dbufs, *sbh, *sbufs;
 	unsigned long mask = NILFS_BUFFER_INHERENT_BITS;
 
+	nilfs2_debug(DBG_PAGE,
+			"ino %lu, dst offset %llu, "
+			"src offset  %llu, copy_dirty %d\n",
+			src->mapping->host->i_ino,
+			page_offset(dst), page_offset(src),
+			copy_dirty);
+
 	BUG_ON(PageWriteback(dst));
 
 	sbh = sbufs = page_buffers(src);
@@ -260,6 +288,9 @@ int nilfs_copy_dirty_pages(struct address_space *dmap,
 	unsigned int i;
 	pgoff_t index = 0;
 	int err = 0;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu\n", smap->host->i_ino);
 
 	pagevec_init(&pvec, 0);
 repeat:
@@ -315,6 +346,9 @@ void nilfs_copy_back_pages(struct address_space *dmap,
 	unsigned int i, n;
 	pgoff_t index = 0;
 	int err;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu\n", smap->host->i_ino);
 
 	pagevec_init(&pvec, 0);
 repeat:
@@ -380,6 +414,9 @@ void nilfs_clear_dirty_pages(struct address_space *mapping, bool silent)
 	struct pagevec pvec;
 	unsigned int i;
 	pgoff_t index = 0;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu\n", mapping->host->i_ino);
 
 	pagevec_init(&pvec, 0);
 
@@ -449,6 +486,10 @@ unsigned nilfs_page_count_clean_buffers(struct page *page,
 	struct buffer_head *bh, *head;
 	unsigned nc = 0;
 
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu, from %u, to %u\n",
+			page->mapping->host->i_ino, from, to);
+
 	for (bh = head = page_buffers(page), block_start = 0;
 	     bh != head || !block_start;
 	     block_start = block_end, bh = bh->b_this_page) {
@@ -462,6 +503,8 @@ unsigned nilfs_page_count_clean_buffers(struct page *page,
 void nilfs_mapping_init(struct address_space *mapping, struct inode *inode,
 			struct backing_dev_info *bdi)
 {
+	nilfs2_debug(DBG_PAGE, "i_ino %lu\n", inode->i_ino);
+
 	mapping->host = inode;
 	mapping->flags = 0;
 	mapping_set_gfp_mask(mapping, GFP_NOFS);
@@ -484,6 +527,9 @@ void nilfs_mapping_init(struct address_space *mapping, struct inode *inode,
 int __nilfs_clear_page_dirty(struct page *page)
 {
 	struct address_space *mapping = page->mapping;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu\n", page->mapping->host->i_ino);
 
 	if (mapping) {
 		spin_lock_irq(&mapping->tree_lock);
@@ -523,6 +569,10 @@ unsigned long nilfs_find_uncommitted_extent(struct inode *inode,
 	sector_t b;
 	struct pagevec pvec;
 	struct page *page;
+
+	nilfs2_debug(DBG_PAGE,
+			"i_ino %lu, start_blk %lu, blkoff %p\n",
+			inode->i_ino, start_blk, blkoff);
 
 	if (inode->i_mapping->nrpages == 0)
 		return 0;
