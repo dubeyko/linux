@@ -306,7 +306,7 @@ int nilfs_dat_mark_dirty(struct inode *dat, __u64 vblocknr)
  */
 int nilfs_dat_freev(struct inode *dat, __u64 *vblocknrs, size_t nitems)
 {
-	nilfs2_debug(DBG_DAT,
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK),
 			"i_ino %lu, vblocknrs %p, nitems %zu\n",
 			dat->i_ino, vblocknrs, nitems);
 
@@ -488,7 +488,7 @@ int nilfs_dat_read(struct super_block *sb, size_t entry_size,
 	struct nilfs_dat_info *di;
 	int err;
 
-	nilfs2_debug(DBG_DAT,
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK),
 			"sb %p, entry_size %zu, raw_inode %p, inodep %p\n",
 			sb, entry_size, raw_inode, inodep);
 

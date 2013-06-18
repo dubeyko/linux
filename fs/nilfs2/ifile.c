@@ -68,7 +68,7 @@ int nilfs_ifile_create_inode(struct inode *ifile, ino_t *out_ino,
 	struct nilfs_palloc_req req;
 	int ret;
 
-	nilfs2_debug(DBG_IFILE,
+	nilfs2_debug((DBG_IFILE | DBG_DUMP_STACK),
 		"i_ino %lu, out_ino ptr %p, out_bh %p\n",
 		ifile->i_ino, out_ino, out_bh);
 
@@ -119,7 +119,7 @@ int nilfs_ifile_delete_inode(struct inode *ifile, ino_t ino)
 	void *kaddr;
 	int ret;
 
-	nilfs2_debug(DBG_IFILE,
+	nilfs2_debug((DBG_IFILE | DBG_DUMP_STACK),
 			"ifile ino %lu, deleted ino %lu\n",
 			ifile->i_ino, ino);
 
@@ -155,7 +155,7 @@ int nilfs_ifile_get_inode_block(struct inode *ifile, ino_t ino,
 	struct super_block *sb = ifile->i_sb;
 	int err;
 
-	nilfs2_debug(DBG_IFILE,
+	nilfs2_debug((DBG_IFILE | DBG_DUMP_STACK),
 			"ifile ino %lu, get ino %lu, out_bh %p\n",
 			ifile->i_ino, ino, out_bh);
 
@@ -187,7 +187,7 @@ int nilfs_ifile_read(struct super_block *sb, struct nilfs_root *root,
 	struct inode *ifile;
 	int err;
 
-	nilfs2_debug(DBG_IFILE,
+	nilfs2_debug((DBG_IFILE | DBG_DUMP_STACK),
 		"sb %p, root %p, inode_size %zu, raw_inode %p, inodep %p\n",
 		sb, root, inode_size, raw_inode, inodep);
 

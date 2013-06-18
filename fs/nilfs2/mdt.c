@@ -47,7 +47,7 @@ nilfs_mdt_insert_new_block(struct inode *inode, unsigned long block,
 	void *kaddr;
 	int ret;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, block %lu, bh %p, init_block %p\n",
 			inode->i_ino, block, bh, init_block);
 
@@ -86,7 +86,7 @@ static int nilfs_mdt_create_block(struct inode *inode, unsigned long block,
 	struct buffer_head *bh;
 	int err;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, block %lu, out_bh %p, init_block %p\n",
 			inode->i_ino, block, out_bh, init_block);
 
@@ -134,7 +134,7 @@ nilfs_mdt_submit_block(struct inode *inode, unsigned long blkoff,
 	__u64 blknum = 0;
 	int ret = -ENOMEM;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, blkoff %lu, mode %#x, out_bh %p\n",
 			inode->i_ino, blkoff, mode, out_bh);
 
@@ -190,7 +190,7 @@ static int nilfs_mdt_read_block(struct inode *inode, unsigned long block,
 	int i, nr_ra_blocks = NILFS_MDT_MAX_RA_BLOCKS;
 	int err;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, block %lu, readahead %d, out_bh %p\n",
 			inode->i_ino, block, readahead, out_bh);
 
@@ -262,7 +262,7 @@ int nilfs_mdt_get_block(struct inode *inode, unsigned long blkoff, int create,
 {
 	int ret;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, blkoff %lu, create %d, "
 			"init_block %p, out_bh %p\n",
 			inode->i_ino, blkoff, create, init_block, out_bh);
@@ -298,7 +298,7 @@ int nilfs_mdt_delete_block(struct inode *inode, unsigned long block)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int err;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, block %lu\n", inode->i_ino, block);
 
 	err = nilfs_bmap_delete(ii->i_bmap, block);
@@ -333,7 +333,7 @@ int nilfs_mdt_forget_block(struct inode *inode, unsigned long block)
 	int ret = 0;
 	int still_dirty;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, block %lu\n", inode->i_ino, block);
 
 	page = find_lock_page(inode->i_mapping, index);
@@ -379,7 +379,7 @@ int nilfs_mdt_mark_block_dirty(struct inode *inode, unsigned long block)
 	struct buffer_head *bh;
 	int err;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, block %lu\n", inode->i_ino, block);
 
 	err = nilfs_mdt_read_block(inode, block, 0, &bh);
@@ -450,7 +450,7 @@ int nilfs_mdt_init(struct inode *inode, gfp_t gfp_mask, size_t objsz)
 {
 	struct nilfs_mdt_info *mi;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, gfp_mask %#x, objsz %zu\n",
 			inode->i_ino, gfp_mask, objsz);
 
@@ -493,7 +493,7 @@ int nilfs_mdt_setup_shadow_map(struct inode *inode,
 	struct nilfs_mdt_info *mi = NILFS_MDT(inode);
 	struct backing_dev_info *bdi = inode->i_sb->s_bdi;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, shadow %p\n", inode->i_ino, shadow);
 
 	INIT_LIST_HEAD(&shadow->frozen_buffers);
@@ -516,7 +516,7 @@ int nilfs_mdt_save_to_shadow_map(struct inode *inode)
 	struct nilfs_shadow_map *shadow = mi->mi_shadow;
 	int ret;
 
-	nilfs2_debug(DBG_MDT, "i_ino %lu\n", inode->i_ino);
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK), "i_ino %lu\n", inode->i_ino);
 
 	ret = nilfs_copy_dirty_pages(&shadow->frozen_data, inode->i_mapping);
 	if (ret)
@@ -539,7 +539,7 @@ int nilfs_mdt_freeze_buffer(struct inode *inode, struct buffer_head *bh)
 	struct page *page;
 	int blkbits = inode->i_blkbits;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, bh %p\n", inode->i_ino, bh);
 
 	page = grab_cache_page(&shadow->frozen_data, bh->b_page->index);
@@ -574,7 +574,7 @@ nilfs_mdt_get_frozen_buffer(struct inode *inode, struct buffer_head *bh)
 	struct page *page;
 	int n;
 
-	nilfs2_debug(DBG_MDT,
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK),
 			"i_ino %lu, bh %p\n", inode->i_ino, bh);
 
 	page = find_lock_page(&shadow->frozen_data, bh->b_page->index);
@@ -594,7 +594,7 @@ static void nilfs_release_frozen_buffers(struct nilfs_shadow_map *shadow)
 	struct list_head *head = &shadow->frozen_buffers;
 	struct buffer_head *bh;
 
-	nilfs2_debug(DBG_MDT, "shadow %p\n", shadow);
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK), "shadow %p\n", shadow);
 
 	while (!list_empty(head)) {
 		bh = list_first_entry(head, struct buffer_head,
@@ -614,7 +614,7 @@ void nilfs_mdt_restore_from_shadow_map(struct inode *inode)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	struct nilfs_shadow_map *shadow = mi->mi_shadow;
 
-	nilfs2_debug(DBG_MDT, "i_ino %lu\n", inode->i_ino);
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK), "i_ino %lu\n", inode->i_ino);
 
 	down_write(&mi->mi_sem);
 
@@ -641,7 +641,7 @@ void nilfs_mdt_clear_shadow_map(struct inode *inode)
 	struct nilfs_mdt_info *mi = NILFS_MDT(inode);
 	struct nilfs_shadow_map *shadow = mi->mi_shadow;
 
-	nilfs2_debug(DBG_MDT, "i_ino %lu\n", inode->i_ino);
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK), "i_ino %lu\n", inode->i_ino);
 
 	down_write(&mi->mi_sem);
 	nilfs_release_frozen_buffers(shadow);

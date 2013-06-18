@@ -78,7 +78,7 @@ int nilfs_bmap_lookup_at_level(struct nilfs_bmap *bmap, __u64 key, int level,
 	sector_t blocknr;
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, level %d\n",
 			bmap->b_inode->i_ino,
 			key, level);
@@ -108,7 +108,7 @@ int nilfs_bmap_lookup_contig(struct nilfs_bmap *bmap, __u64 key, __u64 *ptrp,
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, maxblocks %u\n",
 			bmap->b_inode->i_ino, key, maxblocks);
 
@@ -127,7 +127,7 @@ static int nilfs_bmap_do_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 	__u64 ptrs[NILFS_BMAP_SMALL_HIGH + 1];
 	int ret, n;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptr %llu\n",
 			bmap->b_inode->i_ino, key, ptr);
 
@@ -175,7 +175,7 @@ int nilfs_bmap_insert(struct nilfs_bmap *bmap,
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %lu, rec %lu\n",
 			bmap->b_inode->i_ino, key, rec);
 
@@ -192,7 +192,7 @@ static int nilfs_bmap_do_delete(struct nilfs_bmap *bmap, __u64 key)
 	__u64 ptrs[NILFS_BMAP_LARGE_LOW + 1];
 	int ret, n;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu\n",
 			bmap->b_inode->i_ino, key);
 
@@ -221,7 +221,7 @@ int nilfs_bmap_last_key(struct nilfs_bmap *bmap, unsigned long *key)
 	__u64 lastkey;
 	int ret;
 
-	nilfs2_debug(DBG_BMAP, "i_ino %lu\n",
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK), "i_ino %lu\n",
 			bmap->b_inode->i_ino);
 
 	down_read(&bmap->b_sem);
@@ -258,7 +258,7 @@ int nilfs_bmap_delete(struct nilfs_bmap *bmap, unsigned long key)
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %lu\n",
 			bmap->b_inode->i_ino, key);
 
@@ -274,7 +274,7 @@ static int nilfs_bmap_do_truncate(struct nilfs_bmap *bmap, unsigned long key)
 	__u64 lastkey;
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %lu\n",
 			bmap->b_inode->i_ino, key);
 
@@ -318,7 +318,7 @@ int nilfs_bmap_truncate(struct nilfs_bmap *bmap, unsigned long key)
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %lu\n",
 			bmap->b_inode->i_ino, key);
 
@@ -339,7 +339,7 @@ void nilfs_bmap_clear(struct nilfs_bmap *bmap)
 {
 	down_write(&bmap->b_sem);
 	if (bmap->b_ops->bop_clear != NULL) {
-		nilfs2_debug(DBG_BMAP,
+		nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu\n", bmap->b_inode->i_ino);
 		bmap->b_ops->bop_clear(bmap);
 	}
@@ -365,7 +365,7 @@ int nilfs_bmap_propagate(struct nilfs_bmap *bmap, struct buffer_head *bh)
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, bh->b_blocknr %lu\n",
 			bmap->b_inode->i_ino, bh->b_blocknr);
 
@@ -414,7 +414,7 @@ int nilfs_bmap_assign(struct nilfs_bmap *bmap,
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, blocknr %lu\n",
 			bmap->b_inode->i_ino, blocknr);
 
@@ -448,7 +448,7 @@ int nilfs_bmap_mark(struct nilfs_bmap *bmap, __u64 key, int level)
 	if (bmap->b_ops->bop_mark == NULL)
 		return 0;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, level %d\n",
 			bmap->b_inode->i_ino, key, level);
 
@@ -472,7 +472,7 @@ int nilfs_bmap_test_and_clear_dirty(struct nilfs_bmap *bmap)
 {
 	int ret;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu\n", bmap->b_inode->i_ino);
 
 	down_write(&bmap->b_sem);
@@ -551,7 +551,7 @@ int nilfs_bmap_read(struct nilfs_bmap *bmap, struct nilfs_inode *raw_inode)
 	bmap->b_state = 0;
 	bmap->b_inode = &NILFS_BMAP_I(bmap)->vfs_inode;
 
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, raw_inode %p\n",
 			bmap->b_inode->i_ino, raw_inode);
 
@@ -592,7 +592,7 @@ int nilfs_bmap_read(struct nilfs_bmap *bmap, struct nilfs_inode *raw_inode)
  */
 void nilfs_bmap_write(struct nilfs_bmap *bmap, struct nilfs_inode *raw_inode)
 {
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, raw_inode %p\n",
 			bmap->b_inode->i_ino, raw_inode);
 
@@ -620,7 +620,7 @@ void nilfs_bmap_init_gc(struct nilfs_bmap *bmap)
 void nilfs_bmap_save(const struct nilfs_bmap *bmap,
 		     struct nilfs_bmap_store *store)
 {
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, store %p\n",
 			bmap->b_inode->i_ino, store);
 
@@ -633,7 +633,7 @@ void nilfs_bmap_save(const struct nilfs_bmap *bmap,
 void nilfs_bmap_restore(struct nilfs_bmap *bmap,
 			const struct nilfs_bmap_store *store)
 {
-	nilfs2_debug(DBG_BMAP,
+	nilfs2_debug((DBG_BMAP | DBG_DUMP_STACK),
 			"i_ino %lu, store %p\n",
 			bmap->b_inode->i_ino, store);
 

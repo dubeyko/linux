@@ -110,7 +110,7 @@ static int nilfs_compute_checksum(struct the_nilfs *nilfs,
 	unsigned long size;
 	u32 crc;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, bhs %p, sum %p, offset %lu"
 			"check_bytes %llu, start %lu, nblock %lu\n",
 			nilfs, bhs, sum, offset, check_bytes, start, nblock);
@@ -152,7 +152,7 @@ int nilfs_read_super_root_block(struct the_nilfs *nilfs, sector_t sr_block,
 	u32 crc;
 	int ret;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sr_block %lu, pbh %p, check %d\n",
 			nilfs, sr_block, pbh, check);
 
@@ -204,7 +204,7 @@ nilfs_read_log_header(struct the_nilfs *nilfs, sector_t start_blocknr,
 {
 	struct buffer_head *bh_sum;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, start_blocknr %lu, sum %p\n",
 			nilfs, start_blocknr, sum);
 
@@ -229,7 +229,7 @@ static int nilfs_validate_log(struct the_nilfs *nilfs, u64 seg_seq,
 	u32 crc;
 	int ret;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, seg_seq %llu, bh_sum %p, sum %p\n",
 			nilfs, seg_seq, bh_sum, sum);
 
@@ -275,7 +275,7 @@ static void *nilfs_read_summary_info(struct the_nilfs *nilfs,
 	void *ptr;
 	sector_t blocknr;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, pbh %p, offset %u, bytes %u\n",
 			nilfs, pbh, *offset, bytes);
 
@@ -313,7 +313,7 @@ static void nilfs_skip_summary_info(struct the_nilfs *nilfs,
 	unsigned int rest_item_in_current_block
 		= ((*pbh)->b_size - *offset) / bytes;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, pbh %p, offset %u, bytes %u, count %lu\n",
 			nilfs, pbh, *offset, bytes, count);
 
@@ -354,7 +354,7 @@ static int nilfs_scan_dsync_log(struct the_nilfs *nilfs, sector_t start_blocknr,
 	ino_t ino;
 	int err = -EIO;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, start_blocknr %lu, sum %p, head %p\n",
 			nilfs, start_blocknr, sum, head);
 
@@ -438,7 +438,7 @@ static int nilfs_segment_list_add(struct list_head *head, __u64 segnum)
 {
 	struct nilfs_segment_entry *ent = kmalloc(sizeof(*ent), GFP_NOFS);
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"head %p, segnum %llu\n", head, segnum);
 
 	if (unlikely(!ent))
@@ -472,7 +472,7 @@ static int nilfs_prepare_segment_for_recovery(struct the_nilfs *nilfs,
 	int err;
 	int i;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, ri %p\n", nilfs, sb, ri);
 
 	segnum[0] = nilfs->ns_segnum;
@@ -529,7 +529,7 @@ static int nilfs_recovery_copy_block(struct the_nilfs *nilfs,
 	struct buffer_head *bh_org;
 	void *kaddr;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, rb %p, i_ino %lu\n",
 			nilfs, rb, page->mapping->host->i_ino);
 
@@ -557,7 +557,7 @@ static int nilfs_recover_dsync_blocks(struct the_nilfs *nilfs,
 	loff_t pos;
 	int err = 0, err2 = 0;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, root %p, "
 			"head %p, nr_salvaged_blocks %p\n",
 			nilfs, sb, root, head, nr_salvaged_blocks);
@@ -647,7 +647,7 @@ static int nilfs_do_roll_forward(struct the_nilfs *nilfs,
 	};
 	int state = RF_INIT_ST;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, root %p, ri %p\n",
 			nilfs, sb, root, ri);
 
@@ -759,7 +759,7 @@ static void nilfs_finish_roll_forward(struct the_nilfs *nilfs,
 	struct buffer_head *bh;
 	int err;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, ri %p\n", nilfs, ri);
 
 	if (nilfs_get_segnum_of_block(nilfs, ri->ri_lsegs_start) !=
@@ -804,7 +804,7 @@ int nilfs_salvage_orphan_logs(struct the_nilfs *nilfs,
 	struct nilfs_root *root;
 	int err;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, ri %p\n",
 			nilfs, sb, ri);
 
@@ -887,7 +887,7 @@ int nilfs_search_super_root(struct the_nilfs *nilfs,
 	int empty_seg = 0, scan_newer = 0;
 	int ret;
 
-	nilfs2_debug(DBG_RECOVERY,
+	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, ri %p\n", nilfs, ri);
 
 	pseg_start = nilfs->ns_last_pseg;

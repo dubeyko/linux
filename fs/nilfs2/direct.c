@@ -50,7 +50,7 @@ static int nilfs_direct_lookup(const struct nilfs_bmap *direct,
 {
 	__u64 ptr;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, level %d, ptrp %p\n",
 			direct->b_inode->i_ino, key, level, ptrp);
 
@@ -60,7 +60,7 @@ static int nilfs_direct_lookup(const struct nilfs_bmap *direct,
 	if (ptr == NILFS_BMAP_INVALID_PTR)
 		return -ENOENT;
 
-	nilfs2_debug(DBG_DIRECT, "ptr %llu\n", ptr);
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK), "ptr %llu\n", ptr);
 
 	*ptrp = ptr;
 	return 0;
@@ -75,7 +75,7 @@ static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 	sector_t blocknr;
 	int ret, cnt;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptrp %p, maxblocks %u\n",
 			direct->b_inode->i_ino, key, ptrp, maxblocks);
 
@@ -119,7 +119,7 @@ nilfs_direct_find_target_v(const struct nilfs_bmap *direct, __u64 key)
 {
 	__u64 ptr;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu\n",
 			direct->b_inode->i_ino, key);
 
@@ -139,7 +139,7 @@ static int nilfs_direct_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 	struct buffer_head *bh;
 	int ret;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptr %llu\n",
 			bmap->b_inode->i_ino, key, ptr);
 
@@ -178,7 +178,7 @@ static int nilfs_direct_delete(struct nilfs_bmap *bmap, __u64 key)
 	struct inode *dat;
 	int ret;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu\n",
 			bmap->b_inode->i_ino, key);
 
@@ -228,7 +228,7 @@ static int nilfs_direct_gather_data(struct nilfs_bmap *direct,
 	__u64 ptr;
 	int n;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, keys %p, ptrs %p, nitems %d\n",
 			direct->b_inode->i_ino, keys, ptrs, nitems);
 
@@ -252,7 +252,7 @@ int nilfs_direct_delete_and_convert(struct nilfs_bmap *bmap,
 	__le64 *dptrs;
 	int ret, i, j;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, keys %p, ptrs %p, n %d\n",
 			bmap->b_inode->i_ino, keys, ptrs, n);
 
@@ -292,7 +292,7 @@ static int nilfs_direct_propagate(struct nilfs_bmap *bmap,
 	__u64 ptr;
 	int ret;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, bh %p\n",
 			bmap->b_inode->i_ino, bh);
 
@@ -328,7 +328,7 @@ static int nilfs_direct_assign_v(struct nilfs_bmap *direct,
 	union nilfs_bmap_ptr_req req;
 	int ret;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptr %llu, "
 			"bh %p, blocknr %lu, binfo %p\n",
 			direct->b_inode->i_ino, key, ptr, bh, blocknr, binfo);
@@ -349,7 +349,7 @@ static int nilfs_direct_assign_p(struct nilfs_bmap *direct,
 				 sector_t blocknr,
 				 union nilfs_binfo *binfo)
 {
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptr %llu, "
 			"bh %p, blocknr %lu, binfo %p\n",
 			direct->b_inode->i_ino, key, ptr, bh, blocknr, binfo);
@@ -370,7 +370,7 @@ static int nilfs_direct_assign(struct nilfs_bmap *bmap,
 	__u64 key;
 	__u64 ptr;
 
-	nilfs2_debug(DBG_DIRECT,
+	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, bh %p, blocknr %lu, binfo %p\n",
 			bmap->b_inode->i_ino, bh, blocknr, binfo);
 

@@ -41,7 +41,7 @@ static int nilfs_valid_sb(struct nilfs_super_block *sbp);
 void nilfs_set_last_segment(struct the_nilfs *nilfs,
 			    sector_t start_blocknr, u64 seq, __u64 cno)
 {
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, start_blocknr %lu, seq %llu, cno %llu\n",
 			nilfs, start_blocknr, seq, cno);
 
@@ -73,7 +73,7 @@ struct the_nilfs *alloc_nilfs(struct block_device *bdev)
 {
 	struct the_nilfs *nilfs;
 
-	nilfs2_debug(DBG_THE_NILFS, "bdev %p\n", bdev);
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK), "bdev %p\n", bdev);
 
 	nilfs = kzalloc(sizeof(*nilfs), GFP_KERNEL);
 	if (!nilfs)
@@ -101,7 +101,7 @@ struct the_nilfs *alloc_nilfs(struct block_device *bdev)
  */
 void destroy_nilfs(struct the_nilfs *nilfs)
 {
-	nilfs2_debug(DBG_THE_NILFS, "nilfs %p\n", nilfs);
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK), "nilfs %p\n", nilfs);
 
 	might_sleep();
 	if (nilfs_init(nilfs)) {
@@ -122,7 +122,7 @@ static int nilfs_load_super_root(struct the_nilfs *nilfs,
 	unsigned inode_size;
 	int err;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, sr_block %lu\n",
 			nilfs, sb, sr_block);
 
@@ -199,7 +199,7 @@ static int nilfs_store_log_cursor(struct the_nilfs *nilfs,
 	nilfs->ns_last_cno = le64_to_cpu(sbp->s_last_cno);
 	nilfs->ns_last_seq = le64_to_cpu(sbp->s_last_seq);
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"last_pseg %lu, last_cno %llu, last_seq %llu\n",
 			nilfs->ns_last_pseg,
 			nilfs->ns_last_cno,
@@ -234,7 +234,7 @@ int load_nilfs(struct the_nilfs *nilfs, struct super_block *sb)
 	int valid_fs = nilfs_valid_fs(nilfs);
 	int err;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, s_flags %#x, RO %d, valid_fs %d\n",
 			nilfs, sb, s_flags, really_read_only, valid_fs);
 
@@ -512,7 +512,7 @@ static int nilfs_load_super_block(struct the_nilfs *nilfs,
 	u64 sb2off = NILFS_SB2_OFFSET_BYTES(nilfs->ns_bdev->bd_inode->i_size);
 	int valid[2], swp = 0;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, blocksize %d, sbpp %p\n",
 			nilfs, sb, blocksize, sbpp);
 
@@ -590,7 +590,7 @@ int init_nilfs(struct the_nilfs *nilfs, struct super_block *sb, char *data)
 	int blocksize;
 	int err;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, data %p\n", nilfs, sb, data);
 
 	down_write(&nilfs->ns_sem);
@@ -679,7 +679,7 @@ int nilfs_discard_segments(struct the_nilfs *nilfs, __u64 *segnump,
 	__u64 *sn;
 	int ret = 0;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, segnump %p, nsegs %zu\n",
 			nilfs, segnump, nsegs);
 
@@ -738,7 +738,7 @@ struct nilfs_root *nilfs_lookup_root(struct the_nilfs *nilfs, __u64 cno)
 	struct rb_node *n;
 	struct nilfs_root *root;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, cno %llu\n", nilfs, cno);
 
 	spin_lock(&nilfs->ns_cptree_lock);
@@ -767,7 +767,7 @@ nilfs_find_or_create_root(struct the_nilfs *nilfs, __u64 cno)
 	struct rb_node **p, *parent;
 	struct nilfs_root *root, *new;
 
-	nilfs2_debug(DBG_THE_NILFS,
+	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, cno %llu\n", nilfs, cno);
 
 	root = nilfs_lookup_root(nilfs, cno);
@@ -819,7 +819,7 @@ void nilfs_put_root(struct nilfs_root *root)
 	if (atomic_dec_and_test(&root->count)) {
 		struct the_nilfs *nilfs = root->nilfs;
 
-		nilfs2_debug(DBG_THE_NILFS,
+		nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 				"cno %llu\n", root->cno);
 
 		spin_lock(&nilfs->ns_cptree_lock);

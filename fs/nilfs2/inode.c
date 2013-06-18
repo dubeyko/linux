@@ -90,7 +90,7 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
 	int err = 0, ret;
 	unsigned maxblocks = bh_result->b_size >> inode->i_blkbits;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, blkoff %lu, bh_result %p, create %d\n",
 			inode->i_ino, blkoff, bh_result, create);
 
@@ -229,7 +229,7 @@ static int nilfs_set_page_dirty(struct page *page)
 {
 	int ret;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu. offset %llu\n",
 			page->mapping->host->i_ino,
 			i_size_read(page->mapping->host),
@@ -269,7 +269,7 @@ void nilfs_write_failed(struct address_space *mapping, loff_t to)
 {
 	struct inode *inode = mapping->host;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, to %llu\n",
 			inode->i_ino, i_size_read(inode), to);
 
@@ -287,7 +287,7 @@ static int nilfs_write_begin(struct file *file, struct address_space *mapping,
 	struct inode *inode = mapping->host;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, pos %llu, len %u, flags %#x\n",
 			inode->i_ino, i_size_read(inode), pos, len, flags);
 
@@ -313,7 +313,7 @@ static int nilfs_write_end(struct file *file, struct address_space *mapping,
 	unsigned nr_dirty;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, pos %llu, len %u copied %u\n",
 			inode->i_ino, i_size_read(inode), pos, len, copied);
 
@@ -335,7 +335,7 @@ nilfs_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 	struct inode *inode = file->f_mapping->host;
 	ssize_t size;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 		"i_ino %lu, i_size %llu, rw %d, offset %llu, nr_segs %lu\n",
 		inode->i_ino, i_size_read(inode), rw, offset, nr_segs);
 
@@ -385,7 +385,7 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 	int err = -ENOMEM;
 	ino_t ino;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"dir->i_ino %lu, mode %#x\n", dir->i_ino, mode);
 
 	inode = new_inode(sb);
@@ -460,7 +460,7 @@ void nilfs_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = NILFS_I(inode)->i_flags;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu\n", inode->i_ino);
 
 	inode->i_flags &= ~(S_SYNC | S_APPEND | S_IMMUTABLE | S_NOATIME |
@@ -485,7 +485,7 @@ int nilfs_read_inode_common(struct inode *inode,
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu\n", inode->i_ino);
 
 	inode->i_mode = le16_to_cpu(raw_inode->i_mode);
@@ -532,7 +532,7 @@ static int __nilfs_read_inode(struct super_block *sb,
 	struct nilfs_inode *raw_inode;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"sb %p, root %p, ino %lu, inode %p\n",
 			sb, root, ino, inode);
 
@@ -622,7 +622,7 @@ struct inode *nilfs_ilookup(struct super_block *sb, struct nilfs_root *root,
 		.ino = ino, .root = root, .cno = 0, .for_gc = 0
 	};
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"sb %p, root %p, ino %lu\n",
 			sb, root, ino);
 
@@ -636,7 +636,7 @@ struct inode *nilfs_iget_locked(struct super_block *sb, struct nilfs_root *root,
 		.ino = ino, .root = root, .cno = 0, .for_gc = 0
 	};
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"sb %p, root %p, ino %lu\n",
 			sb, root, ino);
 
@@ -649,7 +649,7 @@ struct inode *nilfs_iget(struct super_block *sb, struct nilfs_root *root,
 	struct inode *inode;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"sb %p, root %p, ino %lu\n",
 			sb, root, ino);
 
@@ -677,7 +677,7 @@ struct inode *nilfs_iget_for_gc(struct super_block *sb, unsigned long ino,
 	struct inode *inode;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"sb %p, ino %lu, cno %llu\n",
 			sb, ino, cno);
 
@@ -701,7 +701,7 @@ void nilfs_write_inode_common(struct inode *inode,
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, raw_inode %p, has_bmap %d\n",
 			inode->i_ino, i_size_read(inode), raw_inode, has_bmap);
 
@@ -745,7 +745,7 @@ void nilfs_update_inode(struct inode *inode, struct buffer_head *ibh)
 	struct inode *ifile = ii->i_root->ifile;
 	struct nilfs_inode *raw_inode;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, ibh %p\n",
 			inode->i_ino, i_size_read(inode), ibh);
 
@@ -770,7 +770,7 @@ static void nilfs_truncate_bmap(struct nilfs_inode_info *ii,
 	unsigned long b;
 	int ret;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, from %lu\n",
 			ii->vfs_inode.i_ino,
 			i_size_read(&ii->vfs_inode),
@@ -809,7 +809,7 @@ void nilfs_truncate(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu\n",
 			inode->i_ino, i_size_read(inode));
 
@@ -842,7 +842,7 @@ static void nilfs_clear_inode(struct inode *inode)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	struct nilfs_mdt_info *mdi = NILFS_MDT(inode);
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu\n",
 			inode->i_ino, i_size_read(inode));
 
@@ -872,7 +872,7 @@ void nilfs_evict_inode(struct inode *inode)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int ret;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu\n",
 			inode->i_ino, i_size_read(inode));
 
@@ -913,7 +913,7 @@ int nilfs_setattr(struct dentry *dentry, struct iattr *iattr)
 	struct super_block *sb = inode->i_sb;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 		"i_ino %lu, inode->i_size %llu, iattr->ia_size %llu\n",
 		inode->i_ino, i_size_read(inode), iattr->ia_size);
 
@@ -952,7 +952,7 @@ int nilfs_permission(struct inode *inode, int mask)
 {
 	struct nilfs_root *root = NILFS_I(inode)->i_root;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, mask %#x\n",
 			inode->i_ino, i_size_read(inode), mask);
 
@@ -969,7 +969,7 @@ int nilfs_load_inode_block(struct inode *inode, struct buffer_head **pbh)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, pbh %p\n", inode->i_ino, pbh);
 
 	spin_lock(&nilfs->ns_inode_lock);
@@ -1000,7 +1000,7 @@ int nilfs_inode_dirty(struct inode *inode)
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	int ret = 0;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu\n",
 			inode->i_ino, i_size_read(inode));
 
@@ -1018,7 +1018,7 @@ int nilfs_set_file_dirty(struct inode *inode, unsigned nr_dirty)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, nr_dirty %u\n",
 			inode->i_ino, i_size_read(inode), nr_dirty);
 
@@ -1054,7 +1054,7 @@ int nilfs_mark_inode_dirty(struct inode *inode)
 	struct buffer_head *ibh;
 	int err;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu\n",
 			inode->i_ino, i_size_read(inode));
 
@@ -1086,7 +1086,7 @@ void nilfs_dirty_inode(struct inode *inode, int flags)
 	struct nilfs_transaction_info ti;
 	struct nilfs_mdt_info *mdi = NILFS_MDT(inode);
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, flags %#x\n",
 			inode->i_ino, i_size_read(inode), flags);
 
@@ -1118,7 +1118,7 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	unsigned int blkbits = inode->i_blkbits;
 	int ret, n;
 
-	nilfs2_debug(DBG_INODE,
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu, i_size %llu, start %llu, len %llu\n",
 			inode->i_ino, i_size_read(inode), start, len);
 

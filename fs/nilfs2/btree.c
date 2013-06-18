@@ -177,7 +177,7 @@ static void nilfs_btree_node_init(struct nilfs_btree_node *node, int flags,
 	__le64 *dptrs;
 	int i;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"node %p, flags %d, level %d, nchildren %d, ncmax %d\n",
 		node, flags, level, nchildren, ncmax);
 
@@ -202,7 +202,7 @@ static void nilfs_btree_node_move_left(struct nilfs_btree_node *left,
 	__le64 *ldptrs, *rdptrs;
 	int lnchildren, rnchildren;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"left %p, right %p, n %d, lncmax %d, rncmax %d\n",
 		left, right, n, lncmax, rncmax);
 
@@ -234,7 +234,7 @@ static void nilfs_btree_node_move_right(struct nilfs_btree_node *left,
 	__le64 *ldptrs, *rdptrs;
 	int lnchildren, rnchildren;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"left %p, right %p, n %d, lncmax %d, rncmax %d\n",
 		left, right, n, lncmax, rncmax);
 
@@ -265,7 +265,7 @@ static void nilfs_btree_node_insert(struct nilfs_btree_node *node, int index,
 	__le64 *dptrs;
 	int nchildren;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"node %p, index %d, key %llu, ptr %llu, ncmax %d\n",
 		node, index, key, ptr, ncmax);
 
@@ -294,7 +294,7 @@ static void nilfs_btree_node_delete(struct nilfs_btree_node *node, int index,
 	__le64 *dptrs;
 	int nchildren;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"node %p, index %d, keyp %p, ptrp %p, ncmax %d\n",
 		node, index, keyp, ptrp, ncmax);
 
@@ -326,7 +326,7 @@ static int nilfs_btree_node_lookup(const struct nilfs_btree_node *node,
 	__u64 nkey;
 	int index, low, high, s;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"node %p, key %llu, indexp %p\n",
 		node, key, indexp);
 
@@ -539,7 +539,7 @@ static int nilfs_btree_do_lookup(const struct nilfs_bmap *btree,
 	__u64 ptr;
 	int level, index, found, ncmax, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, path %p, key %llu, ptrp %p, minlevel %d, ra %d\n",
 		btree->b_inode->i_ino, path, key, ptrp, minlevel, readahead);
 
@@ -605,7 +605,7 @@ static int nilfs_btree_do_lookup_last(const struct nilfs_bmap *btree,
 	__u64 ptr;
 	int index, level, ncmax, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, path %p, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, path, keyp, ptrp);
 
@@ -650,7 +650,7 @@ static int nilfs_btree_lookup(const struct nilfs_bmap *btree,
 	struct nilfs_btree_path *path;
 	int ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, level %d, ptrp %p\n",
 		btree->b_inode->i_ino, key, level, ptrp);
 
@@ -677,7 +677,7 @@ static int nilfs_btree_lookup_contig(const struct nilfs_bmap *btree,
 	int ret, cnt, index, maxlevel, ncmax;
 	struct nilfs_btree_readahead_info p;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptrp %p, maxblocks %u\n",
 		btree->b_inode->i_ino, key, ptrp, maxblocks);
 
@@ -783,7 +783,7 @@ static void nilfs_btree_do_insert(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node;
 	int ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -814,7 +814,7 @@ static void nilfs_btree_carry_left(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node, *left;
 	int nchildren, lnchildren, n, move, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -864,7 +864,7 @@ static void nilfs_btree_carry_right(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node, *right;
 	int nchildren, rnchildren, n, move, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -917,7 +917,7 @@ static void nilfs_btree_split(struct nilfs_bmap *btree,
 	__u64 newptr;
 	int nchildren, n, move, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -974,7 +974,7 @@ static void nilfs_btree_grow(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *root, *child;
 	int n, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1060,7 +1060,7 @@ static int nilfs_btree_prepare_insert(struct nilfs_bmap *btree,
 	int pindex, level, ncmax, ncblk, ret;
 	struct inode *dat = NULL;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, levelp %p, key %llu, ptr %llu, stats %p\n",
 		btree->b_inode->i_ino, levelp, key, ptr, stats);
 
@@ -1209,7 +1209,7 @@ static void nilfs_btree_commit_insert(struct nilfs_bmap *btree,
 	struct inode *dat = NULL;
 	int level;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, maxlevel %d, key %llu, ptr %llu\n",
 		btree->b_inode->i_ino, maxlevel, key, ptr);
 
@@ -1236,7 +1236,7 @@ static int nilfs_btree_insert(struct nilfs_bmap *btree, __u64 key, __u64 ptr)
 	struct nilfs_bmap_stats stats;
 	int level, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptr %llu\n",
 		btree->b_inode->i_ino, key, ptr);
 
@@ -1270,7 +1270,7 @@ static void nilfs_btree_do_delete(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node;
 	int ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1299,7 +1299,7 @@ static void nilfs_btree_borrow_left(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node, *left;
 	int nchildren, lnchildren, n, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1335,7 +1335,7 @@ static void nilfs_btree_borrow_right(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node, *right;
 	int nchildren, rnchildren, n, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1372,7 +1372,7 @@ static void nilfs_btree_concat_left(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node, *left;
 	int n, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1402,7 +1402,7 @@ static void nilfs_btree_concat_right(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node, *right;
 	int n, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1431,7 +1431,7 @@ static void nilfs_btree_shrink(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *root, *child;
 	int n, ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
 
@@ -1469,7 +1469,7 @@ static int nilfs_btree_prepare_delete(struct nilfs_bmap *btree,
 	__u64 sibptr;
 	int pindex, dindex, level, ncmin, ncmax, ncblk, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, levelp %p, stats %p, dat %p\n",
 		btree->b_inode->i_ino, levelp, stats, dat);
 
@@ -1603,7 +1603,7 @@ static void nilfs_btree_commit_delete(struct nilfs_bmap *btree,
 {
 	int level;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, maxlevel %d, dat %p\n",
 		btree->b_inode->i_ino, maxlevel, dat);
 
@@ -1624,7 +1624,7 @@ static int nilfs_btree_delete(struct nilfs_bmap *btree, __u64 key)
 	struct inode *dat;
 	int level, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu\n",
 		btree->b_inode->i_ino, key);
 
@@ -1656,7 +1656,7 @@ static int nilfs_btree_last_key(const struct nilfs_bmap *btree, __u64 *keyp)
 	struct nilfs_btree_path *path;
 	int ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, keyp %p\n",
 		btree->b_inode->i_ino, keyp);
 
@@ -1679,7 +1679,7 @@ static int nilfs_btree_check_delete(struct nilfs_bmap *btree, __u64 key)
 	__u64 ptr;
 	int nchildren, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu\n",
 		btree->b_inode->i_ino, key);
 
@@ -1724,7 +1724,7 @@ static int nilfs_btree_gather_data(struct nilfs_bmap *btree,
 	__u64 ptr;
 	int nchildren, ncmax, i, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, keys %p, ptrs %p, nitems %d\n",
 		btree->b_inode->i_ino, keys, ptrs, nitems);
 
@@ -1778,7 +1778,7 @@ nilfs_btree_prepare_convert_and_insert(struct nilfs_bmap *btree, __u64 key,
 	struct inode *dat = NULL;
 	int ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, dreq %p, nreq %p, bhp %p, stats %p\n",
 		btree->b_inode->i_ino, key, dreq, nreq, bhp, stats);
 
@@ -1838,7 +1838,7 @@ nilfs_btree_commit_convert_and_insert(struct nilfs_bmap *btree,
 	__u64 tmpptr;
 	int ncblk;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptr %llu, keys %p,"
 		" ptrs %p, n %d, dreq %p, nreq %p, bh %p\n",
 		btree->b_inode->i_ino, key, ptr, keys, ptrs, n, dreq, nreq, bh);
@@ -1911,7 +1911,7 @@ int nilfs_btree_convert_and_insert(struct nilfs_bmap *btree,
 	struct nilfs_bmap_stats stats;
 	int ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptr %llu, keys %p, ptrs %p, n %d\n",
 		btree->b_inode->i_ino, key, ptr, keys, ptrs, n);
 
@@ -1957,7 +1957,7 @@ static int nilfs_btree_prepare_update_v(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *parent;
 	int ncmax, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, dat %p\n",
 		btree->b_inode->i_ino, level, dat);
 
@@ -1996,7 +1996,7 @@ static void nilfs_btree_commit_update_v(struct nilfs_bmap *btree,
 	struct nilfs_btree_node *parent;
 	int ncmax;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, dat %p\n",
 		btree->b_inode->i_ino, level, dat);
 
@@ -2021,7 +2021,7 @@ static void nilfs_btree_abort_update_v(struct nilfs_bmap *btree,
 				       struct nilfs_btree_path *path,
 				       int level, struct inode *dat)
 {
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, dat %p\n",
 		btree->b_inode->i_ino, level, dat);
 
@@ -2040,7 +2040,7 @@ static int nilfs_btree_prepare_propagate_v(struct nilfs_bmap *btree,
 {
 	int level, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, minlevel %d, maxlevelp %p, dat %p\n",
 		btree->b_inode->i_ino, minlevel, maxlevelp, dat);
 
@@ -2080,7 +2080,7 @@ static void nilfs_btree_commit_propagate_v(struct nilfs_bmap *btree,
 {
 	int level;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, minlevel %d, maxlevel %d, bh %p, dat %p\n",
 		btree->b_inode->i_ino, minlevel, maxlevel, bh, dat);
 
@@ -2101,7 +2101,7 @@ static int nilfs_btree_propagate_v(struct nilfs_bmap *btree,
 	__u64 ptr;
 	int ncmax;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, bh %p\n",
 		btree->b_inode->i_ino, level, bh);
 
@@ -2138,7 +2138,7 @@ static int nilfs_btree_propagate(struct nilfs_bmap *btree,
 	__u64 key;
 	int level, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, bh %p\n",
 		btree->b_inode->i_ino, bh);
 
@@ -2191,7 +2191,7 @@ static void nilfs_btree_add_dirty_buffer(struct nilfs_bmap *btree,
 	__u64 key, ckey;
 	int level;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, lists %p, bh %p\n",
 		btree->b_inode->i_ino, lists, bh);
 
@@ -2231,7 +2231,7 @@ static void nilfs_btree_lookup_dirty_buffers(struct nilfs_bmap *btree,
 	pgoff_t index = 0;
 	int level, i;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, listp %p\n",
 		btree->b_inode->i_ino, listp);
 
@@ -2274,7 +2274,7 @@ static int nilfs_btree_assign_p(struct nilfs_bmap *btree,
 	__u64 ptr;
 	int ncmax, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, level, bh, blocknr, binfo);
 
@@ -2321,7 +2321,7 @@ static int nilfs_btree_assign_v(struct nilfs_bmap *btree,
 	union nilfs_bmap_ptr_req req;
 	int ncmax, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, level, bh, blocknr, binfo);
 
@@ -2352,7 +2352,7 @@ static int nilfs_btree_assign(struct nilfs_bmap *btree,
 	__u64 key;
 	int level, ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, bh, blocknr, binfo);
 
@@ -2394,7 +2394,7 @@ static int nilfs_btree_assign_gc(struct nilfs_bmap *btree,
 	__u64 key;
 	int ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, bh, blocknr, binfo);
 
@@ -2423,7 +2423,7 @@ static int nilfs_btree_mark(struct nilfs_bmap *btree, __u64 key, int level)
 	__u64 ptr;
 	int ret;
 
-	nilfs2_debug(DBG_BTREE,
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, level %d\n",
 		btree->b_inode->i_ino, key, level);
 

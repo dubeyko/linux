@@ -50,7 +50,7 @@ static inline int nilfs_add_nondir(struct dentry *dentry, struct inode *inode)
 {
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"i_ino %lu\n", inode->i_ino);
 
 	err = nilfs_add_link(dentry, inode);
@@ -73,7 +73,7 @@ nilfs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 	struct inode *inode;
 	ino_t ino;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu, flags %#x\n", dir->i_ino, flags);
 
 	if (dentry->d_name.len > NILFS_NAME_LEN)
@@ -100,7 +100,7 @@ static int nilfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu, mode %#x, excl %d\n",
 			dir->i_ino, mode, excl);
 
@@ -131,7 +131,7 @@ nilfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu, mode %#x, rdev %#x\n",
 			dir->i_ino, mode, rdev);
 
@@ -165,7 +165,7 @@ static int nilfs_symlink(struct inode *dir, struct dentry *dentry,
 	struct inode *inode;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu\n", dir->i_ino);
 
 	if (l > sb->s_blocksize)
@@ -213,7 +213,7 @@ static int nilfs_link(struct dentry *old_dentry, struct inode *dir,
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu, inode->i_ino %lu\n",
 			dir->i_ino, inode->i_ino);
 
@@ -240,7 +240,7 @@ static int nilfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu, mode %#x\n",
 			dir->i_ino, mode);
 
@@ -297,7 +297,7 @@ static int nilfs_do_unlink(struct inode *dir, struct dentry *dentry)
 	struct page *page;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu\n", dir->i_ino);
 
 	err = -ENOENT;
@@ -332,7 +332,7 @@ static int nilfs_unlink(struct inode *dir, struct dentry *dentry)
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu\n", dir->i_ino);
 
 	err = nilfs_transaction_begin(dir->i_sb, &ti, 0);
@@ -357,7 +357,7 @@ static int nilfs_rmdir(struct inode *dir, struct dentry *dentry)
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"dir->i_ino %lu\n",
 			dir->i_ino);
 
@@ -396,7 +396,7 @@ static int nilfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct nilfs_transaction_info ti;
 	int err;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"old_dir->i_ino %lu, new_dir->i_ino %lu\n",
 			old_dir->i_ino, new_dir->i_ino);
 
@@ -486,7 +486,7 @@ static struct dentry *nilfs_get_parent(struct dentry *child)
 	struct qstr dotdot = QSTR_INIT("..", 2);
 	struct nilfs_root *root;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"child inode ino %lu\n", child->d_inode->i_ino);
 
 	ino = nilfs_inode_by_name(child->d_inode, &dotdot);
@@ -508,7 +508,7 @@ static struct dentry *nilfs_get_dentry(struct super_block *sb, u64 cno,
 	struct nilfs_root *root;
 	struct inode *inode;
 
-	nilfs2_debug(DBG_NAMEI,
+	nilfs2_debug((DBG_NAMEI | DBG_DUMP_STACK),
 			"cno %llu, ino %llu, gen %u\n",
 			cno, ino, gen);
 

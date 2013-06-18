@@ -76,7 +76,7 @@ int nilfs_gccache_submit_read_data(struct inode *inode, sector_t blkoff,
 	struct buffer_head *bh;
 	int err;
 
-	nilfs2_debug(DBG_GCINODE,
+	nilfs2_debug((DBG_GCINODE | DBG_DUMP_STACK),
 		"i_ino %lu, blkoff %lu, pbn %lu, vbn %llu, out_bh %p\n",
 		inode->i_ino, blkoff, pbn, vbn, out_bh);
 
@@ -146,7 +146,7 @@ int nilfs_gccache_submit_read_node(struct inode *inode, sector_t pbn,
 {
 	int ret;
 
-	nilfs2_debug(DBG_GCINODE,
+	nilfs2_debug((DBG_GCINODE | DBG_DUMP_STACK),
 		"i_ino %lu, pbn %lu, vbn %llu, out_bh %p\n",
 		inode->i_ino, pbn, vbn, out_bh);
 
@@ -177,7 +177,8 @@ int nilfs_init_gcinode(struct inode *inode)
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 
-	nilfs2_debug(DBG_GCINODE, "i_ino %lu\n", inode->i_ino);
+	nilfs2_debug((DBG_GCINODE | DBG_DUMP_STACK),
+			"i_ino %lu\n", inode->i_ino);
 
 	inode->i_mode = S_IFREG;
 	mapping_set_gfp_mask(inode->i_mapping, GFP_NOFS);

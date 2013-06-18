@@ -51,7 +51,7 @@ static int nilfs_ioctl_wrap_copy(struct the_nilfs *nilfs,
 	int ret, i;
 	__u64 pos, ppos;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, argv %p, dir %d, dofunc %p\n",
 			nilfs, argv, dir, dofunc);
 
@@ -107,7 +107,7 @@ static int nilfs_ioctl_getflags(struct inode *inode, void __user *argp)
 {
 	unsigned int flags = NILFS_I(inode)->i_flags & FS_FL_USER_VISIBLE;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, argp %p\n", inode->i_ino, argp);
 
 	return put_user(flags, (int __user *)argp);
@@ -120,7 +120,7 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 	unsigned int flags, oldflags;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, argp %p\n",
 			inode->i_ino, filp, argp);
 
@@ -171,7 +171,7 @@ out:
 
 static int nilfs_ioctl_getversion(struct inode *inode, void __user *argp)
 {
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, argp %p\n", inode->i_ino, argp);
 
 	return put_user(inode->i_generation, (int __user *)argp);
@@ -185,7 +185,7 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 	struct nilfs_cpmode cpmode;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -225,7 +225,7 @@ nilfs_ioctl_delete_checkpoint(struct inode *inode, struct file *filp,
 	__u64 cno;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -257,7 +257,7 @@ nilfs_ioctl_do_get_cpinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 {
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, posp %p, flags %#x, "
 			"buf %p, size %zu, nmembs %zu\n",
 			nilfs, posp, flags, buf, size, nmembs);
@@ -276,7 +276,7 @@ static int nilfs_ioctl_get_cpstat(struct inode *inode, struct file *filp,
 	struct nilfs_cpstat cpstat;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -297,7 +297,7 @@ nilfs_ioctl_do_get_suinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 {
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, posp %p, flags %#x, "
 			"buf %p, size %zu, nmembs %zu\n",
 			nilfs, posp, flags, buf, size, nmembs);
@@ -316,7 +316,7 @@ static int nilfs_ioctl_get_sustat(struct inode *inode, struct file *filp,
 	struct nilfs_sustat sustat;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -337,7 +337,7 @@ nilfs_ioctl_do_get_vinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 {
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, posp %p, flags %#x, "
 			"buf %p, size %zu, nmembs %zu\n",
 			nilfs, posp, flags, buf, size, nmembs);
@@ -356,7 +356,7 @@ nilfs_ioctl_do_get_bdescs(struct the_nilfs *nilfs, __u64 *posp, int flags,
 	struct nilfs_bdesc *bdescs = buf;
 	int ret, i;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, posp %p, flags %#x, "
 			"buf %p, size %zu, nmembs %zu\n",
 			nilfs, posp, flags, buf, size, nmembs);
@@ -386,7 +386,7 @@ static int nilfs_ioctl_get_bdescs(struct inode *inode, struct file *filp,
 	struct nilfs_argv argv;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -413,7 +413,7 @@ static int nilfs_ioctl_move_inode_block(struct inode *inode,
 	struct buffer_head *bh;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, vdesc %p, buffers %p\n",
 			inode->i_ino, vdesc, buffers);
 
@@ -468,7 +468,7 @@ static int nilfs_ioctl_move_blocks(struct super_block *sb,
 	__u64 cno;
 	int i, ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"sb %p, argv %p, buf %p\n", sb, argv, buf);
 
 	for (i = 0, vdesc = buf; i < nmembs; ) {
@@ -531,7 +531,7 @@ static int nilfs_ioctl_delete_checkpoints(struct the_nilfs *nilfs,
 	struct nilfs_period *periods = buf;
 	int ret, i;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
 
 	for (i = 0; i < nmembs; i++) {
@@ -549,7 +549,7 @@ static int nilfs_ioctl_free_vblocknrs(struct the_nilfs *nilfs,
 	size_t nmembs = argv->v_nmembs;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
 
 	ret = nilfs_dat_freev(nilfs->ns_dat, buf, nmembs);
@@ -565,7 +565,7 @@ static int nilfs_ioctl_mark_blocks_dirty(struct the_nilfs *nilfs,
 	struct nilfs_bdesc *bdescs = buf;
 	int ret, i;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
 
 	for (i = 0; i < nmembs; i++) {
@@ -607,7 +607,7 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *nilfs,
 	const char *msg;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"nilfs %p, argv %p, kbufs %p\n", nilfs, argv, kbufs);
 
 	ret = nilfs_ioctl_delete_checkpoints(nilfs, &argv[1], kbufs[1]);
@@ -661,7 +661,7 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 	size_t len, nsegs;
 	int n, ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -766,7 +766,7 @@ static int nilfs_ioctl_sync(struct inode *inode, struct file *filp,
 	int ret;
 	struct the_nilfs *nilfs;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
 			inode->i_ino, filp, cmd, argp);
 
@@ -797,7 +797,7 @@ static int nilfs_ioctl_resize(struct inode *inode, struct file *filp,
 	__u64 newsize;
 	int ret = -EPERM;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, argp %p\n",
 			inode->i_ino, filp, argp);
 
@@ -828,7 +828,7 @@ static int nilfs_ioctl_set_alloc_range(struct inode *inode, void __user *argp)
 	unsigned long segbytes;
 	int ret = -EPERM;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, argp %p\n", inode->i_ino, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
@@ -867,7 +867,7 @@ static int nilfs_ioctl_get_info(struct inode *inode, struct file *filp,
 	struct nilfs_argv argv;
 	int ret;
 
-	nilfs2_debug(DBG_IOCTL,
+	nilfs2_debug((DBG_IOCTL | DBG_DUMP_STACK),
 			"i_ino %lu, filp %p, cmd %#x, argp %p, "
 			"membsz %zu, dofunc %p\n",
 			inode->i_ino, filp, cmd, argp, membsz, dofunc);
