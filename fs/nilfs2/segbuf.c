@@ -73,6 +73,10 @@ void nilfs_segbuf_free(struct nilfs_segment_buffer *segbuf)
 void nilfs_segbuf_map(struct nilfs_segment_buffer *segbuf, __u64 segnum,
 		     unsigned long offset, struct the_nilfs *nilfs)
 {
+	nilfs2_debug(DBG_SEGBUF,
+			"segbuf %p, segnum %llu, offset %lu, nilfs %p\n",
+			segbuf, segnum, offset, nilfs);
+
 	segbuf->sb_segnum = segnum;
 	nilfs_get_segment_range(nilfs, segnum, &segbuf->sb_fseg_start,
 				&segbuf->sb_fseg_end);
@@ -90,6 +94,10 @@ void nilfs_segbuf_map(struct nilfs_segment_buffer *segbuf, __u64 segnum,
 void nilfs_segbuf_map_cont(struct nilfs_segment_buffer *segbuf,
 			   struct nilfs_segment_buffer *prev)
 {
+	nilfs2_debug(DBG_SEGBUF,
+			"prev->sb_segnum %llu, prev->sb_pseg_start %lu\n",
+			prev->sb_segnum, prev->sb_pseg_start);
+
 	segbuf->sb_segnum = prev->sb_segnum;
 	segbuf->sb_fseg_start = prev->sb_fseg_start;
 	segbuf->sb_fseg_end = prev->sb_fseg_end;
@@ -109,6 +117,10 @@ int nilfs_segbuf_extend_segsum(struct nilfs_segment_buffer *segbuf)
 {
 	struct buffer_head *bh;
 
+	nilfs2_debug(DBG_SEGBUF,
+			"sb_segnum %llu, sb_pseg_start %lu\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start);
+
 	bh = sb_getblk(segbuf->sb_super,
 		       segbuf->sb_pseg_start + segbuf->sb_sum.nsumblk);
 	if (unlikely(!bh))
@@ -122,6 +134,10 @@ int nilfs_segbuf_extend_payload(struct nilfs_segment_buffer *segbuf,
 				struct buffer_head **bhp)
 {
 	struct buffer_head *bh;
+
+	nilfs2_debug(DBG_SEGBUF,
+			"sb_segnum %llu, sb_pseg_start %lu, bhp %p\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start, bhp);
 
 	bh = sb_getblk(segbuf->sb_super,
 		       segbuf->sb_pseg_start + segbuf->sb_sum.nblocks);
@@ -137,6 +153,12 @@ int nilfs_segbuf_reset(struct nilfs_segment_buffer *segbuf, unsigned flags,
 		       time_t ctime, __u64 cno)
 {
 	int err;
+
+	nilfs2_debug(DBG_SEGBUF,
+			"sb_segnum %llu, sb_pseg_start %lu, "
+			"flags %#x, ctime %lu, cno %llu\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start,
+			flags, ctime, cno);
 
 	segbuf->sb_sum.nblocks = segbuf->sb_sum.nsumblk = 0;
 	err = nilfs_segbuf_extend_segsum(segbuf);
@@ -158,6 +180,10 @@ void nilfs_segbuf_fill_in_segsum(struct nilfs_segment_buffer *segbuf)
 {
 	struct nilfs_segment_summary *raw_sum;
 	struct buffer_head *bh_sum;
+
+	nilfs2_debug(DBG_SEGBUF,
+			"sb_segnum %llu, sb_pseg_start %lu\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start);
 
 	bh_sum = list_entry(segbuf->sb_segsum_buffers.next,
 			    struct buffer_head, b_assoc_buffers);
@@ -263,6 +289,10 @@ static void nilfs_release_buffers(struct list_head *list)
 
 static void nilfs_segbuf_clear(struct nilfs_segment_buffer *segbuf)
 {
+	nilfs2_debug(DBG_SEGBUF,
+			"sb_segnum %llu, sb_pseg_start %lu\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start);
+
 	nilfs_release_buffers(&segbuf->sb_segsum_buffers);
 	nilfs_release_buffers(&segbuf->sb_payload_buffers);
 	segbuf->sb_super_root = NULL;
