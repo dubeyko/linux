@@ -79,6 +79,13 @@ config NILFS2_DEBUG_RECOVERY_SUBSYSTEM
 	help
 	  This option enables debugging output in recovery.c module.
 
+config NILFS2_DEBUG_BLOCK_MAPPING
+	bool "Enable block mapping subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in alloc.c, bmap.c, btnode.c,
+	  btree.c, direct.c modules.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG

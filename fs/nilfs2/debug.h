@@ -71,6 +71,17 @@
  */
 #define DBG_RECOVERY	0x00010000
 
+/*
+ * These flags enable debugging output in modules that
+ * implement block mapping subsystem functionality
+ * (alloc.c, bmap.c, btnode.c, btree.c, direct.c).
+ */
+#define DBG_ALLOC	0x00020000
+#define DBG_BMAP	0x00040000
+#define DBG_BTNODE	0x00080000
+#define DBG_BTREE	0x00100000
+#define DBG_DIRECT	0x00200000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -92,6 +103,10 @@ static u32 DBG_MASK = (
 #ifdef CONFIG_NILFS2_DEBUG_RECOVERY_SUBSYSTEM
 	DBG_RECOVERY |
 #endif /* CONFIG_NILFS2_DEBUG_RECOVERY_SUBSYSTEM */
+#ifdef CONFIG_NILFS2_DEBUG_BLOCK_MAPPING
+	DBG_ALLOC | DBG_BMAP | DBG_BTNODE |
+	DBG_BTREE | DBG_DIRECT |
+#endif /* CONFIG_NILFS2_DEBUG_BLOCK_MAPPING */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
