@@ -36,6 +36,9 @@
 
 void nilfs_btnode_cache_clear(struct address_space *btnc)
 {
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu\n", btnc->host->i_ino);
+
 	invalidate_mapping_pages(btnc, 0, -1);
 	truncate_inode_pages(btnc, 0);
 }
@@ -45,6 +48,10 @@ nilfs_btnode_create_block(struct address_space *btnc, __u64 blocknr)
 {
 	struct inode *inode = NILFS_BTNC_I(btnc);
 	struct buffer_head *bh;
+
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu, blocknr %llu\n",
+			btnc->host->i_ino, blocknr);
 
 	bh = nilfs_grab_buffer(inode, btnc, blocknr, 1 << BH_NILFS_Node);
 	if (unlikely(!bh))
@@ -74,6 +81,10 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 	struct inode *inode = NILFS_BTNC_I(btnc);
 	struct page *page;
 	int err;
+
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu, blocknr %llu, pblocknr %lu, mode %d\n",
+			btnc->host->i_ino, blocknr, pblocknr, mode);
 
 	bh = nilfs_grab_buffer(inode, btnc, blocknr, 1 << BH_NILFS_Node);
 	if (unlikely(!bh))
@@ -123,6 +134,7 @@ int nilfs_btnode_submit_block(struct address_space *btnc, __u64 blocknr,
 	bh->b_blocknr = blocknr; /* set back to the given block address */
 	*submit_ptr = pblocknr;
 	err = 0;
+	nilfs2_debug(DBG_BTNODE, "submit_ptr %lu\n", *submit_ptr);
 found:
 	*pbh = bh;
 
@@ -145,6 +157,10 @@ void nilfs_btnode_delete(struct buffer_head *bh)
 	struct page *page = bh->b_page;
 	pgoff_t index = page_index(page);
 	int still_dirty;
+
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu, bh->blocknr %lu\n",
+			page->mapping->host->i_ino, bh->b_blocknr);
 
 	page_cache_get(page);
 	lock_page(page);
@@ -177,6 +193,10 @@ int nilfs_btnode_prepare_change_key(struct address_space *btnc,
 
 	if (oldkey == newkey)
 		return 0;
+
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu, oldkey %llu, newkey %llu\n",
+			btnc->host->i_ino, ctxt->oldkey, ctxt->newkey);
 
 	obh = ctxt->bh;
 	ctxt->newbh = NULL;
@@ -247,6 +267,10 @@ void nilfs_btnode_commit_change_key(struct address_space *btnc,
 	if (oldkey == newkey)
 		return;
 
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu, oldkey %llu, newkey %llu\n",
+			btnc->host->i_ino, ctxt->oldkey, ctxt->newkey);
+
 	if (nbh == NULL) {	/* blocksize == pagesize */
 		opage = obh->b_page;
 		if (unlikely(oldkey != opage->index))
@@ -286,6 +310,10 @@ void nilfs_btnode_abort_change_key(struct address_space *btnc,
 
 	if (oldkey == newkey)
 		return;
+
+	nilfs2_debug(DBG_BTNODE,
+			"i_ino %lu, oldkey %llu, newkey %llu\n",
+			btnc->host->i_ino, ctxt->oldkey, ctxt->newkey);
 
 	if (nbh == NULL) {	/* blocksize == pagesize */
 		spin_lock_irq(&btnc->tree_lock);

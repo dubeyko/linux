@@ -62,6 +62,10 @@ int nilfs_palloc_init_blockgroup(struct inode *inode, unsigned entry_size)
 {
 	struct nilfs_mdt_info *mi = NILFS_MDT(inode);
 
+	nilfs2_debug(DBG_ALLOC,
+			"i_ino %lu, entry_size %u\n",
+			inode->i_ino, entry_size);
+
 	mi->mi_bgl = kmalloc(sizeof(*mi->mi_bgl), GFP_NOFS);
 	if (!mi->mi_bgl)
 		return -ENOMEM;
@@ -646,6 +650,10 @@ int nilfs_palloc_freev(struct inode *inode, __u64 *entry_nrs, size_t nitems)
 	unsigned long group, group_offset;
 	int i, j, n, ret;
 
+	nilfs2_debug(DBG_ALLOC,
+			"i_ino %lu, entry_nrs %p, nitems %zu\n",
+			inode->i_ino, entry_nrs, nitems);
+
 	for (i = 0; i < nitems; i = j) {
 		group = nilfs_palloc_group(inode, entry_nrs[i], &group_offset);
 		ret = nilfs_palloc_get_desc_block(inode, group, 0, &desc_bh);
@@ -696,6 +704,9 @@ int nilfs_palloc_freev(struct inode *inode, __u64 *entry_nrs, size_t nitems)
 void nilfs_palloc_setup_cache(struct inode *inode,
 			      struct nilfs_palloc_cache *cache)
 {
+	nilfs2_debug(DBG_ALLOC,
+			"i_ino %lu, cache %p\n", inode->i_ino, cache);
+
 	NILFS_MDT(inode)->mi_palloc_cache = cache;
 	spin_lock_init(&cache->lock);
 }
@@ -703,6 +714,8 @@ void nilfs_palloc_setup_cache(struct inode *inode,
 void nilfs_palloc_clear_cache(struct inode *inode)
 {
 	struct nilfs_palloc_cache *cache = NILFS_MDT(inode)->mi_palloc_cache;
+
+	nilfs2_debug(DBG_ALLOC, "i_ino %lu\n", inode->i_ino);
 
 	spin_lock(&cache->lock);
 	brelse(cache->prev_desc.bh);
@@ -716,6 +729,8 @@ void nilfs_palloc_clear_cache(struct inode *inode)
 
 void nilfs_palloc_destroy_cache(struct inode *inode)
 {
+	nilfs2_debug(DBG_ALLOC, "i_ino %lu\n", inode->i_ino);
+
 	nilfs_palloc_clear_cache(inode);
 	NILFS_MDT(inode)->mi_palloc_cache = NULL;
 }

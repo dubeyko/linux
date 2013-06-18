@@ -50,11 +50,17 @@ static int nilfs_direct_lookup(const struct nilfs_bmap *direct,
 {
 	__u64 ptr;
 
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu, level %d, ptrp %p\n",
+			direct->b_inode->i_ino, key, level, ptrp);
+
 	if (key > NILFS_DIRECT_KEY_MAX || level != 1)
 		return -ENOENT;
 	ptr = nilfs_direct_get_ptr(direct, key);
 	if (ptr == NILFS_BMAP_INVALID_PTR)
 		return -ENOENT;
+
+	nilfs2_debug(DBG_DIRECT, "ptr %llu\n", ptr);
 
 	*ptrp = ptr;
 	return 0;
@@ -68,6 +74,10 @@ static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 	__u64 ptr, ptr2;
 	sector_t blocknr;
 	int ret, cnt;
+
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu, ptrp %p, maxblocks %u\n",
+			direct->b_inode->i_ino, key, ptrp, maxblocks);
 
 	if (key > NILFS_DIRECT_KEY_MAX)
 		return -ENOENT;
@@ -97,6 +107,9 @@ static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 		if (ptr2 != ptr + cnt)
 			break;
 	}
+
+	nilfs2_debug(DBG_DIRECT, "ptr %llu\n", ptr);
+
 	*ptrp = ptr;
 	return cnt;
 }
@@ -105,6 +118,10 @@ static __u64
 nilfs_direct_find_target_v(const struct nilfs_bmap *direct, __u64 key)
 {
 	__u64 ptr;
+
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu\n",
+			direct->b_inode->i_ino, key);
 
 	ptr = nilfs_bmap_find_target_seq(direct, key);
 	if (ptr != NILFS_BMAP_INVALID_PTR)
@@ -121,6 +138,10 @@ static int nilfs_direct_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 	struct inode *dat = NULL;
 	struct buffer_head *bh;
 	int ret;
+
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu, ptr %llu\n",
+			bmap->b_inode->i_ino, key, ptr);
 
 	if (key > NILFS_DIRECT_KEY_MAX)
 		return -ENOENT;
@@ -156,6 +177,10 @@ static int nilfs_direct_delete(struct nilfs_bmap *bmap, __u64 key)
 	union nilfs_bmap_ptr_req req;
 	struct inode *dat;
 	int ret;
+
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu\n",
+			bmap->b_inode->i_ino, key);
 
 	if (key > NILFS_DIRECT_KEY_MAX ||
 	    nilfs_direct_get_ptr(bmap, key) == NILFS_BMAP_INVALID_PTR)
@@ -203,6 +228,10 @@ static int nilfs_direct_gather_data(struct nilfs_bmap *direct,
 	__u64 ptr;
 	int n;
 
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, keys %p, ptrs %p, nitems %d\n",
+			direct->b_inode->i_ino, keys, ptrs, nitems);
+
 	if (nitems > NILFS_DIRECT_NBLOCKS)
 		nitems = NILFS_DIRECT_NBLOCKS;
 	n = 0;
@@ -222,6 +251,10 @@ int nilfs_direct_delete_and_convert(struct nilfs_bmap *bmap,
 {
 	__le64 *dptrs;
 	int ret, i, j;
+
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, keys %p, ptrs %p, n %d\n",
+			bmap->b_inode->i_ino, keys, ptrs, n);
 
 	/* no need to allocate any resource for conversion */
 
@@ -259,6 +292,10 @@ static int nilfs_direct_propagate(struct nilfs_bmap *bmap,
 	__u64 ptr;
 	int ret;
 
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, bh %p\n",
+			bmap->b_inode->i_ino, bh);
+
 	if (!NILFS_BMAP_USE_VBN(bmap))
 		return 0;
 
@@ -291,6 +328,11 @@ static int nilfs_direct_assign_v(struct nilfs_bmap *direct,
 	union nilfs_bmap_ptr_req req;
 	int ret;
 
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu, ptr %llu, "
+			"bh %p, blocknr %lu, binfo %p\n",
+			direct->b_inode->i_ino, key, ptr, bh, blocknr, binfo);
+
 	req.bpr_ptr = ptr;
 	ret = nilfs_dat_prepare_start(dat, &req.bpr_req);
 	if (!ret) {
@@ -307,6 +349,11 @@ static int nilfs_direct_assign_p(struct nilfs_bmap *direct,
 				 sector_t blocknr,
 				 union nilfs_binfo *binfo)
 {
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, key %llu, ptr %llu, "
+			"bh %p, blocknr %lu, binfo %p\n",
+			direct->b_inode->i_ino, key, ptr, bh, blocknr, binfo);
+
 	nilfs_direct_set_ptr(direct, key, blocknr);
 
 	binfo->bi_dat.bi_blkoff = cpu_to_le64(key);
@@ -322,6 +369,10 @@ static int nilfs_direct_assign(struct nilfs_bmap *bmap,
 {
 	__u64 key;
 	__u64 ptr;
+
+	nilfs2_debug(DBG_DIRECT,
+			"i_ino %lu, bh %p, blocknr %lu, binfo %p\n",
+			bmap->b_inode->i_ino, bh, blocknr, binfo);
 
 	key = nilfs_bmap_data_get_key(bmap, *bh);
 	if (unlikely(key > NILFS_DIRECT_KEY_MAX)) {
