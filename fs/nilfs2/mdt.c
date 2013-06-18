@@ -427,6 +427,10 @@ nilfs_mdt_write_page(struct page *page, struct writeback_control *wbc)
 	if (!inode)
 		return 0;
 
+	nilfs2_debug((DBG_MDT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, offset %llu\n",
+			inode->i_ino, page_offset(page));
+
 	sb = inode->i_sb;
 
 	if (wbc->sync_mode == WB_SYNC_ALL)

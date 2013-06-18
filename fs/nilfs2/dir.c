@@ -57,6 +57,9 @@ static inline unsigned nilfs_chunk_size(struct inode *inode)
 
 static inline void nilfs_put_page(struct page *page)
 {
+	nilfs2_debug((DBG_DIR | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu\n", page->mapping->host->i_ino);
+
 	kunmap(page);
 	page_cache_release(page);
 }
@@ -74,15 +77,26 @@ static unsigned nilfs_last_byte(struct inode *inode, unsigned long page_nr)
 {
 	unsigned last_byte = inode->i_size;
 
+	nilfs2_debug((DBG_DIR | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, page_nr %lu\n", inode->i_ino, page_nr);
+
 	last_byte -= page_nr << PAGE_CACHE_SHIFT;
 	if (last_byte > PAGE_CACHE_SIZE)
 		last_byte = PAGE_CACHE_SIZE;
+
+	nilfs2_debug((DBG_DIR | DBG_SPAM), "last_byte %u\n", last_byte);
+
 	return last_byte;
 }
 
 static int nilfs_prepare_chunk(struct page *page, unsigned from, unsigned to)
 {
 	loff_t pos = page_offset(page) + from;
+
+	nilfs2_debug((DBG_DIR | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, from %u, to %u\n",
+			page->mapping->host->i_ino, from, to);
+
 	return __block_write_begin(page, pos, to - from, nilfs_get_block);
 }
 
@@ -95,6 +109,10 @@ static void nilfs_commit_chunk(struct page *page,
 	unsigned len = to - from;
 	unsigned nr_dirty, copied;
 	int err;
+
+	nilfs2_debug((DBG_DIR | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, from %u, to %u\n",
+			dir->i_ino, from, to);
 
 	nr_dirty = nilfs_page_count_clean_buffers(page, from, to);
 	copied = block_write_end(NULL, mapping, pos, len, len, page, NULL);
@@ -117,6 +135,9 @@ static void nilfs_check_page(struct page *page)
 	unsigned limit = PAGE_CACHE_SIZE;
 	struct nilfs_dir_entry *p;
 	char *error;
+
+	nilfs2_debug((DBG_DIR | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu\n", page->mapping->host->i_ino);
 
 	if ((dir->i_size >> PAGE_CACHE_SHIFT) == page->index) {
 		limit = dir->i_size & ~PAGE_CACHE_MASK;
@@ -186,6 +207,9 @@ static struct page *nilfs_get_page(struct inode *dir, unsigned long n)
 {
 	struct address_space *mapping = dir->i_mapping;
 	struct page *page = read_mapping_page(mapping, n, NULL);
+
+	nilfs2_debug((DBG_DIR | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, n %lu\n", dir->i_ino, n);
 
 	if (!IS_ERR(page)) {
 		kmap(page);

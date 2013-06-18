@@ -373,6 +373,10 @@ static void nilfs_end_bio_write(struct bio *bio, int err)
 	const int uptodate = test_bit(BIO_UPTODATE, &bio->bi_flags);
 	struct nilfs_segment_buffer *segbuf = bio->bi_private;
 
+	nilfs2_debug((DBG_SEGBUF | DBG_DUMP_STACK | DBG_SPAM),
+			"sb_segnum %llu, sb_pseg_start %lu, err %d\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start, err);
+
 	if (err == -EOPNOTSUPP) {
 		set_bit(BIO_EOPNOTSUPP, &bio->bi_flags);
 		bio_put(bio);
@@ -391,6 +395,12 @@ static int nilfs_segbuf_submit_bio(struct nilfs_segment_buffer *segbuf,
 {
 	struct bio *bio = wi->bio;
 	int err;
+
+	nilfs2_debug((DBG_SEGBUF | DBG_DUMP_STACK | DBG_SPAM),
+			"sb_segnum %llu, sb_pseg_start %lu, "
+			"blocknr %lu, mode %#x\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start,
+			wi->blocknr, mode);
 
 	if (segbuf->sb_nbio > 0 &&
 	    bdi_write_congested(segbuf->sb_super->s_bdi)) {
@@ -440,6 +450,10 @@ static struct bio *nilfs_alloc_seg_bio(struct the_nilfs *nilfs, sector_t start,
 {
 	struct bio *bio;
 
+	nilfs2_debug((DBG_SEGBUF | DBG_DUMP_STACK | DBG_SPAM),
+			"nilfs %p, start %lu, nr_vecs %d\n",
+			nilfs, start, nr_vecs);
+
 	bio = bio_alloc(GFP_NOIO, nr_vecs);
 	if (bio == NULL) {
 		while (!bio && (nr_vecs >>= 1))
@@ -468,6 +482,12 @@ static int nilfs_segbuf_submit_bh(struct nilfs_segment_buffer *segbuf,
 				  struct buffer_head *bh, int mode)
 {
 	int len, err;
+
+	nilfs2_debug((DBG_SEGBUF | DBG_DUMP_STACK | DBG_SPAM),
+			"sb_segnum %llu, sb_pseg_start %lu, "
+			"blocknr %lu, mode %#x\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start,
+			wi->blocknr, mode);
 
 	BUG_ON(wi->nr_vecs <= 0);
  repeat:
@@ -510,6 +530,10 @@ static int nilfs_segbuf_write(struct nilfs_segment_buffer *segbuf,
 	struct buffer_head *bh;
 	int res = 0, rw = WRITE;
 
+	nilfs2_debug((DBG_SEGBUF | DBG_DUMP_STACK | DBG_SPAM),
+			"sb_segnum %llu, sb_pseg_start %lu, nilfs %p\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start, nilfs);
+
 	wi.nilfs = nilfs;
 	nilfs_segbuf_prepare_write(segbuf, &wi);
 
@@ -550,6 +574,10 @@ static int nilfs_segbuf_write(struct nilfs_segment_buffer *segbuf,
 static int nilfs_segbuf_wait(struct nilfs_segment_buffer *segbuf)
 {
 	int err = 0;
+
+	nilfs2_debug((DBG_SEGBUF | DBG_DUMP_STACK | DBG_SPAM),
+			"sb_segnum %llu, sb_pseg_start %lu\n",
+			segbuf->sb_segnum, segbuf->sb_pseg_start);
 
 	if (!segbuf->sb_nbio)
 		return 0;

@@ -160,6 +160,12 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
  */
 static int nilfs_readpage(struct file *file, struct page *page)
 {
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, i_size %llu, offset %llu\n",
+			page->mapping->host->i_ino,
+			i_size_read(page->mapping->host),
+			page_offset(page));
+
 	return mpage_readpage(page, nilfs_get_block);
 }
 
@@ -174,6 +180,12 @@ static int nilfs_readpage(struct file *file, struct page *page)
 static int nilfs_readpages(struct file *file, struct address_space *mapping,
 			   struct list_head *pages, unsigned nr_pages)
 {
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, i_size %llu, nr_pages %u\n",
+			mapping->host->i_ino,
+			i_size_read(mapping->host),
+			nr_pages);
+
 	return mpage_readpages(mapping, pages, nr_pages, nilfs_get_block);
 }
 
@@ -182,6 +194,12 @@ static int nilfs_writepages(struct address_space *mapping,
 {
 	struct inode *inode = mapping->host;
 	int err = 0;
+
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, i_size %llu, nr_to_write %lu\n",
+			mapping->host->i_ino,
+			i_size_read(mapping->host),
+			wbc->nr_to_write);
 
 	if (inode->i_sb->s_flags & MS_RDONLY) {
 		nilfs_clear_dirty_pages(mapping, false);
@@ -199,6 +217,12 @@ static int nilfs_writepage(struct page *page, struct writeback_control *wbc)
 {
 	struct inode *inode = page->mapping->host;
 	int err;
+
+	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, i_size %llu, start %llu, end %llu\n",
+			page->mapping->host->i_ino,
+			i_size_read(page->mapping->host),
+			wbc->range_start, wbc->range_end);
 
 	if (inode->i_sb->s_flags & MS_RDONLY) {
 		/*

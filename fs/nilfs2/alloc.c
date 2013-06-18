@@ -99,6 +99,11 @@ static unsigned long nilfs_palloc_group(const struct inode *inode, __u64 nr,
 	__u64 group = nr;
 
 	*offset = do_div(group, nilfs_palloc_entries_per_group(inode));
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, nr %llu, offset %lu\n",
+			inode->i_ino, nr, *offset);
+
 	return group;
 }
 
@@ -113,9 +118,17 @@ static unsigned long nilfs_palloc_group(const struct inode *inode, __u64 nr,
 static unsigned long
 nilfs_palloc_desc_blkoff(const struct inode *inode, unsigned long group)
 {
+	unsigned long blkoff;
 	unsigned long desc_block =
 		group / nilfs_palloc_groups_per_desc_block(inode);
-	return desc_block * NILFS_MDT(inode)->mi_blocks_per_desc_block;
+
+	blkoff = desc_block * NILFS_MDT(inode)->mi_blocks_per_desc_block;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, blkoff %lu\n",
+			inode->i_ino, group, blkoff);
+
+	return blkoff;
 }
 
 /**
@@ -129,10 +142,18 @@ nilfs_palloc_desc_blkoff(const struct inode *inode, unsigned long group)
 static unsigned long
 nilfs_palloc_bitmap_blkoff(const struct inode *inode, unsigned long group)
 {
+	unsigned long blkoff;
 	unsigned long desc_offset =
 		group % nilfs_palloc_groups_per_desc_block(inode);
-	return nilfs_palloc_desc_blkoff(inode, group) + 1 +
+
+	blkoff = nilfs_palloc_desc_blkoff(inode, group) + 1 +
 		desc_offset * NILFS_MDT(inode)->mi_blocks_per_group;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, blkoff %lu\n",
+			inode->i_ino, group, blkoff);
+
+	return blkoff;
 }
 
 /**
@@ -150,6 +171,11 @@ nilfs_palloc_group_desc_nfrees(struct inode *inode, unsigned long group,
 	spin_lock(nilfs_mdt_bgl_lock(inode, group));
 	nfree = le32_to_cpu(desc->pg_nfrees);
 	spin_unlock(nilfs_mdt_bgl_lock(inode, group));
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, nfree %lu\n",
+			inode->i_ino, group, nfree);
+
 	return nfree;
 }
 
@@ -166,6 +192,10 @@ nilfs_palloc_group_desc_add_entries(struct inode *inode,
 				    struct nilfs_palloc_group_desc *desc,
 				    u32 n)
 {
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, n %u\n",
+			inode->i_ino, group, n);
+
 	spin_lock(nilfs_mdt_bgl_lock(inode, group));
 	le32_add_cpu(&desc->pg_nfrees, n);
 	spin_unlock(nilfs_mdt_bgl_lock(inode, group));
@@ -179,12 +209,18 @@ nilfs_palloc_group_desc_add_entries(struct inode *inode,
 static unsigned long
 nilfs_palloc_entry_blkoff(const struct inode *inode, __u64 nr)
 {
-	unsigned long group, group_offset;
+	unsigned long group, group_offset, blkoff;
 
 	group = nilfs_palloc_group(inode, nr, &group_offset);
 
-	return nilfs_palloc_bitmap_blkoff(inode, group) + 1 +
+	blkoff = nilfs_palloc_bitmap_blkoff(inode, group) + 1 +
 		group_offset / NILFS_MDT(inode)->mi_entries_per_block;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, nr %llu, blkoff %lu\n",
+			inode->i_ino, nr, blkoff);
+
+	return blkoff;
 }
 
 /**
@@ -217,6 +253,10 @@ static int nilfs_palloc_get_block(struct inode *inode, unsigned long blkoff,
 				  spinlock_t *lock)
 {
 	int ret;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, blkoff %lu, create %d\n",
+			inode->i_ino, blkoff, create);
 
 	spin_lock(lock);
 	if (prev->bh && blkoff == prev->blkoff) {
@@ -256,6 +296,10 @@ static int nilfs_palloc_get_desc_block(struct inode *inode,
 {
 	struct nilfs_palloc_cache *cache = NILFS_MDT(inode)->mi_palloc_cache;
 
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, create %d\n",
+			inode->i_ino, group, create);
+
 	return nilfs_palloc_get_block(inode,
 				      nilfs_palloc_desc_blkoff(inode, group),
 				      create, nilfs_palloc_desc_block_init,
@@ -275,6 +319,10 @@ static int nilfs_palloc_get_bitmap_block(struct inode *inode,
 {
 	struct nilfs_palloc_cache *cache = NILFS_MDT(inode)->mi_palloc_cache;
 
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, create %d\n",
+			inode->i_ino, group, create);
+
 	return nilfs_palloc_get_block(inode,
 				      nilfs_palloc_bitmap_blkoff(inode, group),
 				      create, NULL, bhp,
@@ -292,6 +340,10 @@ int nilfs_palloc_get_entry_block(struct inode *inode, __u64 nr,
 				 int create, struct buffer_head **bhp)
 {
 	struct nilfs_palloc_cache *cache = NILFS_MDT(inode)->mi_palloc_cache;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, nr %llu, create %d\n",
+			inode->i_ino, nr, create);
 
 	return nilfs_palloc_get_block(inode,
 				      nilfs_palloc_entry_blkoff(inode, nr),
@@ -311,6 +363,10 @@ nilfs_palloc_block_get_group_desc(const struct inode *inode,
 				  unsigned long group,
 				  const struct buffer_head *bh, void *kaddr)
 {
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, kaddr %p, bh_offset(bh) %lu\n",
+			inode->i_ino, group, kaddr, bh_offset(bh));
+
 	return (struct nilfs_palloc_group_desc *)(kaddr + bh_offset(bh)) +
 		group % nilfs_palloc_groups_per_desc_block(inode);
 }
@@ -326,6 +382,10 @@ void *nilfs_palloc_block_get_entry(const struct inode *inode, __u64 nr,
 				   const struct buffer_head *bh, void *kaddr)
 {
 	unsigned long entry_offset, group_offset;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, nr %llu, kaddr %p, bh_offset(bh) %lu\n",
+			inode->i_ino, nr, kaddr, bh_offset(bh));
 
 	nilfs_palloc_group(inode, nr, &group_offset);
 	entry_offset = group_offset % NILFS_MDT(inode)->mi_entries_per_block;
@@ -348,7 +408,11 @@ static int nilfs_palloc_find_available_slot(struct inode *inode,
 					    unsigned char *bitmap,
 					    int bsize)
 {
-	int curr, pos, end, i;
+	unsigned long curr, pos, end, i;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+		"i_ino %lu, group %lu, target %lu, bitmap %p, %d bsize\n",
+		inode->i_ino, group, target, bitmap, bsize);
 
 	if (target > 0) {
 		end = (target + BITS_PER_LONG - 1) & ~(BITS_PER_LONG - 1);
@@ -418,6 +482,10 @@ int nilfs_palloc_prepare_alloc_entry(struct inode *inode,
 	unsigned long n, entries_per_group, groups_per_desc_block;
 	unsigned long i, j;
 	int pos, ret;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, req->pr_entry_nr %llu\n",
+			inode->i_ino, req->pr_entry_nr);
 
 	ngroups = nilfs_palloc_groups_count(inode);
 	maxgroup = ngroups - 1;
@@ -493,6 +561,10 @@ int nilfs_palloc_prepare_alloc_entry(struct inode *inode,
 void nilfs_palloc_commit_alloc_entry(struct inode *inode,
 				     struct nilfs_palloc_req *req)
 {
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, req->pr_entry_nr %llu\n",
+			inode->i_ino, req->pr_entry_nr);
+
 	mark_buffer_dirty(req->pr_bitmap_bh);
 	mark_buffer_dirty(req->pr_desc_bh);
 	nilfs_mdt_mark_dirty(inode);
@@ -513,6 +585,10 @@ void nilfs_palloc_commit_free_entry(struct inode *inode,
 	unsigned long group, group_offset;
 	unsigned char *bitmap;
 	void *desc_kaddr, *bitmap_kaddr;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, req->pr_entry_nr %llu\n",
+			inode->i_ino, req->pr_entry_nr);
 
 	group = nilfs_palloc_group(inode, req->pr_entry_nr, &group_offset);
 	desc_kaddr = kmap(req->pr_desc_bh->b_page);
@@ -552,6 +628,10 @@ void nilfs_palloc_abort_alloc_entry(struct inode *inode,
 	unsigned char *bitmap;
 	unsigned long group, group_offset;
 
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, req->pr_entry_nr %llu\n",
+			inode->i_ino, req->pr_entry_nr);
+
 	group = nilfs_palloc_group(inode, req->pr_entry_nr, &group_offset);
 	desc_kaddr = kmap(req->pr_desc_bh->b_page);
 	desc = nilfs_palloc_block_get_group_desc(inode, group,
@@ -588,6 +668,10 @@ int nilfs_palloc_prepare_free_entry(struct inode *inode,
 	unsigned long group, group_offset;
 	int ret;
 
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, req->pr_entry_nr %llu\n",
+			inode->i_ino, req->pr_entry_nr);
+
 	group = nilfs_palloc_group(inode, req->pr_entry_nr, &group_offset);
 	ret = nilfs_palloc_get_desc_block(inode, group, 1, &desc_bh);
 	if (ret < 0)
@@ -611,6 +695,10 @@ int nilfs_palloc_prepare_free_entry(struct inode *inode,
 void nilfs_palloc_abort_free_entry(struct inode *inode,
 				   struct nilfs_palloc_req *req)
 {
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM | DBG_DUMP_STACK),
+			"i_ino %lu, req->pr_entry_nr %llu\n",
+			inode->i_ino, req->pr_entry_nr);
+
 	brelse(req->pr_bitmap_bh);
 	brelse(req->pr_desc_bh);
 
@@ -629,6 +717,10 @@ static int
 nilfs_palloc_group_is_in(struct inode *inode, unsigned long group, __u64 nr)
 {
 	__u64 first, last;
+
+	nilfs2_debug((DBG_ALLOC | DBG_SPAM),
+			"i_ino %lu, group %lu, nr %llu\n",
+			inode->i_ino, group, nr);
 
 	first = group * nilfs_palloc_entries_per_group(inode);
 	last = first + nilfs_palloc_entries_per_group(inode) - 1;

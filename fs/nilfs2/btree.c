@@ -72,6 +72,10 @@ static int nilfs_btree_get_new_block(const struct nilfs_bmap *btree,
 	struct address_space *btnc = &NILFS_BMAP_I(btree)->i_btnode_cache;
 	struct buffer_head *bh;
 
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, ptr %llu\n",
+			btnc->host->i_ino, ptr);
+
 	bh = nilfs_btnode_create_block(btnc, ptr);
 	if (!bh)
 		return -ENOMEM;
@@ -477,6 +481,10 @@ static int __nilfs_btree_get_block(const struct nilfs_bmap *btree, __u64 ptr,
 	sector_t submit_ptr = 0;
 	int ret;
 
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
+		"btree ino %lu, ptr %llu, bhp %p, ra %p\n",
+		btree->b_inode->i_ino, ptr, bhp, ra);
+
 	ret = nilfs_btnode_submit_block(btnc, ptr, 0, READ, &bh, &submit_ptr);
 	if (ret) {
 		if (ret != -EEXIST)
@@ -758,6 +766,10 @@ static void nilfs_btree_promote_key(struct nilfs_bmap *btree,
 				    struct nilfs_btree_path *path,
 				    int level, __u64 key)
 {
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
+		"btree ino %lu, level %d, key %llu\n",
+		btree->b_inode->i_ino, level, key);
+
 	if (level < nilfs_btree_height(btree) - 1) {
 		do {
 			nilfs_btree_node_set_key(
@@ -1006,6 +1018,9 @@ static __u64 nilfs_btree_find_near(const struct nilfs_bmap *btree,
 	struct nilfs_btree_node *node;
 	int level, ncmax;
 
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
+			"btree ino %lu\n", btree->b_inode->i_ino);
+
 	if (path == NULL)
 		return NILFS_BMAP_INVALID_PTR;
 
@@ -1034,6 +1049,10 @@ static __u64 nilfs_btree_find_target_v(const struct nilfs_bmap *btree,
 				       __u64 key)
 {
 	__u64 ptr;
+
+	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
+		"btree ino %lu, key %llu\n",
+		btree->b_inode->i_ino, key);
 
 	ptr = nilfs_bmap_find_target_seq(btree, key);
 	if (ptr != NILFS_BMAP_INVALID_PTR)

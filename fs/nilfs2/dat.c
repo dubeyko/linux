@@ -53,6 +53,10 @@ static inline struct nilfs_dat_info *NILFS_DAT_I(struct inode *dat)
 static int nilfs_dat_prepare_entry(struct inode *dat,
 				   struct nilfs_palloc_req *req, int create)
 {
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu, create %d\n",
+			dat->i_ino, req->pr_entry_nr, create);
+
 	return nilfs_palloc_get_entry_block(dat, req->pr_entry_nr,
 					    create, &req->pr_entry_bh);
 }
@@ -60,6 +64,10 @@ static int nilfs_dat_prepare_entry(struct inode *dat,
 static void nilfs_dat_commit_entry(struct inode *dat,
 				   struct nilfs_palloc_req *req)
 {
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
+
 	mark_buffer_dirty(req->pr_entry_bh);
 	nilfs_mdt_mark_dirty(dat);
 	brelse(req->pr_entry_bh);
@@ -68,12 +76,20 @@ static void nilfs_dat_commit_entry(struct inode *dat,
 static void nilfs_dat_abort_entry(struct inode *dat,
 				  struct nilfs_palloc_req *req)
 {
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
+
 	brelse(req->pr_entry_bh);
 }
 
 int nilfs_dat_prepare_alloc(struct inode *dat, struct nilfs_palloc_req *req)
 {
 	int ret;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
 
 	ret = nilfs_palloc_prepare_alloc_entry(dat, req);
 	if (ret < 0)
@@ -91,6 +107,10 @@ void nilfs_dat_commit_alloc(struct inode *dat, struct nilfs_palloc_req *req)
 	struct nilfs_dat_entry *entry;
 	void *kaddr;
 
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
+
 	kaddr = kmap_atomic(req->pr_entry_bh->b_page);
 	entry = nilfs_palloc_block_get_entry(dat, req->pr_entry_nr,
 					     req->pr_entry_bh, kaddr);
@@ -105,6 +125,10 @@ void nilfs_dat_commit_alloc(struct inode *dat, struct nilfs_palloc_req *req)
 
 void nilfs_dat_abort_alloc(struct inode *dat, struct nilfs_palloc_req *req)
 {
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
+
 	nilfs_dat_abort_entry(dat, req);
 	nilfs_palloc_abort_alloc_entry(dat, req);
 }
@@ -114,6 +138,10 @@ static void nilfs_dat_commit_free(struct inode *dat,
 {
 	struct nilfs_dat_entry *entry;
 	void *kaddr;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
 
 	kaddr = kmap_atomic(req->pr_entry_bh->b_page);
 	entry = nilfs_palloc_block_get_entry(dat, req->pr_entry_nr,
@@ -131,6 +159,10 @@ int nilfs_dat_prepare_start(struct inode *dat, struct nilfs_palloc_req *req)
 {
 	int ret;
 
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
+
 	ret = nilfs_dat_prepare_entry(dat, req, 0);
 	WARN_ON(ret == -ENOENT);
 	return ret;
@@ -141,6 +173,10 @@ void nilfs_dat_commit_start(struct inode *dat, struct nilfs_palloc_req *req,
 {
 	struct nilfs_dat_entry *entry;
 	void *kaddr;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu, blocknr %lu\n",
+			dat->i_ino, req->pr_entry_nr, blocknr);
 
 	kaddr = kmap_atomic(req->pr_entry_bh->b_page);
 	entry = nilfs_palloc_block_get_entry(dat, req->pr_entry_nr,
@@ -159,6 +195,10 @@ int nilfs_dat_prepare_end(struct inode *dat, struct nilfs_palloc_req *req)
 	sector_t blocknr;
 	void *kaddr;
 	int ret;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
 
 	ret = nilfs_dat_prepare_entry(dat, req, 0);
 	if (ret < 0) {
@@ -192,6 +232,10 @@ void nilfs_dat_commit_end(struct inode *dat, struct nilfs_palloc_req *req,
 	sector_t blocknr;
 	void *kaddr;
 
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu, dead %d\n",
+			dat->i_ino, req->pr_entry_nr, dead);
+
 	kaddr = kmap_atomic(req->pr_entry_bh->b_page);
 	entry = nilfs_palloc_block_get_entry(dat, req->pr_entry_nr,
 					     req->pr_entry_bh, kaddr);
@@ -217,6 +261,10 @@ void nilfs_dat_abort_end(struct inode *dat, struct nilfs_palloc_req *req)
 	sector_t blocknr;
 	void *kaddr;
 
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, pr_entry_nr %llu\n",
+			dat->i_ino, req->pr_entry_nr);
+
 	kaddr = kmap_atomic(req->pr_entry_bh->b_page);
 	entry = nilfs_palloc_block_get_entry(dat, req->pr_entry_nr,
 					     req->pr_entry_bh, kaddr);
@@ -235,6 +283,10 @@ int nilfs_dat_prepare_update(struct inode *dat,
 {
 	int ret;
 
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+		"i_ino %lu, old pr_entry_nr %llu, new pr_entry_nr %llu\n",
+		dat->i_ino, oldreq->pr_entry_nr, newreq->pr_entry_nr);
+
 	ret = nilfs_dat_prepare_end(dat, oldreq);
 	if (!ret) {
 		ret = nilfs_dat_prepare_alloc(dat, newreq);
@@ -248,6 +300,11 @@ void nilfs_dat_commit_update(struct inode *dat,
 			     struct nilfs_palloc_req *oldreq,
 			     struct nilfs_palloc_req *newreq, int dead)
 {
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+		"i_ino %lu, old pr_entry_nr %llu, "
+		"new pr_entry_nr %llu, dead %d\n",
+		dat->i_ino, oldreq->pr_entry_nr, newreq->pr_entry_nr, dead);
+
 	nilfs_dat_commit_end(dat, oldreq, dead);
 	nilfs_dat_commit_alloc(dat, newreq);
 }
@@ -256,6 +313,10 @@ void nilfs_dat_abort_update(struct inode *dat,
 			    struct nilfs_palloc_req *oldreq,
 			    struct nilfs_palloc_req *newreq)
 {
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+		"i_ino %lu, old pr_entry_nr %llu, new pr_entry_nr %llu\n",
+		dat->i_ino, oldreq->pr_entry_nr, newreq->pr_entry_nr);
+
 	nilfs_dat_abort_end(dat, oldreq);
 	nilfs_dat_abort_alloc(dat, newreq);
 }
@@ -278,6 +339,10 @@ int nilfs_dat_mark_dirty(struct inode *dat, __u64 vblocknr)
 {
 	struct nilfs_palloc_req req;
 	int ret;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, vblocknr %llu\n",
+			dat->i_ino, vblocknr);
 
 	req.pr_entry_nr = vblocknr;
 	ret = nilfs_dat_prepare_entry(dat, &req, 0);
@@ -335,6 +400,10 @@ int nilfs_dat_move(struct inode *dat, __u64 vblocknr, sector_t blocknr)
 	struct nilfs_dat_entry *entry;
 	void *kaddr;
 	int ret;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, vblocknr %llu, blocknr %lu\n",
+			dat->i_ino, vblocknr, blocknr);
 
 	ret = nilfs_palloc_get_entry_block(dat, vblocknr, 0, &entry_bh);
 	if (ret < 0)
@@ -406,6 +475,10 @@ int nilfs_dat_translate(struct inode *dat, __u64 vblocknr, sector_t *blocknrp)
 	void *kaddr;
 	int ret;
 
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, vblocknr %llu, blocknrp %p\n",
+			dat->i_ino, vblocknr, blocknrp);
+
 	ret = nilfs_palloc_get_entry_block(dat, vblocknr, 0, &entry_bh);
 	if (ret < 0)
 		return ret;
@@ -444,6 +517,10 @@ ssize_t nilfs_dat_get_vinfo(struct inode *dat, void *buf, unsigned visz,
 	void *kaddr;
 	unsigned long entries_per_block = NILFS_MDT(dat)->mi_entries_per_block;
 	int i, j, n, ret;
+
+	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK | DBG_SPAM),
+			"i_ino %lu, buf %p, visz %u, nvi %zu\n",
+			dat->i_ino, buf, visz, nvi);
 
 	for (i = 0; i < nvi; i += n) {
 		ret = nilfs_palloc_get_entry_block(dat, vinfo->vi_vblocknr,
