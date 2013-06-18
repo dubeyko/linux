@@ -474,6 +474,9 @@ static int nilfs_prepare_segment_for_recovery(struct the_nilfs *nilfs,
 
 	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, ri %p\n", nilfs, sb, ri);
+	nilfs2_hexdump((DBG_RECOVERY | DBG_HEX_DUMP),
+			"recovery info: ",
+			ri, sizeof(struct nilfs_recovery_info));
 
 	segnum[0] = nilfs->ns_segnum;
 	segnum[1] = nilfs->ns_nextnum;
@@ -532,6 +535,9 @@ static int nilfs_recovery_copy_block(struct the_nilfs *nilfs,
 	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, rb %p, i_ino %lu\n",
 			nilfs, rb, page->mapping->host->i_ino);
+	nilfs2_hexdump((DBG_RECOVERY | DBG_HEX_DUMP),
+			"recovery block: ",
+			rb, sizeof(struct nilfs_recovery_block));
 
 	bh_org = __bread(nilfs->ns_bdev, rb->blocknr, nilfs->ns_blocksize);
 	if (unlikely(!bh_org))
@@ -650,6 +656,9 @@ static int nilfs_do_roll_forward(struct the_nilfs *nilfs,
 	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, root %p, ri %p\n",
 			nilfs, sb, root, ri);
+	nilfs2_hexdump((DBG_RECOVERY | DBG_HEX_DUMP),
+			"recovery info: ",
+			ri, sizeof(struct nilfs_recovery_info));
 
 	pseg_start = ri->ri_lsegs_start;
 	seg_seq = ri->ri_lsegs_start_seq;
@@ -761,6 +770,9 @@ static void nilfs_finish_roll_forward(struct the_nilfs *nilfs,
 
 	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, ri %p\n", nilfs, ri);
+	nilfs2_hexdump((DBG_RECOVERY | DBG_HEX_DUMP),
+			"recovery info: ",
+			ri, sizeof(struct nilfs_recovery_info));
 
 	if (nilfs_get_segnum_of_block(nilfs, ri->ri_lsegs_start) !=
 	    nilfs_get_segnum_of_block(nilfs, ri->ri_super_root))
@@ -807,6 +819,9 @@ int nilfs_salvage_orphan_logs(struct the_nilfs *nilfs,
 	nilfs2_debug((DBG_RECOVERY | DBG_DUMP_STACK),
 			"nilfs %p, sb %p, ri %p\n",
 			nilfs, sb, ri);
+	nilfs2_hexdump((DBG_RECOVERY | DBG_HEX_DUMP),
+			"recovery info: ",
+			ri, sizeof(struct nilfs_recovery_info));
 
 	if (ri->ri_lsegs_start == 0 || ri->ri_lsegs_end == 0)
 		return 0;
@@ -1018,6 +1033,11 @@ int nilfs_search_super_root(struct the_nilfs *nilfs,
 	nilfs->ns_last_pseg = sr_pseg_start;
 	nilfs->ns_last_seq = nilfs->ns_seg_seq;
 	nilfs->ns_last_cno = ri->ri_cno;
+
+	nilfs2_hexdump((DBG_RECOVERY | DBG_HEX_DUMP),
+			"recovery info: ",
+			ri, sizeof(struct nilfs_recovery_info));
+
 	return 0;
 
  failed:

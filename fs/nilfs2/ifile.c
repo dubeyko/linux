@@ -190,6 +190,8 @@ int nilfs_ifile_read(struct super_block *sb, struct nilfs_root *root,
 	nilfs2_debug((DBG_IFILE | DBG_DUMP_STACK),
 		"sb %p, root %p, inode_size %zu, raw_inode %p, inodep %p\n",
 		sb, root, inode_size, raw_inode, inodep);
+	nilfs2_hexdump((DBG_IFILE | DBG_HEX_DUMP),
+			"raw_inode: ", raw_inode, sizeof(struct nilfs_inode));
 
 	ifile = nilfs_iget_locked(sb, root, NILFS_IFILE_INO);
 	if (unlikely(!ifile))

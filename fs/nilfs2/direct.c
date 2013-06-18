@@ -53,6 +53,8 @@ static int nilfs_direct_lookup(const struct nilfs_bmap *direct,
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, level %d, ptrp %p\n",
 			direct->b_inode->i_ino, key, level, ptrp);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", direct, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX || level != 1)
 		return -ENOENT;
@@ -78,6 +80,8 @@ static int nilfs_direct_lookup_contig(const struct nilfs_bmap *direct,
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptrp %p, maxblocks %u\n",
 			direct->b_inode->i_ino, key, ptrp, maxblocks);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", direct, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX)
 		return -ENOENT;
@@ -122,6 +126,8 @@ nilfs_direct_find_target_v(const struct nilfs_bmap *direct, __u64 key)
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu\n",
 			direct->b_inode->i_ino, key);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", direct, sizeof(struct nilfs_bmap));
 
 	ptr = nilfs_bmap_find_target_seq(direct, key);
 	if (ptr != NILFS_BMAP_INVALID_PTR)
@@ -142,6 +148,8 @@ static int nilfs_direct_insert(struct nilfs_bmap *bmap, __u64 key, __u64 ptr)
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu, ptr %llu\n",
 			bmap->b_inode->i_ino, key, ptr);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", bmap, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX)
 		return -ENOENT;
@@ -181,6 +189,8 @@ static int nilfs_direct_delete(struct nilfs_bmap *bmap, __u64 key)
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, key %llu\n",
 			bmap->b_inode->i_ino, key);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", bmap, sizeof(struct nilfs_bmap));
 
 	if (key > NILFS_DIRECT_KEY_MAX ||
 	    nilfs_direct_get_ptr(bmap, key) == NILFS_BMAP_INVALID_PTR)
@@ -231,6 +241,8 @@ static int nilfs_direct_gather_data(struct nilfs_bmap *direct,
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, keys %p, ptrs %p, nitems %d\n",
 			direct->b_inode->i_ino, keys, ptrs, nitems);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", direct, sizeof(struct nilfs_bmap));
 
 	if (nitems > NILFS_DIRECT_NBLOCKS)
 		nitems = NILFS_DIRECT_NBLOCKS;
@@ -255,6 +267,8 @@ int nilfs_direct_delete_and_convert(struct nilfs_bmap *bmap,
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, keys %p, ptrs %p, n %d\n",
 			bmap->b_inode->i_ino, keys, ptrs, n);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", bmap, sizeof(struct nilfs_bmap));
 
 	/* no need to allocate any resource for conversion */
 
@@ -295,6 +309,8 @@ static int nilfs_direct_propagate(struct nilfs_bmap *bmap,
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, bh %p\n",
 			bmap->b_inode->i_ino, bh);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", bmap, sizeof(struct nilfs_bmap));
 
 	if (!NILFS_BMAP_USE_VBN(bmap))
 		return 0;
@@ -332,6 +348,10 @@ static int nilfs_direct_assign_v(struct nilfs_bmap *direct,
 			"i_ino %lu, key %llu, ptr %llu, "
 			"bh %p, blocknr %lu, binfo %p\n",
 			direct->b_inode->i_ino, key, ptr, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", direct, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	req.bpr_ptr = ptr;
 	ret = nilfs_dat_prepare_start(dat, &req.bpr_req);
@@ -353,6 +373,10 @@ static int nilfs_direct_assign_p(struct nilfs_bmap *direct,
 			"i_ino %lu, key %llu, ptr %llu, "
 			"bh %p, blocknr %lu, binfo %p\n",
 			direct->b_inode->i_ino, key, ptr, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", direct, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	nilfs_direct_set_ptr(direct, key, blocknr);
 
@@ -373,6 +397,10 @@ static int nilfs_direct_assign(struct nilfs_bmap *bmap,
 	nilfs2_debug((DBG_DIRECT | DBG_DUMP_STACK),
 			"i_ino %lu, bh %p, blocknr %lu, binfo %p\n",
 			bmap->b_inode->i_ino, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"bmap: ", bmap, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_DIRECT | DBG_HEX_DUMP),
+			"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	key = nilfs_bmap_data_get_key(bmap, *bh);
 	if (unlikely(key > NILFS_DIRECT_KEY_MAX)) {

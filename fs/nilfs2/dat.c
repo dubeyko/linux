@@ -547,6 +547,9 @@ ssize_t nilfs_dat_get_vinfo(struct inode *dat, void *buf, unsigned visz,
 		brelse(entry_bh);
 	}
 
+	nilfs2_hexdump((DBG_DAT | DBG_HEX_DUMP | DBG_SPAM),
+			"vinfo: ", buf, nvi * sizeof(struct nilfs_vinfo));
+
 	return nvi;
 }
 
@@ -568,6 +571,8 @@ int nilfs_dat_read(struct super_block *sb, size_t entry_size,
 	nilfs2_debug((DBG_DAT | DBG_DUMP_STACK),
 			"sb %p, entry_size %zu, raw_inode %p, inodep %p\n",
 			sb, entry_size, raw_inode, inodep);
+	nilfs2_hexdump((DBG_DAT | DBG_HEX_DUMP),
+			"raw_inode: ", raw_inode, sizeof(struct nilfs_inode));
 
 	dat = nilfs_iget_locked(sb, NULL, NILFS_DAT_INO);
 	if (unlikely(!dat))

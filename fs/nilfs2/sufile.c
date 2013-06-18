@@ -194,6 +194,8 @@ int nilfs_sufile_updatev(struct inode *sufile, __u64 *segnumv, size_t nsegs,
 			"sufile ino %lu, segnumv %p, nsegs %zu, "
 			"create %d, ndone %p, dofunc %p\n",
 			sufile->i_ino, segnumv, nsegs, create, ndone, dofunc);
+	nilfs2_hexdump((DBG_SUFILE | DBG_HEX_DUMP),
+			"segnumv: ", segnumv, nsegs * sizeof(__u64));
 
 	if (unlikely(nsegs == 0))
 		goto out;
@@ -628,6 +630,8 @@ int nilfs_sufile_get_stat(struct inode *sufile, struct nilfs_sustat *sustat)
 
 	nilfs2_debug((DBG_SUFILE | DBG_DUMP_STACK),
 			"sufile ino %lu, sustat %p\n", sufile->i_ino, sustat);
+	nilfs2_hexdump((DBG_SUFILE | DBG_HEX_DUMP),
+			"sustat: ", sustat, sizeof(struct nilfs_sustat));
 
 	down_read(&NILFS_MDT(sufile)->mi_sem);
 
@@ -963,6 +967,8 @@ int nilfs_sufile_read(struct super_block *sb, size_t susize,
 	nilfs2_debug((DBG_SUFILE | DBG_DUMP_STACK),
 			"sb %p, susize %zu, raw_inode %p, inodep %p\n",
 			sb, susize, raw_inode, inodep);
+	nilfs2_hexdump((DBG_SUFILE | DBG_HEX_DUMP),
+			"raw_inode: ", raw_inode, sizeof(struct nilfs_inode));
 
 	sufile = nilfs_iget_locked(sb, NULL, NILFS_SUFILE_INO);
 	if (unlikely(!sufile))

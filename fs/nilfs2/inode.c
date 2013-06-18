@@ -511,6 +511,8 @@ int nilfs_read_inode_common(struct inode *inode,
 
 	nilfs2_debug((DBG_INODE | DBG_DUMP_STACK),
 			"i_ino %lu\n", inode->i_ino);
+	nilfs2_hexdump((DBG_INODE | DBG_HEX_DUMP),
+			"raw_inode: ", raw_inode, sizeof(struct nilfs_inode));
 
 	inode->i_mode = le16_to_cpu(raw_inode->i_mode);
 	i_uid_write(inode, le32_to_cpu(raw_inode->i_uid));
@@ -760,6 +762,9 @@ void nilfs_write_inode_common(struct inode *inode,
 			cpu_to_le64(huge_encode_dev(inode->i_rdev));
 	/* When extending inode, nilfs->ns_inode_size should be checked
 	   for substitutions of appended fields */
+
+	nilfs2_hexdump((DBG_INODE | DBG_HEX_DUMP),
+			"raw_inode: ", raw_inode, sizeof(struct nilfs_inode));
 }
 
 void nilfs_update_inode(struct inode *inode, struct buffer_head *ibh)

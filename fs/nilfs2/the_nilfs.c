@@ -682,6 +682,8 @@ int nilfs_discard_segments(struct the_nilfs *nilfs, __u64 *segnump,
 	nilfs2_debug((DBG_THE_NILFS | DBG_DUMP_STACK),
 			"nilfs %p, segnump %p, nsegs %zu\n",
 			nilfs, segnump, nsegs);
+	nilfs2_hexdump((DBG_THE_NILFS | DBG_HEX_DUMP),
+			"segnums: ", segnump, nsegs * sizeof(__u64));
 
 	sects_per_block = (1 << nilfs->ns_blocksize_bits) /
 		bdev_logical_block_size(nilfs->ns_bdev);

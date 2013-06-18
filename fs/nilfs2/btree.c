@@ -75,6 +75,8 @@ static int nilfs_btree_get_new_block(const struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
 			"i_ino %lu, ptr %llu\n",
 			btnc->host->i_ino, ptr);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP | DBG_SPAM),
+			"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	bh = nilfs_btnode_create_block(btnc, ptr);
 	if (!bh)
@@ -184,6 +186,10 @@ static void nilfs_btree_node_init(struct nilfs_btree_node *node, int flags,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"node %p, flags %d, level %d, nchildren %d, ncmax %d\n",
 		node, flags, level, nchildren, ncmax);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+			"keys: ", keys, nchildren * sizeof(__u64));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+			"ptrs: ", ptrs, nchildren * sizeof(__u64));
 
 	nilfs_btree_node_set_flags(node, flags);
 	nilfs_btree_node_set_level(node, level);
@@ -195,6 +201,9 @@ static void nilfs_btree_node_init(struct nilfs_btree_node *node, int flags,
 		dkeys[i] = cpu_to_le64(keys[i]);
 		dptrs[i] = cpu_to_le64(ptrs[i]);
 	}
+
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+			"node: ", node, sizeof(struct nilfs_btree_node));
 }
 
 /* Assume the buffer heads corresponding to left and right are locked. */
@@ -209,6 +218,10 @@ static void nilfs_btree_node_move_left(struct nilfs_btree_node *left,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"left %p, right %p, n %d, lncmax %d, rncmax %d\n",
 		left, right, n, lncmax, rncmax);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"left node: ", left, sizeof(struct nilfs_btree_node));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"right node: ", right, sizeof(struct nilfs_btree_node));
 
 	ldkeys = nilfs_btree_node_dkeys(left);
 	ldptrs = nilfs_btree_node_dptrs(left, lncmax);
@@ -241,6 +254,10 @@ static void nilfs_btree_node_move_right(struct nilfs_btree_node *left,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"left %p, right %p, n %d, lncmax %d, rncmax %d\n",
 		left, right, n, lncmax, rncmax);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"left node: ", left, sizeof(struct nilfs_btree_node));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"right node: ", right, sizeof(struct nilfs_btree_node));
 
 	ldkeys = nilfs_btree_node_dkeys(left);
 	ldptrs = nilfs_btree_node_dptrs(left, lncmax);
@@ -286,6 +303,9 @@ static void nilfs_btree_node_insert(struct nilfs_btree_node *node, int index,
 	dptrs[index] = cpu_to_le64(ptr);
 	nchildren++;
 	nilfs_btree_node_set_nchildren(node, nchildren);
+
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"node: ", node, sizeof(struct nilfs_btree_node));
 }
 
 /* Assume that the buffer head corresponding to node is locked. */
@@ -322,6 +342,8 @@ static void nilfs_btree_node_delete(struct nilfs_btree_node *node, int index,
 	nilfs_btree_node_set_nchildren(node, nchildren);
 
 	nilfs2_debug(DBG_BTREE, "key %llu, ptr %llu\n", key, ptr);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"node: ", node, sizeof(struct nilfs_btree_node));
 }
 
 static int nilfs_btree_node_lookup(const struct nilfs_btree_node *node,
@@ -333,6 +355,8 @@ static int nilfs_btree_node_lookup(const struct nilfs_btree_node *node,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"node %p, key %llu, indexp %p\n",
 		node, key, indexp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"node: ", node, sizeof(struct nilfs_btree_node));
 
 	/* binary search */
 	low = 0;
@@ -484,6 +508,8 @@ static int __nilfs_btree_get_block(const struct nilfs_bmap *btree, __u64 ptr,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
 		"btree ino %lu, ptr %llu, bhp %p, ra %p\n",
 		btree->b_inode->i_ino, ptr, bhp, ra);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP | DBG_SPAM),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	ret = nilfs_btnode_submit_block(btnc, ptr, 0, READ, &bh, &submit_ptr);
 	if (ret) {
@@ -550,6 +576,8 @@ static int nilfs_btree_do_lookup(const struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, path %p, key %llu, ptrp %p, minlevel %d, ra %d\n",
 		btree->b_inode->i_ino, path, key, ptrp, minlevel, readahead);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	node = nilfs_btree_get_root(btree);
 	level = nilfs_btree_node_get_level(node);
@@ -616,6 +644,8 @@ static int nilfs_btree_do_lookup_last(const struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, path %p, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, path, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	node = nilfs_btree_get_root(btree);
 	index = nilfs_btree_node_get_nchildren(node) - 1;
@@ -661,6 +691,8 @@ static int nilfs_btree_lookup(const struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, level %d, ptrp %p\n",
 		btree->b_inode->i_ino, key, level, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)
@@ -688,6 +720,8 @@ static int nilfs_btree_lookup_contig(const struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptrp %p, maxblocks %u\n",
 		btree->b_inode->i_ino, key, ptrp, maxblocks);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)
@@ -769,6 +803,8 @@ static void nilfs_btree_promote_key(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
 		"btree ino %lu, level %d, key %llu\n",
 		btree->b_inode->i_ino, level, key);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP | DBG_SPAM),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	if (level < nilfs_btree_height(btree) - 1) {
 		do {
@@ -798,6 +834,8 @@ static void nilfs_btree_do_insert(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	if (level < nilfs_btree_height(btree) - 1) {
 		node = nilfs_btree_get_nonroot_node(path, level);
@@ -829,6 +867,8 @@ static void nilfs_btree_carry_left(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	node = nilfs_btree_get_nonroot_node(path, level);
 	left = nilfs_btree_get_sib_node(path, level);
@@ -879,6 +919,8 @@ static void nilfs_btree_carry_right(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	node = nilfs_btree_get_nonroot_node(path, level);
 	right = nilfs_btree_get_sib_node(path, level);
@@ -932,6 +974,8 @@ static void nilfs_btree_split(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	node = nilfs_btree_get_nonroot_node(path, level);
 	right = nilfs_btree_get_sib_node(path, level);
@@ -989,6 +1033,8 @@ static void nilfs_btree_grow(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	root = nilfs_btree_get_root(btree);
 	child = nilfs_btree_get_sib_node(path, level);
@@ -1020,6 +1066,8 @@ static __u64 nilfs_btree_find_near(const struct nilfs_bmap *btree,
 
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
 			"btree ino %lu\n", btree->b_inode->i_ino);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP | DBG_SPAM),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	if (path == NULL)
 		return NILFS_BMAP_INVALID_PTR;
@@ -1053,6 +1101,8 @@ static __u64 nilfs_btree_find_target_v(const struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK | DBG_SPAM),
 		"btree ino %lu, key %llu\n",
 		btree->b_inode->i_ino, key);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP | DBG_SPAM),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	ptr = nilfs_bmap_find_target_seq(btree, key);
 	if (ptr != NILFS_BMAP_INVALID_PTR)
@@ -1082,6 +1132,10 @@ static int nilfs_btree_prepare_insert(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, levelp %p, key %llu, ptr %llu, stats %p\n",
 		btree->b_inode->i_ino, levelp, key, ptr, stats);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"stats: ", stats, sizeof(struct nilfs_bmap_stats));
 
 	stats->bs_nblocks = 0;
 	level = NILFS_BTREE_LEVEL_DATA;
@@ -1231,6 +1285,8 @@ static void nilfs_btree_commit_insert(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, maxlevel %d, key %llu, ptr %llu\n",
 		btree->b_inode->i_ino, maxlevel, key, ptr);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	set_buffer_nilfs_volatile((struct buffer_head *)((unsigned long)ptr));
 	ptr = path[NILFS_BTREE_LEVEL_DATA].bp_newreq.bpr_ptr;
@@ -1258,6 +1314,8 @@ static int nilfs_btree_insert(struct nilfs_bmap *btree, __u64 key, __u64 ptr)
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptr %llu\n",
 		btree->b_inode->i_ino, key, ptr);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)
@@ -1292,6 +1350,8 @@ static void nilfs_btree_do_delete(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	if (level < nilfs_btree_height(btree) - 1) {
 		node = nilfs_btree_get_nonroot_node(path, level);
@@ -1321,6 +1381,8 @@ static void nilfs_btree_borrow_left(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_btree_do_delete(btree, path, level, keyp, ptrp);
 
@@ -1357,6 +1419,8 @@ static void nilfs_btree_borrow_right(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_btree_do_delete(btree, path, level, keyp, ptrp);
 
@@ -1394,6 +1458,8 @@ static void nilfs_btree_concat_left(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_btree_do_delete(btree, path, level, keyp, ptrp);
 
@@ -1424,6 +1490,8 @@ static void nilfs_btree_concat_right(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_btree_do_delete(btree, path, level, keyp, ptrp);
 
@@ -1453,6 +1521,8 @@ static void nilfs_btree_shrink(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, keyp %p, ptrp %p\n",
 		btree->b_inode->i_ino, level, keyp, ptrp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_btree_do_delete(btree, path, level, keyp, ptrp);
 
@@ -1491,6 +1561,10 @@ static int nilfs_btree_prepare_delete(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, levelp %p, stats %p, dat %p\n",
 		btree->b_inode->i_ino, levelp, stats, dat);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"stats: ", stats, sizeof(struct nilfs_bmap_stats));
 
 	ret = 0;
 	stats->bs_nblocks = 0;
@@ -1646,6 +1720,8 @@ static int nilfs_btree_delete(struct nilfs_bmap *btree, __u64 key)
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu\n",
 		btree->b_inode->i_ino, key);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)
@@ -1678,6 +1754,8 @@ static int nilfs_btree_last_key(const struct nilfs_bmap *btree, __u64 *keyp)
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, keyp %p\n",
 		btree->b_inode->i_ino, keyp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)
@@ -1701,6 +1779,8 @@ static int nilfs_btree_check_delete(struct nilfs_bmap *btree, __u64 key)
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu\n",
 		btree->b_inode->i_ino, key);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	root = nilfs_btree_get_root(btree);
 	switch (nilfs_btree_height(btree)) {
@@ -1746,6 +1826,8 @@ static int nilfs_btree_gather_data(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, keys %p, ptrs %p, nitems %d\n",
 		btree->b_inode->i_ino, keys, ptrs, nitems);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	root = nilfs_btree_get_root(btree);
 	switch (nilfs_btree_height(btree)) {
@@ -1800,6 +1882,10 @@ nilfs_btree_prepare_convert_and_insert(struct nilfs_bmap *btree, __u64 key,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, dreq %p, nreq %p, bhp %p, stats %p\n",
 		btree->b_inode->i_ino, key, dreq, nreq, bhp, stats);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"stats: ", stats, sizeof(struct nilfs_bmap_stats));
 
 	stats->bs_nblocks = 0;
 
@@ -1861,6 +1947,8 @@ nilfs_btree_commit_convert_and_insert(struct nilfs_bmap *btree,
 		"btree ino %lu, key %llu, ptr %llu, keys %p,"
 		" ptrs %p, n %d, dreq %p, nreq %p, bh %p\n",
 		btree->b_inode->i_ino, key, ptr, keys, ptrs, n, dreq, nreq, bh);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	/* free resources */
 	if (btree->b_ops->bop_clear != NULL)
@@ -1933,6 +2021,8 @@ int nilfs_btree_convert_and_insert(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, ptr %llu, keys %p, ptrs %p, n %d\n",
 		btree->b_inode->i_ino, key, ptr, keys, ptrs, n);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	if (n + 1 <= NILFS_BTREE_ROOT_NCHILDREN_MAX) {
 		di = &dreq;
@@ -1979,6 +2069,8 @@ static int nilfs_btree_prepare_update_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, dat %p\n",
 		btree->b_inode->i_ino, level, dat);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	parent = nilfs_btree_get_node(btree, path, level + 1, &ncmax);
 	path[level].bp_oldreq.bpr_ptr =
@@ -2018,6 +2110,8 @@ static void nilfs_btree_commit_update_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, dat %p\n",
 		btree->b_inode->i_ino, level, dat);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_dat_commit_update(dat, &path[level].bp_oldreq.bpr_req,
 				&path[level].bp_newreq.bpr_req,
@@ -2043,6 +2137,8 @@ static void nilfs_btree_abort_update_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, dat %p\n",
 		btree->b_inode->i_ino, level, dat);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	nilfs_dat_abort_update(dat, &path[level].bp_oldreq.bpr_req,
 			       &path[level].bp_newreq.bpr_req);
@@ -2062,6 +2158,8 @@ static int nilfs_btree_prepare_propagate_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, minlevel %d, maxlevelp %p, dat %p\n",
 		btree->b_inode->i_ino, minlevel, maxlevelp, dat);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	level = minlevel;
 	if (!buffer_nilfs_volatile(path[level].bp_bh)) {
@@ -2102,6 +2200,8 @@ static void nilfs_btree_commit_propagate_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, minlevel %d, maxlevel %d, bh %p, dat %p\n",
 		btree->b_inode->i_ino, minlevel, maxlevel, bh, dat);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	if (!buffer_nilfs_volatile(path[minlevel].bp_bh))
 		nilfs_btree_commit_update_v(btree, path, minlevel, dat);
@@ -2123,6 +2223,8 @@ static int nilfs_btree_propagate_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, bh %p\n",
 		btree->b_inode->i_ino, level, bh);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	get_bh(bh);
 	path[level].bp_bh = bh;
@@ -2160,6 +2262,8 @@ static int nilfs_btree_propagate(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, bh %p\n",
 		btree->b_inode->i_ino, bh);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	WARN_ON(!buffer_dirty(bh));
 
@@ -2213,6 +2317,8 @@ static void nilfs_btree_add_dirty_buffer(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, lists %p, bh %p\n",
 		btree->b_inode->i_ino, lists, bh);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	get_bh(bh);
 	node = (struct nilfs_btree_node *)bh->b_data;
@@ -2253,6 +2359,8 @@ static void nilfs_btree_lookup_dirty_buffers(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, listp %p\n",
 		btree->b_inode->i_ino, listp);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	for (level = NILFS_BTREE_LEVEL_NODE_MIN;
 	     level < NILFS_BTREE_LEVEL_MAX;
@@ -2296,6 +2404,10 @@ static int nilfs_btree_assign_p(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, level, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	parent = nilfs_btree_get_node(btree, path, level + 1, &ncmax);
 	ptr = nilfs_btree_node_get_ptr(parent, path[level + 1].bp_index,
@@ -2343,6 +2455,10 @@ static int nilfs_btree_assign_v(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, level %d, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, level, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	parent = nilfs_btree_get_node(btree, path, level + 1, &ncmax);
 	ptr = nilfs_btree_node_get_ptr(parent, path[level + 1].bp_index,
@@ -2374,6 +2490,10 @@ static int nilfs_btree_assign(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)
@@ -2416,6 +2536,10 @@ static int nilfs_btree_assign_gc(struct nilfs_bmap *btree,
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, bh %p, blocknr %lu, binfo %p\n",
 		btree->b_inode->i_ino, bh, blocknr, binfo);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"binfo: ", binfo, sizeof(union nilfs_binfo));
 
 	ret = nilfs_dat_move(nilfs_bmap_get_dat(btree), (*bh)->b_blocknr,
 			     blocknr);
@@ -2445,6 +2569,8 @@ static int nilfs_btree_mark(struct nilfs_bmap *btree, __u64 key, int level)
 	nilfs2_debug((DBG_BTREE | DBG_DUMP_STACK),
 		"btree ino %lu, key %llu, level %d\n",
 		btree->b_inode->i_ino, key, level);
+	nilfs2_hexdump((DBG_BTREE | DBG_HEX_DUMP),
+		"btree: ", btree, sizeof(struct nilfs_bmap));
 
 	path = nilfs_btree_alloc_path();
 	if (path == NULL)

@@ -404,6 +404,10 @@ static void nilfs_cpfile_checkpoint_to_cpinfo(struct inode *cpfile,
 	nilfs2_debug((DBG_CPFILE | DBG_DUMP_STACK),
 			"i_ino %lu, cp %p, ci %p\n",
 			cpfile->i_ino, cp, ci);
+	nilfs2_hexdump((DBG_CPFILE | DBG_HEX_DUMP),
+			"checkpoint: ", cp, sizeof(struct nilfs_checkpoint));
+	nilfs2_hexdump((DBG_CPFILE | DBG_HEX_DUMP),
+			"cpinfo: ", ci, sizeof(struct nilfs_cpinfo));
 
 	ci->ci_flags = le32_to_cpu(cp->cp_flags);
 	ci->ci_cno = le64_to_cpu(cp->cp_cno);
@@ -989,6 +993,10 @@ int nilfs_cpfile_get_stat(struct inode *cpfile, struct nilfs_cpstat *cpstat)
 
  out_sem:
 	up_read(&NILFS_MDT(cpfile)->mi_sem);
+
+	nilfs2_hexdump((DBG_CPFILE | DBG_HEX_DUMP),
+			"cpstat: ", cpstat, sizeof(struct nilfs_cpstat));
+
 	return ret;
 }
 
@@ -1008,6 +1016,8 @@ int nilfs_cpfile_read(struct super_block *sb, size_t cpsize,
 	nilfs2_debug((DBG_CPFILE | DBG_DUMP_STACK),
 			"sb %p, cpsize %zu, raw_inode %p, inodep %p\n",
 			sb, cpsize, raw_inode, inodep);
+	nilfs2_hexdump((DBG_CPFILE | DBG_HEX_DUMP),
+			"raw_inode: ", raw_inode, sizeof(struct nilfs_inode));
 
 	cpfile = nilfs_iget_locked(sb, NULL, NILFS_CPFILE_INO);
 	if (unlikely(!cpfile))

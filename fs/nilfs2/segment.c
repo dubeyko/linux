@@ -377,6 +377,8 @@ static void *nilfs_segctor_map_segsum_entry(struct nilfs_sc_info *sci,
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, segnum %llu, ssp->offset %u, bytes %u\n",
 			sci, segbuf->sb_segnum, ssp->offset, bytes);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (unlikely(ssp->offset + bytes > blocksize)) {
 		ssp->offset = 0;
@@ -404,6 +406,8 @@ static int nilfs_segctor_reset_segment_buffer(struct nilfs_sc_info *sci)
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, segnum %llu, cno %llu\n",
 			sci, segbuf->sb_segnum, sci->sc_cno);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (nilfs_doing_gc())
 		flags = NILFS_SS_GC;
@@ -422,6 +426,8 @@ static int nilfs_segctor_reset_segment_buffer(struct nilfs_sc_info *sci)
 static int nilfs_segctor_feed_segment(struct nilfs_sc_info *sci)
 {
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	sci->sc_nblk_this_inc += sci->sc_curseg->sb_sum.nblocks;
 	if (NILFS_SEGBUF_IS_LAST(sci->sc_curseg, &sci->sc_segbufs))
@@ -438,6 +444,8 @@ static int nilfs_segctor_add_super_root(struct nilfs_sc_info *sci)
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, segnum %llu\n", sci, segbuf->sb_segnum);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (segbuf->sb_sum.nblocks >= segbuf->sb_rest_blocks) {
 		err = nilfs_segctor_feed_segment(sci);
@@ -471,6 +479,8 @@ static void nilfs_segctor_begin_finfo(struct nilfs_sc_info *sci,
 {
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu\n", sci, inode->i_ino);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	sci->sc_curseg->sb_sum.nfinfo++;
 	sci->sc_binfo_ptr = sci->sc_finfo_ptr;
@@ -494,6 +504,8 @@ static void nilfs_segctor_end_finfo(struct nilfs_sc_info *sci,
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, segnum %llu\n",
 			sci, inode->i_ino, sci->sc_curseg->sb_segnum);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (sci->sc_blk_cnt == 0)
 		return;
@@ -533,6 +545,8 @@ static int nilfs_segctor_add_file_block(struct nilfs_sc_info *sci,
 			"sci %p, ino %lu, segnum %llu, bh %p, binfo_size %u\n",
 			sci, inode->i_ino, sci->sc_curseg->sb_segnum,
 			bh, binfo_size);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
  retry:
 	segbuf = sci->sc_curseg;
@@ -571,6 +585,8 @@ static int nilfs_collect_file_data(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, bh %p\n", sci, inode->i_ino, bh);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	err = nilfs_bmap_propagate(NILFS_I(inode)->i_bmap, bh);
 	if (err < 0)
@@ -589,6 +605,8 @@ static int nilfs_collect_file_node(struct nilfs_sc_info *sci,
 {
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, bh %p\n", sci, inode->i_ino, bh);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	return nilfs_bmap_propagate(NILFS_I(inode)->i_bmap, bh);
 }
@@ -599,6 +617,8 @@ static int nilfs_collect_file_bmap(struct nilfs_sc_info *sci,
 {
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, bh %p\n", sci, inode->i_ino, bh);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	WARN_ON(!buffer_dirty(bh));
 	return nilfs_segctor_add_file_block(sci, bh, inode, sizeof(__le64));
@@ -637,6 +657,8 @@ static int nilfs_collect_dat_data(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, bh %p\n", sci, inode->i_ino, bh);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	err = nilfs_bmap_propagate(NILFS_I(inode)->i_bmap, bh);
 	if (err < 0)
@@ -888,6 +910,8 @@ static int nilfs_segctor_create_checkpoint(struct nilfs_sc_info *sci)
 	int err;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	/* XXX: this interface will be changed */
 	err = nilfs_cpfile_get_checkpoint(nilfs->ns_cpfile, nilfs->ns_cno, 1,
@@ -914,6 +938,8 @@ static int nilfs_segctor_fill_in_checkpoint(struct nilfs_sc_info *sci)
 	int err;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	err = nilfs_cpfile_get_checkpoint(nilfs->ns_cpfile, nilfs->ns_cno, 0,
 					  &raw_cp, &bh_cp);
@@ -971,6 +997,8 @@ static void nilfs_segctor_fill_in_file_bmap(struct nilfs_sc_info *sci)
 	struct nilfs_inode_info *ii;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	list_for_each_entry(ii, &sci->sc_dirty_files, i_dirty) {
 		nilfs_fill_in_file_bmap(sci->sc_root->ifile, ii);
@@ -987,6 +1015,8 @@ static void nilfs_segctor_fill_in_super_root(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p\n", sci, nilfs);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	bh_sr = NILFS_LAST_SEGBUF(&sci->sc_segbufs)->sb_super_root;
 	raw_sr = (struct nilfs_super_root *)bh_sr->b_data;
@@ -1048,6 +1078,8 @@ static int nilfs_segctor_apply_buffers(struct nilfs_sc_info *sci,
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, listp %p, collect %p\n",
 			sci, inode->i_ino, listp, collect);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (collect) {
 		list_for_each_entry_safe(bh, n, listp, b_assoc_buffers) {
@@ -1088,6 +1120,8 @@ static int nilfs_segctor_scan_file(struct nilfs_sc_info *sci,
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu, sc_ops %p\n",
 			sci, inode->i_ino, sc_ops);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (!(sci->sc_stage.flags & NILFS_CF_NODE)) {
 		size_t n, rest = nilfs_segctor_buffer_rest(sci);
@@ -1143,6 +1177,8 @@ static int nilfs_segctor_scan_file_dsync(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, i_ino %lu\n", sci, inode->i_ino);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	n = nilfs_lookup_dirty_data_buffers(inode, &data_buffers, rest + 1,
 					    sci->sc_dsync_start,
@@ -1169,6 +1205,8 @@ static int nilfs_segctor_collect_blocks(struct nilfs_sc_info *sci, int mode)
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, sci->sc_stage.scnt %d, mode %#x\n",
 			sci, sci->sc_stage.scnt, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	switch (sci->sc_stage.scnt) {
 	case NILFS_ST_INIT:
@@ -1331,6 +1369,8 @@ static int nilfs_segctor_begin_construction(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p\n", sci, nilfs);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	segbuf = nilfs_segbuf_new(sci->sc_super);
 	if (unlikely(!segbuf))
@@ -1396,6 +1436,8 @@ static int nilfs_segctor_extend_segments(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p, nadd %d\n", sci, nilfs, nadd);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	prev = NILFS_LAST_SEGBUF(&sci->sc_segbufs);
 	/*
@@ -1534,6 +1576,8 @@ static void nilfs_segctor_truncate_segments(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, last %p, sufile %p\n", sci, last, sufile);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	list_for_each_entry_continue(segbuf, &sci->sc_segbufs, sb_list) {
 		sci->sc_segbuf_nblocks -= segbuf->sb_rest_blocks;
@@ -1552,6 +1596,8 @@ static int nilfs_segctor_collect(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p, mode %#x\n", sci, nilfs, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	/* Collection retry loop */
 	for (;;) {
@@ -1625,6 +1671,8 @@ nilfs_segctor_update_payload_blocknr(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, segbuf %p, mode %#x\n", sci, segbuf, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	if (!nfinfo)
 		goto out;
@@ -1689,6 +1737,8 @@ static int nilfs_segctor_assign(struct nilfs_sc_info *sci, int mode)
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, mode %#x\n", sci, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	list_for_each_entry(segbuf, &sci->sc_segbufs, sb_list) {
 		err = nilfs_segctor_update_payload_blocknr(sci, segbuf, mode);
@@ -1721,6 +1771,8 @@ static void nilfs_segctor_prepare_write(struct nilfs_sc_info *sci)
 	struct page *bd_page = NULL, *fs_page = NULL;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	list_for_each_entry(segbuf, &sci->sc_segbufs, sb_list) {
 		struct buffer_head *bh;
@@ -1772,6 +1824,8 @@ static int nilfs_segctor_write(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p\n", sci, nilfs);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	ret = nilfs_write_logs(&sci->sc_segbufs, nilfs);
 	list_splice_tail_init(&sci->sc_segbufs, &sci->sc_write_logs);
@@ -1878,6 +1932,8 @@ static void nilfs_segctor_abort_construction(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p, err %d\n", sci, nilfs, err);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	list_splice_tail_init(&sci->sc_write_logs, &logs);
 	ret = nilfs_wait_on_logs(&logs);
@@ -1917,6 +1973,8 @@ static void nilfs_segctor_complete_write(struct nilfs_sc_info *sci)
 	int update_sr = false;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	list_for_each_entry(segbuf, &sci->sc_write_logs, sb_list) {
 		struct buffer_head *bh;
@@ -2012,6 +2070,8 @@ static int nilfs_segctor_wait(struct nilfs_sc_info *sci)
 	int ret;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	ret = nilfs_wait_on_logs(&sci->sc_write_logs);
 	if (!ret) {
@@ -2029,6 +2089,8 @@ static int nilfs_segctor_collect_dirty_files(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p\n", sci, nilfs);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	spin_lock(&nilfs->ns_inode_lock);
  retry:
@@ -2075,6 +2137,8 @@ static void nilfs_segctor_drop_written_files(struct nilfs_sc_info *sci,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, nilfs %p\n", sci, nilfs);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	spin_lock(&nilfs->ns_inode_lock);
 	list_for_each_entry_safe(ii, n, &sci->sc_dirty_files, i_dirty) {
@@ -2103,6 +2167,8 @@ static int nilfs_segctor_do_construct(struct nilfs_sc_info *sci, int mode)
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, mode %#x\n", sci, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	sci->sc_stage.scnt = NILFS_ST_INIT;
 	sci->sc_cno = nilfs->ns_cno;
@@ -2261,6 +2327,8 @@ static int nilfs_segctor_sync(struct nilfs_sc_info *sci)
 	int err = 0;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	spin_lock(&sci->sc_state_lock);
 	init_wait(&wait_req.wq);
@@ -2478,6 +2546,8 @@ static int nilfs_segctor_construct(struct nilfs_sc_info *sci, int mode)
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, mode %#x\n", sci, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	nilfs_segctor_accept(sci);
 
@@ -2545,6 +2615,8 @@ int nilfs_clean_segments(struct super_block *sb, struct nilfs_argv *argv,
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sb %p, argv %p, kbufs %p\n", sb, argv, kbufs);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"argv: ", argv, sizeof(struct nilfs_argv));
 
 	if (unlikely(!sci))
 		return -EROFS;
@@ -2602,6 +2674,8 @@ static void nilfs_segctor_thread_construct(struct nilfs_sc_info *sci, int mode)
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK),
 			"sci %p, mode %#x\n", sci, mode);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	nilfs_transaction_lock(sci->sc_super, &ti, 0);
 	nilfs_segctor_construct(sci, mode);
@@ -2623,6 +2697,8 @@ static void nilfs_segctor_do_immediate_flush(struct nilfs_sc_info *sci)
 	int err;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	spin_lock(&sci->sc_state_lock);
 	mode = (sci->sc_flush_request & FLUSH_DAT_BIT) ?
@@ -2746,6 +2822,8 @@ static int nilfs_segctor_start_thread(struct nilfs_sc_info *sci)
 	struct task_struct *t;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	t = kthread_run(nilfs_segctor_thread, sci, "segctord");
 	if (IS_ERR(t)) {
@@ -2766,6 +2844,8 @@ static void nilfs_segctor_kill_thread(struct nilfs_sc_info *sci)
 	sci->sc_state |= NILFS_SEGCTOR_QUIT;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	while (sci->sc_task) {
 		wake_up(&sci->sc_wait_daemon);
@@ -2822,6 +2902,8 @@ static void nilfs_segctor_write_out(struct nilfs_sc_info *sci)
 	int ret, retrycount = NILFS_SC_CLEANUP_RETRY;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	/* The segctord thread was stopped and its timer was removed.
 	   But some tasks remain. */
@@ -2849,6 +2931,8 @@ static void nilfs_segctor_destroy(struct nilfs_sc_info *sci)
 	int flag;
 
 	nilfs2_debug((DBG_SEGMENT | DBG_DUMP_STACK), "sci %p\n", sci);
+	nilfs2_hexdump((DBG_SEGMENT | DBG_HEX_DUMP),
+			"sc_info: ", sci, sizeof(struct nilfs_sc_info));
 
 	up_write(&nilfs->ns_segctor_sem);
 
