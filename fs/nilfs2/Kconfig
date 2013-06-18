@@ -22,3 +22,16 @@ config NILFS2_FS
 
 	  To compile this file system support as a module, choose M here: the
 	  module will be called nilfs2.  If unsure, say N.
+
+if NILFS2_FS
+
+config NILFS2_DEBUG
+	bool "NILFS2 debugging"
+	default n
+	help
+	  If you are experiencing any problems with the NILFS2 filesystem, say
+	  Y here.  This will result in additional debugging messages to be
+	  written to the system log.  Under normal circumstances, this
+	  results in very little overhead.
+
+endif # NILFS2_FS
