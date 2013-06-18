@@ -86,6 +86,12 @@ config NILFS2_DEBUG_BLOCK_MAPPING
 	  This option enables debugging output in alloc.c, bmap.c, btnode.c,
 	  btree.c, direct.c modules.
 
+config NILFS2_DEBUG_BUFFER_MANAGEMENT
+	bool "Enable buffer/page management subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in page.c module.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG

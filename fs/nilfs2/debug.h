@@ -82,6 +82,13 @@
 #define DBG_BTREE	0x00100000
 #define DBG_DIRECT	0x00200000
 
+/*
+ * These flags enable debugging output in modules that
+ * implement buffer management subsystem functionality
+ * (page.c).
+ */
+#define DBG_PAGE	0x00400000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -107,6 +114,9 @@ static u32 DBG_MASK = (
 	DBG_ALLOC | DBG_BMAP | DBG_BTNODE |
 	DBG_BTREE | DBG_DIRECT |
 #endif /* CONFIG_NILFS2_DEBUG_BLOCK_MAPPING */
+#ifdef CONFIG_NILFS2_DEBUG_BUFFER_MANAGEMENT
+	DBG_PAGE |
+#endif /* CONFIG_NILFS2_DEBUG_BUFFER_MANAGEMENT */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
