@@ -26,10 +26,29 @@
 
 #include <linux/printk.h>
 
+/*
+ * These flags enable debugging output in modules that
+ * implement base file system operations functionality
+ * (super.c, the_nilfs.c, namei.c, ioctl.c, inode.c,
+ * file.c, dir.c).
+ */
+#define DBG_SUPER	0x00000002
+#define DBG_THE_NILFS	0x00000004
+#define DBG_NAMEI	0x00000008
+#define DBG_IOCTL	0x00000010
+#define DBG_INODE	0x00000020
+#define DBG_FILE	0x00000040
+#define DBG_DIR		0x00000080
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
-static u32 DBG_MASK = (0);
+static u32 DBG_MASK = (
+#ifdef CONFIG_NILFS2_DEBUG_BASE_OPERATIONS
+	DBG_SUPER | DBG_THE_NILFS | DBG_NAMEI |
+	DBG_IOCTL | DBG_INODE | DBG_FILE | DBG_DIR |
+#endif /* CONFIG_NILFS2_DEBUG_BASE_OPERATIONS */
+0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
 #define NILFS2_DBG_OUT_MASK	0xF0000000

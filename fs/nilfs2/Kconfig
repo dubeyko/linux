@@ -34,4 +34,27 @@ config NILFS2_DEBUG
 	  written to the system log.  Under normal circumstances, this
 	  results in very little overhead.
 
+if NILFS2_DEBUG
+
+config NILFS2_DEBUG_SUBSYSTEMS
+	bool "Enable output from subsystems"
+	depends on NILFS2_DEBUG
+	default n
+	help
+	  This option groups opportunity to enable debugging output from
+	  concrete NILFS2 driver's subsystems.
+
+if NILFS2_DEBUG_SUBSYSTEMS
+
+config NILFS2_DEBUG_BASE_OPERATIONS
+	bool "Enable base operations subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in super.c, the_nilfs.c,
+	  namei.c, ioctl.c, inode.c, file.c, dir.c modules.
+
+endif # NILFS2_DEBUG_SUBSYSTEMS
+
+endif # NILFS2_DEBUG
+
 endif # NILFS2_FS
