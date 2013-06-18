@@ -306,6 +306,10 @@ int nilfs_dat_mark_dirty(struct inode *dat, __u64 vblocknr)
  */
 int nilfs_dat_freev(struct inode *dat, __u64 *vblocknrs, size_t nitems)
 {
+	nilfs2_debug(DBG_DAT,
+			"i_ino %lu, vblocknrs %p, nitems %zu\n",
+			dat->i_ino, vblocknrs, nitems);
+
 	return nilfs_palloc_freev(dat, vblocknrs, nitems);
 }
 
@@ -483,6 +487,10 @@ int nilfs_dat_read(struct super_block *sb, size_t entry_size,
 	struct inode *dat;
 	struct nilfs_dat_info *di;
 	int err;
+
+	nilfs2_debug(DBG_DAT,
+			"sb %p, entry_size %zu, raw_inode %p, inodep %p\n",
+			sb, entry_size, raw_inode, inodep);
 
 	dat = nilfs_iget_locked(sb, NULL, NILFS_DAT_INO);
 	if (unlikely(!dat))

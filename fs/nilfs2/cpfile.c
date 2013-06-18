@@ -133,6 +133,9 @@ static void nilfs_cpfile_block_init(struct inode *cpfile,
 static inline int nilfs_cpfile_get_header_block(struct inode *cpfile,
 						struct buffer_head **bhp)
 {
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, bhp %p\n", cpfile->i_ino, bhp);
+
 	return nilfs_mdt_get_block(cpfile, 0, 0, NULL, bhp);
 }
 
@@ -141,6 +144,10 @@ static inline int nilfs_cpfile_get_checkpoint_block(struct inode *cpfile,
 						    int create,
 						    struct buffer_head **bhp)
 {
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu, create %d, bhp %p\n",
+			cpfile->i_ino, cno, create, bhp);
+
 	return nilfs_mdt_get_block(cpfile,
 				   nilfs_cpfile_get_blkoff(cpfile, cno),
 				   create, nilfs_cpfile_block_init, bhp);
@@ -149,6 +156,10 @@ static inline int nilfs_cpfile_get_checkpoint_block(struct inode *cpfile,
 static inline int nilfs_cpfile_delete_checkpoint_block(struct inode *cpfile,
 						       __u64 cno)
 {
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu\n",
+			cpfile->i_ino, cno);
+
 	return nilfs_mdt_delete_block(cpfile,
 				      nilfs_cpfile_get_blkoff(cpfile, cno));
 }
@@ -189,6 +200,10 @@ int nilfs_cpfile_get_checkpoint(struct inode *cpfile,
 	struct nilfs_checkpoint *cp;
 	void *kaddr;
 	int ret;
+
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu, create %d, cpp %p, bhp %p\n",
+			cpfile->i_ino, cno, create, cpp, bhp);
 
 	if (unlikely(cno < 1 || cno > nilfs_mdt_cno(cpfile) ||
 		     (cno < nilfs_mdt_cno(cpfile) && create)))
@@ -252,6 +267,10 @@ int nilfs_cpfile_get_checkpoint(struct inode *cpfile,
 void nilfs_cpfile_put_checkpoint(struct inode *cpfile, __u64 cno,
 				 struct buffer_head *bh)
 {
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu, bh %p\n",
+			cpfile->i_ino, cno, bh);
+
 	kunmap(bh->b_page);
 	brelse(bh);
 }
@@ -287,6 +306,10 @@ int nilfs_cpfile_delete_checkpoints(struct inode *cpfile,
 	void *kaddr;
 	unsigned long tnicps;
 	int ret, ncps, nicps, nss, count, i;
+
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, start %llu, end %llu\n",
+			cpfile->i_ino, start, end);
 
 	if (unlikely(start == 0 || start > end)) {
 		printk(KERN_ERR "%s: invalid range of checkpoint numbers: "
@@ -378,6 +401,10 @@ static void nilfs_cpfile_checkpoint_to_cpinfo(struct inode *cpfile,
 					      struct nilfs_checkpoint *cp,
 					      struct nilfs_cpinfo *ci)
 {
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cp %p, ci %p\n",
+			cpfile->i_ino, cp, ci);
+
 	ci->ci_flags = le32_to_cpu(cp->cp_flags);
 	ci->ci_cno = le64_to_cpu(cp->cp_cno);
 	ci->ci_create = le64_to_cpu(cp->cp_create);
@@ -398,6 +425,10 @@ static ssize_t nilfs_cpfile_do_get_cpinfo(struct inode *cpfile, __u64 *cnop,
 	void *kaddr;
 	int n, ret;
 	int ncps, i;
+
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cnop %p, buf %p, cisz %u, nci %zu\n",
+			cpfile->i_ino, cnop, buf, cisz, nci);
 
 	if (cno == 0)
 		return -ENOENT; /* checkpoint number 0 is invalid */
@@ -448,6 +479,10 @@ static ssize_t nilfs_cpfile_do_get_ssinfo(struct inode *cpfile, __u64 *cnop,
 	unsigned long curr_blkoff, next_blkoff;
 	void *kaddr;
 	int n = 0, ret;
+
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cnop %p, buf %p, cisz %u, nci %zu\n",
+			cpfile->i_ino, cnop, buf, cisz, nci);
 
 	down_read(&NILFS_MDT(cpfile)->mi_sem);
 
@@ -547,6 +582,10 @@ int nilfs_cpfile_delete_checkpoint(struct inode *cpfile, __u64 cno)
 	__u64 tcno = cno;
 	ssize_t nci;
 
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu\n",
+			cpfile->i_ino, cno);
+
 	nci = nilfs_cpfile_do_get_cpinfo(cpfile, &tcno, &ci, sizeof(ci), 1);
 	if (nci < 0)
 		return nci;
@@ -568,6 +607,10 @@ nilfs_cpfile_block_get_snapshot_list(const struct inode *cpfile,
 	struct nilfs_checkpoint *cp;
 	struct nilfs_snapshot_list *list;
 
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu, bh %p, kaddr %p\n",
+			cpfile->i_ino, cno, bh, kaddr);
+
 	if (cno != 0) {
 		cp = nilfs_cpfile_block_get_checkpoint(cpfile, cno, bh, kaddr);
 		list = &cp->cp_snapshot_list;
@@ -588,6 +631,10 @@ static int nilfs_cpfile_set_snapshot(struct inode *cpfile, __u64 cno)
 	unsigned long curr_blkoff, prev_blkoff;
 	void *kaddr;
 	int ret;
+
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu\n",
+			cpfile->i_ino, cno);
 
 	if (cno == 0)
 		return -ENOENT; /* checkpoint number 0 is invalid */
@@ -707,6 +754,10 @@ static int nilfs_cpfile_clear_snapshot(struct inode *cpfile, __u64 cno)
 	void *kaddr;
 	int ret;
 
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu\n",
+			cpfile->i_ino, cno);
+
 	if (cno == 0)
 		return -ENOENT; /* checkpoint number 0 is invalid */
 	down_write(&NILFS_MDT(cpfile)->mi_sem);
@@ -824,6 +875,10 @@ int nilfs_cpfile_is_snapshot(struct inode *cpfile, __u64 cno)
 	void *kaddr;
 	int ret;
 
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu\n",
+			cpfile->i_ino, cno);
+
 	/* CP number is invalid if it's zero or larger than the
 	largest	exist one.*/
 	if (cno == 0 || cno >= nilfs_mdt_cno(cpfile))
@@ -869,6 +924,10 @@ int nilfs_cpfile_change_cpmode(struct inode *cpfile, __u64 cno, int mode)
 {
 	int ret;
 
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cno %llu, mode %#x\n",
+			cpfile->i_ino, cno, mode);
+
 	switch (mode) {
 	case NILFS_CHECKPOINT:
 		if (nilfs_checkpoint_is_mounted(cpfile->i_sb, cno))
@@ -911,6 +970,10 @@ int nilfs_cpfile_get_stat(struct inode *cpfile, struct nilfs_cpstat *cpstat)
 	void *kaddr;
 	int ret;
 
+	nilfs2_debug(DBG_CPFILE,
+			"i_ino %lu, cpstat %p\n",
+			cpfile->i_ino, cpstat);
+
 	down_read(&NILFS_MDT(cpfile)->mi_sem);
 
 	ret = nilfs_cpfile_get_header_block(cpfile, &bh);
@@ -941,6 +1004,10 @@ int nilfs_cpfile_read(struct super_block *sb, size_t cpsize,
 {
 	struct inode *cpfile;
 	int err;
+
+	nilfs2_debug(DBG_CPFILE,
+			"sb %p, cpsize %zu, raw_inode %p, inodep %p\n",
+			sb, cpsize, raw_inode, inodep);
 
 	cpfile = nilfs_iget_locked(sb, NULL, NILFS_CPFILE_INO);
 	if (unlikely(!cpfile))

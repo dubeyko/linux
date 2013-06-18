@@ -68,6 +68,10 @@ int nilfs_ifile_create_inode(struct inode *ifile, ino_t *out_ino,
 	struct nilfs_palloc_req req;
 	int ret;
 
+	nilfs2_debug(DBG_IFILE,
+		"i_ino %lu, out_ino ptr %p, out_bh %p\n",
+		ifile->i_ino, out_ino, out_bh);
+
 	req.pr_entry_nr = 0;  /* 0 says find free inode from beginning of
 				 a group. dull code!! */
 	req.pr_entry_bh = NULL;
@@ -87,6 +91,7 @@ int nilfs_ifile_create_inode(struct inode *ifile, ino_t *out_ino,
 	mark_buffer_dirty(req.pr_entry_bh);
 	nilfs_mdt_mark_dirty(ifile);
 	*out_ino = (ino_t)req.pr_entry_nr;
+	nilfs2_debug(DBG_IFILE, "out_ino %lu\n", *out_ino);
 	*out_bh = req.pr_entry_bh;
 	return 0;
 }
@@ -113,6 +118,10 @@ int nilfs_ifile_delete_inode(struct inode *ifile, ino_t ino)
 	struct nilfs_inode *raw_inode;
 	void *kaddr;
 	int ret;
+
+	nilfs2_debug(DBG_IFILE,
+			"ifile ino %lu, deleted ino %lu\n",
+			ifile->i_ino, ino);
 
 	ret = nilfs_palloc_prepare_free_entry(ifile, &req);
 	if (!ret) {
@@ -146,6 +155,10 @@ int nilfs_ifile_get_inode_block(struct inode *ifile, ino_t ino,
 	struct super_block *sb = ifile->i_sb;
 	int err;
 
+	nilfs2_debug(DBG_IFILE,
+			"ifile ino %lu, get ino %lu, out_bh %p\n",
+			ifile->i_ino, ino, out_bh);
+
 	if (unlikely(!NILFS_VALID_INODE(sb, ino))) {
 		nilfs_error(sb, __func__, "bad inode number: %lu",
 			    (unsigned long) ino);
@@ -173,6 +186,10 @@ int nilfs_ifile_read(struct super_block *sb, struct nilfs_root *root,
 {
 	struct inode *ifile;
 	int err;
+
+	nilfs2_debug(DBG_IFILE,
+		"sb %p, root %p, inode_size %zu, raw_inode %p, inodep %p\n",
+		sb, root, inode_size, raw_inode, inodep);
 
 	ifile = nilfs_iget_locked(sb, root, NILFS_IFILE_INO);
 	if (unlikely(!ifile))

@@ -92,6 +92,9 @@ nilfs_sufile_block_get_segment_usage(const struct inode *sufile, __u64 segnum,
 static inline int nilfs_sufile_get_header_block(struct inode *sufile,
 						struct buffer_head **bhp)
 {
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, bhp %p\n", sufile->i_ino, bhp);
+
 	return nilfs_mdt_get_block(sufile, 0, 0, NULL, bhp);
 }
 
@@ -99,6 +102,10 @@ static inline int
 nilfs_sufile_get_segment_usage_block(struct inode *sufile, __u64 segnum,
 				     int create, struct buffer_head **bhp)
 {
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, create %d, bhp %p\n",
+			sufile->i_ino, segnum, create, bhp);
+
 	return nilfs_mdt_get_block(sufile,
 				   nilfs_sufile_get_blkoff(sufile, segnum),
 				   create, NULL, bhp);
@@ -107,6 +114,10 @@ nilfs_sufile_get_segment_usage_block(struct inode *sufile, __u64 segnum,
 static int nilfs_sufile_delete_segment_usage_block(struct inode *sufile,
 						   __u64 segnum)
 {
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu\n",
+			sufile->i_ino, segnum);
+
 	return nilfs_mdt_delete_block(sufile,
 				      nilfs_sufile_get_blkoff(sufile, segnum));
 }
@@ -116,6 +127,10 @@ static void nilfs_sufile_mod_counter(struct buffer_head *header_bh,
 {
 	struct nilfs_sufile_header *header;
 	void *kaddr;
+
+	nilfs2_debug(DBG_SUFILE,
+			"header_bh %p, ncleanadd %llu, ndirtyadd %llu\n",
+			header_bh, ncleanadd, ndirtyadd);
 
 	kaddr = kmap_atomic(header_bh->b_page);
 	header = kaddr + bh_offset(header_bh);
@@ -174,6 +189,11 @@ int nilfs_sufile_updatev(struct inode *sufile, __u64 *segnumv, size_t nsegs,
 	__u64 *seg;
 	size_t nerr = 0, n = 0;
 	int ret = 0;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnumv %p, nsegs %zu, "
+			"create %d, ndone %p, dofunc %p\n",
+			sufile->i_ino, segnumv, nsegs, create, ndone, dofunc);
 
 	if (unlikely(nsegs == 0))
 		goto out;
@@ -239,6 +259,10 @@ int nilfs_sufile_update(struct inode *sufile, __u64 segnum, int create,
 	struct buffer_head *header_bh, *bh;
 	int ret;
 
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, create %d, dofunc %p\n",
+			sufile->i_ino, segnum, create, dofunc);
+
 	if (unlikely(segnum >= nilfs_sufile_get_nsegments(sufile))) {
 		printk(KERN_WARNING "%s: invalid segment number: %llu\n",
 		       __func__, (unsigned long long)segnum);
@@ -278,6 +302,10 @@ int nilfs_sufile_set_alloc_range(struct inode *sufile, __u64 start, __u64 end)
 	struct nilfs_sufile_info *sui = NILFS_SUI(sufile);
 	__u64 nsegs;
 	int ret = -ERANGE;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, start %llu, end %llu\n",
+			sufile->i_ino, start, end);
 
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 	nsegs = nilfs_sufile_get_nsegments(sufile);
@@ -319,6 +347,10 @@ int nilfs_sufile_alloc(struct inode *sufile, __u64 *segnump)
 	void *kaddr;
 	unsigned long nsegments, ncleansegs, nsus, cnt;
 	int ret, j;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnump %p\n",
+			sufile->i_ino, segnump);
 
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 
@@ -403,6 +435,7 @@ int nilfs_sufile_alloc(struct inode *sufile, __u64 *segnump)
 
  out_sem:
 	up_write(&NILFS_MDT(sufile)->mi_sem);
+	nilfs2_debug(DBG_SUFILE, "segnum %llu\n", *segnump);
 	return ret;
 }
 
@@ -412,6 +445,10 @@ void nilfs_sufile_do_cancel_free(struct inode *sufile, __u64 segnum,
 {
 	struct nilfs_segment_usage *su;
 	void *kaddr;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, header_bh %p, su_bh %p\n",
+			sufile->i_ino, segnum, header_bh, su_bh);
 
 	kaddr = kmap_atomic(su_bh->b_page);
 	su = nilfs_sufile_block_get_segment_usage(sufile, segnum, su_bh, kaddr);
@@ -438,6 +475,10 @@ void nilfs_sufile_do_scrap(struct inode *sufile, __u64 segnum,
 	struct nilfs_segment_usage *su;
 	void *kaddr;
 	int clean, dirty;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, header_bh %p, su_bh %p\n",
+			sufile->i_ino, segnum, header_bh, su_bh);
 
 	kaddr = kmap_atomic(su_bh->b_page);
 	su = nilfs_sufile_block_get_segment_usage(sufile, segnum, su_bh, kaddr);
@@ -469,6 +510,10 @@ void nilfs_sufile_do_free(struct inode *sufile, __u64 segnum,
 	struct nilfs_segment_usage *su;
 	void *kaddr;
 	int sudirty;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, header_bh %p, su_bh %p\n",
+			sufile->i_ino, segnum, header_bh, su_bh);
 
 	kaddr = kmap_atomic(su_bh->b_page);
 	su = nilfs_sufile_block_get_segment_usage(sufile, segnum, su_bh, kaddr);
@@ -502,6 +547,10 @@ int nilfs_sufile_mark_dirty(struct inode *sufile, __u64 segnum)
 	struct buffer_head *bh;
 	int ret;
 
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu\n",
+			sufile->i_ino, segnum);
+
 	ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, 0, &bh);
 	if (!ret) {
 		mark_buffer_dirty(bh);
@@ -525,6 +574,11 @@ int nilfs_sufile_set_segment_usage(struct inode *sufile, __u64 segnum,
 	struct nilfs_segment_usage *su;
 	void *kaddr;
 	int ret;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, "
+			"nblocks %lu, modtime %lu\n",
+			sufile->i_ino, segnum, nblocks, modtime);
 
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 	ret = nilfs_sufile_get_segment_usage_block(sufile, segnum, 0, &bh);
@@ -572,6 +626,9 @@ int nilfs_sufile_get_stat(struct inode *sufile, struct nilfs_sustat *sustat)
 	void *kaddr;
 	int ret;
 
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, sustat %p\n", sufile->i_ino, sustat);
+
 	down_read(&NILFS_MDT(sufile)->mi_sem);
 
 	ret = nilfs_sufile_get_header_block(sufile, &header_bh);
@@ -603,6 +660,10 @@ void nilfs_sufile_do_set_error(struct inode *sufile, __u64 segnum,
 	struct nilfs_segment_usage *su;
 	void *kaddr;
 	int suclean;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, header_bh %p, su_bh %p\n",
+			sufile->i_ino, segnum, header_bh, su_bh);
 
 	kaddr = kmap_atomic(su_bh->b_page);
 	su = nilfs_sufile_block_get_segment_usage(sufile, segnum, su_bh, kaddr);
@@ -654,6 +715,10 @@ static int nilfs_sufile_truncate_range(struct inode *sufile,
 	ssize_t n, nc;
 	int ret;
 	int j;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, start %llu, end %llu\n",
+			sufile->i_ino, start, end);
 
 	nsegs = nilfs_sufile_get_nsegments(sufile);
 
@@ -753,6 +818,10 @@ int nilfs_sufile_resize(struct inode *sufile, __u64 newnsegs)
 	unsigned long nsegs, nrsvsegs;
 	int ret = 0;
 
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, newnsegs %llu\n",
+			sufile->i_ino, newnsegs);
+
 	down_write(&NILFS_MDT(sufile)->mi_sem);
 
 	nsegs = nilfs_sufile_get_nsegments(sufile);
@@ -824,6 +893,11 @@ ssize_t nilfs_sufile_get_suinfo(struct inode *sufile, __u64 segnum, void *buf,
 	ssize_t n;
 	int ret, i, j;
 
+	nilfs2_debug(DBG_SUFILE,
+			"sufile ino %lu, segnum %llu, "
+			"buf %p, sisz %u, nsi %zu\n",
+			sufile->i_ino, segnum, buf, sisz, nsi);
+
 	down_read(&NILFS_MDT(sufile)->mi_sem);
 
 	segusages_per_block = nilfs_sufile_segment_usages_per_block(sufile);
@@ -885,6 +959,10 @@ int nilfs_sufile_read(struct super_block *sb, size_t susize,
 	struct nilfs_sufile_header *header;
 	void *kaddr;
 	int err;
+
+	nilfs2_debug(DBG_SUFILE,
+			"sb %p, susize %zu, raw_inode %p, inodep %p\n",
+			sb, susize, raw_inode, inodep);
 
 	sufile = nilfs_iget_locked(sb, NULL, NILFS_SUFILE_INO);
 	if (unlikely(!sufile))
