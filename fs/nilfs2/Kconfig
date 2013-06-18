@@ -36,6 +36,24 @@ config NILFS2_DEBUG
 
 if NILFS2_DEBUG
 
+config NILFS2_USE_PR_DEBUG
+	bool "Use pr_debug() instead of printk()"
+	default n
+	select DYNAMIC_DEBUG
+	help
+	  This option enables using of pr_debug() instead of printk()
+	  and print_hex_dump_bytes() instead of print_hex_dump().
+
+	  If CONFIG_NILFS2_USE_PR_DEBUG is not set then debugging messages are
+	  selected for printing in system log by means of comparing of
+	  requested flags and DBG_MASK's flags set. Otherwise, the behaviour
+	  of of pr_debug()/print_hex_dump_bytes()s are controlled via writing
+	  to a control file in the 'debugfs' filesystem.
+
+	  If CONFIG_NILFS2_USE_PR_DEBUG option is not set then it is used
+	  printk()/print_hex_dump() for printing debugging messages in
+	  system log.
+
 config NILFS2_DEBUG_SHOW_ERRORS
 	bool "Show internal errors"
 	default n
@@ -59,6 +77,8 @@ config NILFS2_DEBUG_DUMP_STACK
 	  files that are requested by flags. But dump stacks are
 	  printed out for all called functions in the case of dynamic
 	  debug (CONFIG_NILFS2_USE_PR_DEBUG).
+
+if !NILFS2_USE_PR_DEBUG || (NILFS2_USE_PR_DEBUG && !DYNAMIC_DEBUG)
 
 config NILFS2_DEBUG_SUBSYSTEMS
 	bool "Enable output from subsystems"
@@ -141,6 +161,8 @@ config NILFS2_DEBUG_HEXDUMP
 	  have enabled debugging output.
 
 endif # NILFS2_DEBUG_SUBSYSTEMS
+
+endif # !NILFS2_USE_PR_DEBUG || (NILFS2_USE_PR_DEBUG && !DYNAMIC_DEBUG)
 
 endif # NILFS2_DEBUG
 

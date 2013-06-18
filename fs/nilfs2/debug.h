@@ -173,6 +173,37 @@ static u32 DBG_MASK = (
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
 #define NILFS2_DBG_OUT_MASK	0xF0000000
 
+#if (defined(CONFIG_NILFS2_USE_PR_DEBUG) && defined(CONFIG_DYNAMIC_DEBUG))
+
+#define nilfs2_printk(f, a...) \
+	do { \
+		pr_debug("NILFS DEBUG (%s, %d): %s:\n", \
+			__FILE__, __LINE__, __func__); \
+		pr_debug(f, ## a); \
+	} while (0)
+
+#define nilfs2_debug(flg, f, a...) \
+	do { \
+		bool can_dump_stack = DBG_MASK & DBG_DUMP_STACK; \
+		bool should_dump_stack = flg & DBG_DUMP_STACK; \
+		nilfs2_printk(f, ## a); \
+		if (can_dump_stack && should_dump_stack) \
+			dump_stack(); \
+	} while (0)
+
+#define nilfs2_print_hexdump(prefix, ptr, size) \
+	do { \
+		pr_debug("NILFS HEXDUMP (%s, %d): %s:\n", \
+				__FILE__, __LINE__, __func__); \
+		print_hex_dump_bytes(prefix, \
+				DUMP_PREFIX_ADDRESS, ptr, size); \
+	} while (0)
+
+#define nilfs2_hexdump(flg, prefix, ptr, size) \
+		nilfs2_print_hexdump(prefix, ptr, size)
+
+#else /* CONFIG_NILFS2_USE_PR_DEBUG && CONFIG_DYNAMIC_DEBUG */
+
 #define nilfs2_printk(f, a...) \
 	do { \
 		printk(KERN_DEBUG "NILFS DEBUG (%s, %d): %s:\n", \
@@ -220,6 +251,8 @@ static u32 DBG_MASK = (
 				nilfs2_print_hexdump(prefix, ptr, size); \
 		} \
 	} while (0)
+
+#endif /* CONFIG_NILFS2_USE_PR_DEBUG && CONFIG_DYNAMIC_DEBUG */
 
 static inline int nilfs2_error_dbg(unsigned int flg,
 				    const unsigned char *file,
