@@ -618,17 +618,102 @@ hfsplus_richacl_from_xattr(struct inode *inode,
 
 
 
-
-
-
-
-
-static int hfsplus_compose_filesec_from_richacl(struct inode *inode,
-						struct user_namespace *user_ns,
-						struct richacl *acl,
-						struct hfsplus_filesec *filesec,
-						size_t allocated_size)
+static void hfsplus_prepare_ace_applicable(struct inode *inode,
+					    struct user_namespace *user_ns,
+					    struct nfs4_ace *nfs4ace,
+					    struct hfsplus_acl_entry *ace)
 {
+	switch (nfs4ace->whotype) {
+	case NFS4_ACL_WHO_OWNER:
+		HFSPLUS_ACE_SET_OWNER_USER_ID(ace->ace_applicable);
+		break;
+	case NFS4_ACL_WHO_GROUP:
+		HFSPLUS_ACE_SET_GROUP_ID(ace->ace_applicable,
+						i_gid_read(inode));
+		break;
+	case NFS4_ACL_WHO_EVERYONE:
+		HFSPLUS_ACE_SET_GROUP_ID(ace->ace_applicable,
+						HFSPLUS_EVERYBODY_ID);
+		break;
+	case NFS4_ACL_WHO_NAMED:
+		if (nfs4ace->flag & NFS4_ACE_IDENTIFIER_GROUP)
+			HFSPLUS_ACE_SET_GROUP_ID(ace->ace_applicable,
+				from_kgid_munged(user_ns, nfs4ace->who_gid));
+		else
+			HFSPLUS_ACE_SET_USER_ID(ace->ace_applicable,
+				from_kuid_munged(user_ns, nfs4ace->who_uid));
+		break;
+	default:
+		BUG();
+	};
+}
+
+
+
+static int hfsplus_nfsv4_to_hfs_acl(struct inode *inode,
+					struct user_namespace *user_ns,
+					struct nfs4_acl *nfs4acl,
+					struct hfsplus_filesec *filesec,
+					size_t allocated_size)
+{
+	struct nfs4_ace *nfs4ace = nfs4acl->aces;
+	struct hfsplus_acl_record *fsec_acl = &(filesec->fsec_acl);
+	struct hfsplus_acl_entry *ace = fsec_acl->acl_ace;
+	size_t filesec_hdr_size = sizeof(struct hfsplus_filesec);
+	size_t ace_size = sizeof(struct hfsplus_acl_entry);
+	size_t calculated_size = filesec_hdr_size;
+	int err;
+
+	hfs_dbg(ACL_MOD,
+		"[%s]: ino %lu, nfs4acl %p, filesec %p, alloc_sz %zu\n",
+		__func__, inode->i_ino, nfs4acl, filesec, allocated_size);
+
+	if (calculated_size > allocated_size)
+		return HFS_ERR_DBG(ACL_MOD, -ENOMEM);
+
+	memset(filesec, 0, sizeof(struct hfsplus_filesec));
+	filesec->fsec_magic = cpu_to_be32(HFSPLUS_FILESEC_MAGIC);
+	calculated_size += filesec_hdr_size;
+
+	for (; nfs4ace < nfs4acl->aces + nfs4acl->naces; nfs4ace++, ace++) {
+		if ((calculated_size + ace_size) > allocated_size)
+			return HFS_ERR_DBG(ACL_MOD, -ENOMEM);
+
+		hfsplus_prepare_ace_applicable(inode, user_ns,
+						nfs4ace, ace_applicable);
+
+
+
+
+
+		ace->type = hfsplus_ace_extract_nfsv4_type(hfs_ace);
+		ace->access_mask = hfsplus_ace_rights_to_nfsv4(hfs_ace);
+		ace->flag = hfsplus_ace_flags_to_nfsv4(inode, hfs_ace);
+		ace->whotype = hfsplus_ace_extract_nfsv4_whotype(hfs_ace);
+		hfsplus_ace_extract_id(hfs_ace, ace);
+		ace++;
+		acl->naces++;
+
+
+
+	}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 	struct hfsplus_acl_record *fsec_acl = &(filesec->fsec_acl);
 	struct hfsplus_acl_entry *ace = fsec_acl->acl_ace;
 	const struct richace *ace;
@@ -640,8 +725,8 @@ static int hfsplus_compose_filesec_from_richacl(struct inode *inode,
 	int err;
 
 	hfs_dbg(ACL_MOD,
-		"[%s]: ino %lu, pacl %p, filesec %p, alloc_sz %zu\n",
-		__func__, inode->i_ino, pacl, filesec, allocated_size);
+		"[%s]: ino %lu, nfs4acl %p, filesec %p, alloc_sz %zu\n",
+		__func__, inode->i_ino, nfs4acl, filesec, allocated_size);
 
 	if ((calculated_size + filesec_hdr_size) > allocated_size)
 		return HFS_ERR_DBG(ACL_MOD, -ENOMEM);
@@ -660,14 +745,6 @@ static int hfsplus_compose_filesec_from_richacl(struct inode *inode,
 	}
 
 
-
-
-
-
-
-
-
-
 	err = sort_hfsplus_ace(&acl_info);
 	if (unlikely(err)) {
 		hfs_dbg(ACL_MOD,
@@ -676,7 +753,39 @@ static int hfsplus_compose_filesec_from_richacl(struct inode *inode,
 		return err;
 	}
 
-	return 0;
+
+
+
+}
+
+
+
+static int hfsplus_compose_filesec_from_richacl(struct inode *inode,
+						struct user_namespace *user_ns,
+						struct richacl *acl,
+						struct hfsplus_filesec *filesec,
+						size_t allocated_size)
+{
+	struct nfs4_acl *nfs4acl = NULL;
+	int err = 0;
+
+	hfs_dbg(ACL_MOD,
+		"[%s]: ino %lu, acl %p, filesec %p, alloc_sz %zu\n",
+		__func__, inode->i_ino, acl, filesec, allocated_size);
+
+	nfs4acl = nfs4_acl_richacl_to_nfsv4(acl);
+	if (unlikely(nfs4acl == NULL))
+		return HFS_ERR_DBG(ACL_MOD, -ENOMEM);
+	else if (unlikely(IS_ERR(nfs4acl)))
+		return nfs4acl;
+
+	err = hfsplus_nfsv4_to_hfs_acl(inode, user_ns, nfs4acl,
+					filesec, allocated_size);
+	if (unlikely(err))
+		HFS_ERR_DBG(ACL_MOD, err);
+
+	kfree(nfs4acl);
+	return err;
 }
 
 static struct hfsplus_filesec *hfsplus_richacl_to_filesec(struct inode *inode,
