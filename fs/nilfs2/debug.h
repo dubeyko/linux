@@ -109,6 +109,17 @@
  */
 #define DBG_SPAM	0x40000000
 
+/*
+ * This flag enables writing in system log hexdumps of internal
+ * structures. Some of big internal and raw on-disk structures can be
+ * written in system log for deep analysis of processed data related
+ * to an issue. Please, remember that hexdump output is depended
+ * implicitly from options that enable output of concrete modules of
+ * NILFS2 driver. It makes sense to log hexdumps only for modules that
+ * have enabled debugging output.
+ */
+#define DBG_HEX_DUMP	0x80000000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -143,6 +154,9 @@ static u32 DBG_MASK = (
 #ifdef CONFIG_NILFS2_DEBUG_SHOW_SPAM
 	DBG_SPAM |
 #endif /* CONFIG_NILFS2_DEBUG_SHOW_SPAM */
+#ifdef CONFIG_NILFS2_DEBUG_HEXDUMP
+	DBG_HEX_DUMP |
+#endif /* CONFIG_NILFS2_DEBUG_HEXDUMP */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
@@ -172,9 +186,34 @@ static u32 DBG_MASK = (
 		} \
 	} while (0)
 
+#define nilfs2_print_hexdump(prefix, ptr, size) \
+	do { \
+		printk(KERN_DEBUG "NILFS HEXDUMP (%s, %d): %s:\n", \
+				__FILE__, __LINE__, __func__); \
+		print_hex_dump(KERN_DEBUG, prefix, \
+				DUMP_PREFIX_ADDRESS, 16, 1, \
+				ptr, size, true); \
+	} while (0)
+
+#define nilfs2_hexdump(flg, prefix, ptr, size) \
+	do { \
+		bool can_print_spam = DBG_MASK & DBG_SPAM; \
+		bool is_spam = flg & DBG_SPAM; \
+		bool can_do_hexdump = DBG_MASK & DBG_HEX_DUMP; \
+		bool is_hexdump = flg & DBG_HEX_DUMP; \
+		if ((flg & NILFS2_SUBSYS_MASK) & DBG_MASK) { \
+			if (!is_spam && (is_hexdump && can_do_hexdump)) \
+				nilfs2_print_hexdump(prefix, ptr, size); \
+			else if ((is_spam && can_print_spam) && \
+					(is_hexdump && can_do_hexdump)) \
+				nilfs2_print_hexdump(prefix, ptr, size); \
+		} \
+	} while (0)
+
 #else /* CONFIG_NILFS2_DEBUG */
 
 #define nilfs2_debug(flg, fmt, ...)	no_printk(fmt, ##__VA_ARGS__)
+#define nilfs2_hexdump(flg, prefix, ptr, size)	no_printk(prefix)
 
 #endif /* CONFIG_NILFS2_DEBUG */
 
