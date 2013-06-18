@@ -73,6 +73,12 @@ config NILFS2_DEBUG_GC_SUBSYSTEM
 	help
 	  This option enables debugging output in gcinode.c module.
 
+config NILFS2_DEBUG_RECOVERY_SUBSYSTEM
+	bool "Enable recovery subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in recovery.c module.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG

@@ -65,6 +65,12 @@
  */
 #define DBG_GCINODE	0x00008000
 
+/*
+ * These flags enable debugging output in modules that
+ * implement recovery subsystem functionality (recovery.c).
+ */
+#define DBG_RECOVERY	0x00010000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -83,6 +89,9 @@ static u32 DBG_MASK = (
 #ifdef CONFIG_NILFS2_DEBUG_GC_SUBSYSTEM
 	DBG_GCINODE | DBG_IOCTL |
 #endif /* CONFIG_NILFS2_DEBUG_GC_SUBSYSTEM */
+#ifdef CONFIG_NILFS2_DEBUG_RECOVERY_SUBSYSTEM
+	DBG_RECOVERY |
+#endif /* CONFIG_NILFS2_DEBUG_RECOVERY_SUBSYSTEM */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
