@@ -51,6 +51,14 @@
 #define DBG_IFILE	0x00000800
 #define DBG_SUFILE	0x00001000
 
+/*
+ * These flags enable debugging output in modules that
+ * implement segments subsystem functionality
+ * (segbuf.c, segment.c).
+ */
+#define DBG_SEGBUF	0x00002000
+#define DBG_SEGMENT	0x00004000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -63,6 +71,9 @@ static u32 DBG_MASK = (
 	DBG_MDT | DBG_CPFILE | DBG_DAT |
 	DBG_IFILE | DBG_SUFILE |
 #endif /* CONFIG_NILFS2_DEBUG_MDT_FILES */
+#ifdef CONFIG_NILFS2_DEBUG_SEGMENTS_SUBSYSTEM
+	DBG_SEGBUF | DBG_SEGMENT |
+#endif /* CONFIG_NILFS2_DEBUG_SEGMENTS_SUBSYSTEM */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF

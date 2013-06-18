@@ -60,6 +60,13 @@ config NILFS2_DEBUG_MDT_FILES
 	  This option enables debugging output in mdt.c, cpfile.c, dat.c,
 	  ifile.c, sufile.c modules.
 
+config NILFS2_DEBUG_SEGMENTS_SUBSYSTEM
+	bool "Enable segments subsystem debugging output"
+	default n
+	help
+	  This option enables debugging output in segbuf.c, segment.c
+	  modules.
+
 endif # NILFS2_DEBUG_SUBSYSTEMS
 
 endif # NILFS2_DEBUG
