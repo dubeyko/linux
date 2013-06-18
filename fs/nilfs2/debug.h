@@ -89,6 +89,15 @@
  */
 #define DBG_PAGE	0x00400000
 
+/*
+ * This flag enables output of dump stack. Usually, every
+ * function in NILFS2 driver begins from debugging output of
+ * function name, file, line and input arguments' value.
+ * In the case of enabling this option debugging output
+ * will include dump stack too.
+ */
+#define DBG_DUMP_STACK	0x20000000
+
 #ifdef CONFIG_NILFS2_DEBUG
 
 /* Definition of flags' set for debugging */
@@ -117,6 +126,9 @@ static u32 DBG_MASK = (
 #ifdef CONFIG_NILFS2_DEBUG_BUFFER_MANAGEMENT
 	DBG_PAGE |
 #endif /* CONFIG_NILFS2_DEBUG_BUFFER_MANAGEMENT */
+#ifdef CONFIG_NILFS2_DEBUG_DUMP_STACK
+	DBG_DUMP_STACK |
+#endif /* CONFIG_NILFS2_DEBUG_DUMP_STACK */
 	0);
 
 #define NILFS2_SUBSYS_MASK	0x0FFFFFFF
@@ -131,8 +143,13 @@ static u32 DBG_MASK = (
 
 #define nilfs2_debug(flg, f, a...) \
 	do { \
-		if ((flg & NILFS2_SUBSYS_MASK) & DBG_MASK) \
+		bool can_dump_stack = DBG_MASK & DBG_DUMP_STACK; \
+		bool should_dump_stack = flg & DBG_DUMP_STACK; \
+		if ((flg & NILFS2_SUBSYS_MASK) & DBG_MASK) { \
 			nilfs2_printk(f, ## a); \
+			if (can_dump_stack && should_dump_stack) \
+				dump_stack(); \
+		} \
 	} while (0)
 
 #else /* CONFIG_NILFS2_DEBUG */

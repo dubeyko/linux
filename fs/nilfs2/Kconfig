@@ -36,6 +36,21 @@ config NILFS2_DEBUG
 
 if NILFS2_DEBUG
 
+config NILFS2_DEBUG_DUMP_STACK
+	bool "Enable dump stack output"
+	default n
+	help
+	  This option enables output of dump stack. Usually, every
+	  function in NILFS2 driver begins from debugging output of
+	  function name, file, line and input arguments' value.
+	  In the case of enabling this option debugging output
+	  will include dump stack too.
+
+	  Usually, dump stacks are printed out for called functions from
+	  files that are requested by flags. But dump stacks are
+	  printed out for all called functions in the case of dynamic
+	  debug (CONFIG_NILFS2_USE_PR_DEBUG).
+
 config NILFS2_DEBUG_SUBSYSTEMS
 	bool "Enable output from subsystems"
 	depends on NILFS2_DEBUG
