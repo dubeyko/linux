@@ -192,6 +192,9 @@ static int nilfs_sync_super(struct super_block *sb, int flag)
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	int err;
 
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, flag %#x\n", sb, flag);
+
  retry:
 	set_buffer_dirty(nilfs->ns_sbh[0]);
 	if (nilfs_test_opt(nilfs, BARRIER)) {
@@ -259,6 +262,14 @@ void nilfs_set_log_cursor(struct nilfs_super_block *sbp,
 	sbp->s_last_pseg = cpu_to_le64(nilfs->ns_last_pseg);
 	sbp->s_last_cno = cpu_to_le64(nilfs->ns_last_cno);
 	spin_unlock(&nilfs->ns_last_segment_lock);
+
+	nilfs2_debug(DBG_SUPER,
+			"free_blocks %llu, last_seq %llu, "
+			"last_pseg %llu, last_cno %llu\n",
+			sbp->s_free_blocks_count,
+			sbp->s_last_seq,
+			sbp->s_last_pseg,
+			sbp->s_last_cno);
 }
 
 struct nilfs_super_block **nilfs_prepare_super(struct super_block *sb,
@@ -266,6 +277,9 @@ struct nilfs_super_block **nilfs_prepare_super(struct super_block *sb,
 {
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	struct nilfs_super_block **sbp = nilfs->ns_sbp;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, flip %d\n", sb, flip);
 
 	/* nilfs->ns_sem must be locked by the caller. */
 	if (sbp[0]->s_magic != cpu_to_le16(NILFS_SUPER_MAGIC)) {
@@ -293,6 +307,9 @@ int nilfs_commit_super(struct super_block *sb, int flag)
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	struct nilfs_super_block **sbp = nilfs->ns_sbp;
 	time_t t;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, flag %#x\n", sb, flag);
 
 	/* nilfs->ns_sem must be locked by the caller. */
 	t = get_seconds();
@@ -328,6 +345,8 @@ int nilfs_cleanup_super(struct super_block *sb)
 	int flag = NILFS_SB_COMMIT;
 	int ret = -EIO;
 
+	nilfs2_debug(DBG_SUPER, "sb %p\n", sb);
+
 	sbp = nilfs_prepare_super(sb, 0);
 	if (sbp) {
 		sbp[0]->s_state = cpu_to_le16(nilfs->ns_mount_state);
@@ -360,6 +379,9 @@ static int nilfs_move_2nd_super(struct super_block *sb, loff_t sb2off)
 	unsigned long offset;
 	int sb2i = -1;  /* array index of the secondary superblock */
 	int ret = 0;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, sb2off %llu\n", sb, sb2off);
 
 	/* nilfs->ns_sem must be locked by the caller. */
 	if (nilfs->ns_sbh[1] &&
@@ -415,6 +437,9 @@ int nilfs_resize_fs(struct super_block *sb, __u64 newsize)
 	__u64 devsize, newnsegs;
 	loff_t sb2off;
 	int ret;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, newsize %llu\n", sb, newsize);
 
 	ret = -ERANGE;
 	devsize = i_size_read(sb->s_bdev->bd_inode);
@@ -478,6 +503,8 @@ static void nilfs_put_super(struct super_block *sb)
 {
 	struct the_nilfs *nilfs = sb->s_fs_info;
 
+	nilfs2_debug(DBG_SUPER, "sb %p\n", sb);
+
 	nilfs_detach_log_writer(sb);
 
 	if (!(sb->s_flags & MS_RDONLY)) {
@@ -499,6 +526,8 @@ static int nilfs_sync_fs(struct super_block *sb, int wait)
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	struct nilfs_super_block **sbp;
 	int err = 0;
+
+	nilfs2_debug(DBG_SUPER, "sb %p, wait %d\n", sb, wait);
 
 	/* This function is called when super block should be written back */
 	if (wait)
@@ -525,6 +554,10 @@ int nilfs_attach_checkpoint(struct super_block *sb, __u64 cno, int curr_mnt,
 	struct nilfs_checkpoint *raw_cp;
 	struct buffer_head *bh_cp;
 	int err = -ENOMEM;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, cno %llu, curr_mnt %d, rootp %p\n",
+			sb, cno, curr_mnt, rootp);
 
 	root = nilfs_find_or_create_root(
 		nilfs, curr_mnt ? NILFS_CPTREE_CURRENT_CNO : cno);
@@ -579,6 +612,8 @@ static int nilfs_freeze(struct super_block *sb)
 	if (sb->s_flags & MS_RDONLY)
 		return 0;
 
+	nilfs2_debug(DBG_SUPER, "sb %p\n", sb);
+
 	/* Mark super block clean */
 	down_write(&nilfs->ns_sem);
 	err = nilfs_cleanup_super(sb);
@@ -592,6 +627,8 @@ static int nilfs_unfreeze(struct super_block *sb)
 
 	if (sb->s_flags & MS_RDONLY)
 		return 0;
+
+	nilfs2_debug(DBG_SUPER, "sb %p\n", sb);
 
 	down_write(&nilfs->ns_sem);
 	nilfs_setup_super(sb, false);
@@ -610,6 +647,9 @@ static int nilfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	unsigned long nrsvblocks;
 	sector_t nfreeblocks;
 	int err;
+
+	nilfs2_debug(DBG_SUPER,
+			"dentry %p, buf %p\n", dentry, buf);
 
 	/*
 	 * Compute all of the segment blocks
@@ -653,6 +693,9 @@ static int nilfs_show_options(struct seq_file *seq, struct dentry *dentry)
 	struct super_block *sb = dentry->d_sb;
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	struct nilfs_root *root = NILFS_I(dentry->d_inode)->i_root;
+
+	nilfs2_debug(DBG_SUPER,
+			"seq %p, dentry %p\n", seq, dentry);
 
 	if (!nilfs_test_opt(nilfs, BARRIER))
 		seq_puts(seq, ",nobarrier");
@@ -711,6 +754,10 @@ static int parse_options(char *options, struct super_block *sb, int is_remount)
 	struct the_nilfs *nilfs = sb->s_fs_info;
 	char *p;
 	substring_t args[MAX_OPT_ARGS];
+
+	nilfs2_debug(DBG_SUPER,
+			"options %p, sb %p, is_remount %d\n",
+			options, sb, is_remount);
 
 	if (!options)
 		return 1;
@@ -790,6 +837,9 @@ static int nilfs_setup_super(struct super_block *sb, int is_mount)
 	int max_mnt_count;
 	int mnt_count;
 
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, is_mount %d\n", sb, is_mount);
+
 	/* nilfs->ns_sem must be locked by the caller. */
 	sbp = nilfs_prepare_super(sb, 0);
 	if (!sbp)
@@ -832,6 +882,10 @@ struct nilfs_super_block *nilfs_read_super_block(struct super_block *sb,
 	unsigned long long sb_index = pos;
 	unsigned long offset;
 
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, pos %llu, blocksize %d, pbh %p\n",
+			sb, pos, blocksize, pbh);
+
 	offset = do_div(sb_index, blocksize);
 	*pbh = sb_bread(sb, sb_index);
 	if (!*pbh)
@@ -846,6 +900,10 @@ int nilfs_store_magic_and_option(struct super_block *sb,
 	struct the_nilfs *nilfs = sb->s_fs_info;
 
 	sb->s_magic = le16_to_cpu(sbp->s_magic);
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, sbp %p, data %p, magic %#lx\n",
+			sb, sbp, data, sb->s_magic);
 
 	/* FS independent flags */
 #ifdef NILFS_ATIME_DISABLE
@@ -869,6 +927,8 @@ int nilfs_check_feature_compatibility(struct super_block *sb,
 
 	features = le64_to_cpu(sbp->s_feature_incompat) &
 		~NILFS_FEATURE_INCOMPAT_SUPP;
+	nilfs2_debug(DBG_SUPER,
+			"incompat features %#llx\n", features);
 	if (features) {
 		printk(KERN_ERR "NILFS: couldn't mount because of unsupported "
 		       "optional features (%llx)\n",
@@ -877,6 +937,8 @@ int nilfs_check_feature_compatibility(struct super_block *sb,
 	}
 	features = le64_to_cpu(sbp->s_feature_compat_ro) &
 		~NILFS_FEATURE_COMPAT_RO_SUPP;
+	nilfs2_debug(DBG_SUPER,
+			"compat RO features %#llx\n", features);
 	if (!(sb->s_flags & MS_RDONLY) && features) {
 		printk(KERN_ERR "NILFS: couldn't mount RDWR because of "
 		       "unsupported optional features (%llx)\n",
@@ -893,6 +955,10 @@ static int nilfs_get_root_dentry(struct super_block *sb,
 	struct inode *inode;
 	struct dentry *dentry;
 	int ret = 0;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, root %p, root_dentry %p\n",
+			sb, root, root_dentry);
 
 	inode = nilfs_iget(sb, root, NILFS_ROOT_INO);
 	if (IS_ERR(inode)) {
@@ -940,6 +1006,10 @@ static int nilfs_attach_snapshot(struct super_block *s, __u64 cno,
 	struct the_nilfs *nilfs = s->s_fs_info;
 	struct nilfs_root *root;
 	int ret;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, cno %llu, root_dentry %p\n",
+			s, cno, root_dentry);
 
 	mutex_lock(&nilfs->ns_snapshot_mount_mutex);
 
@@ -998,6 +1068,9 @@ int nilfs_checkpoint_is_mounted(struct super_block *sb, __u64 cno)
 	struct dentry *dentry;
 	int ret;
 
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, cno %llu\n", sb, cno);
+
 	if (cno < 0 || cno > nilfs->ns_cno)
 		return false;
 
@@ -1039,6 +1112,9 @@ nilfs_fill_super(struct super_block *sb, void *data, int silent)
 	struct backing_dev_info *bdi;
 	__u64 cno;
 	int err;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, data %p, silent %d\n", sb, data, silent);
 
 	nilfs = alloc_nilfs(sb->s_bdev);
 	if (!nilfs)
@@ -1113,6 +1189,9 @@ static int nilfs_remount(struct super_block *sb, int *flags, char *data)
 	unsigned long old_sb_flags;
 	unsigned long old_mount_opt;
 	int err;
+
+	nilfs2_debug(DBG_SUPER,
+			"sb %p, flags %#x, data %p\n", sb, *flags, data);
 
 	old_sb_flags = sb->s_flags;
 	old_mount_opt = nilfs->ns_mount_opt;
@@ -1206,6 +1285,10 @@ static int nilfs_identify(char *data, struct nilfs_super_data *sd)
 	int token;
 	int ret = 0;
 
+	nilfs2_debug(DBG_SUPER,
+			"data %p, cno %llu, flags %#x\n",
+			data, sd->cno, sd->flags);
+
 	do {
 		p = strsep(&options, ",");
 		if (p != NULL && *p) {
@@ -1258,6 +1341,10 @@ nilfs_mount(struct file_system_type *fs_type, int flags,
 	fmode_t mode = FMODE_READ | FMODE_EXCL;
 	struct dentry *root_dentry;
 	int err, s_new = false;
+
+	nilfs2_debug(DBG_SUPER,
+			"fs_type %p, flags %#x, dev_name %p, data %p\n",
+			fs_type, flags, dev_name, data);
 
 	if (!(flags & MS_RDONLY))
 		mode |= FMODE_WRITE;

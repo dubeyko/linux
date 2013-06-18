@@ -41,6 +41,10 @@ static int nilfs_valid_sb(struct nilfs_super_block *sbp);
 void nilfs_set_last_segment(struct the_nilfs *nilfs,
 			    sector_t start_blocknr, u64 seq, __u64 cno)
 {
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, start_blocknr %lu, seq %llu, cno %llu\n",
+			nilfs, start_blocknr, seq, cno);
+
 	spin_lock(&nilfs->ns_last_segment_lock);
 	nilfs->ns_last_pseg = start_blocknr;
 	nilfs->ns_last_seq = seq;
@@ -69,6 +73,8 @@ struct the_nilfs *alloc_nilfs(struct block_device *bdev)
 {
 	struct the_nilfs *nilfs;
 
+	nilfs2_debug(DBG_THE_NILFS, "bdev %p\n", bdev);
+
 	nilfs = kzalloc(sizeof(*nilfs), GFP_KERNEL);
 	if (!nilfs)
 		return NULL;
@@ -95,6 +101,8 @@ struct the_nilfs *alloc_nilfs(struct block_device *bdev)
  */
 void destroy_nilfs(struct the_nilfs *nilfs)
 {
+	nilfs2_debug(DBG_THE_NILFS, "nilfs %p\n", nilfs);
+
 	might_sleep();
 	if (nilfs_init(nilfs)) {
 		brelse(nilfs->ns_sbh[0]);
@@ -113,6 +121,10 @@ static int nilfs_load_super_root(struct the_nilfs *nilfs,
 	unsigned dat_entry_size, segment_usage_size, checkpoint_size;
 	unsigned inode_size;
 	int err;
+
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, sb %p, sr_block %lu\n",
+			nilfs, sb, sr_block);
 
 	err = nilfs_read_super_root_block(nilfs, sr_block, &bh_sr, 1);
 	if (unlikely(err))
@@ -187,6 +199,12 @@ static int nilfs_store_log_cursor(struct the_nilfs *nilfs,
 	nilfs->ns_last_cno = le64_to_cpu(sbp->s_last_cno);
 	nilfs->ns_last_seq = le64_to_cpu(sbp->s_last_seq);
 
+	nilfs2_debug(DBG_THE_NILFS,
+			"last_pseg %lu, last_cno %llu, last_seq %llu\n",
+			nilfs->ns_last_pseg,
+			nilfs->ns_last_cno,
+			nilfs->ns_last_seq);
+
 	nilfs->ns_prev_seq = nilfs->ns_last_seq;
 	nilfs->ns_seg_seq = nilfs->ns_last_seq;
 	nilfs->ns_segnum =
@@ -215,6 +233,10 @@ int load_nilfs(struct the_nilfs *nilfs, struct super_block *sb)
 	int really_read_only = bdev_read_only(nilfs->ns_bdev);
 	int valid_fs = nilfs_valid_fs(nilfs);
 	int err;
+
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, sb %p, s_flags %#x, RO %d, valid_fs %d\n",
+			nilfs, sb, s_flags, really_read_only, valid_fs);
 
 	if (!valid_fs) {
 		printk(KERN_WARNING "NILFS warning: mounting unchecked fs\n");
@@ -490,6 +512,10 @@ static int nilfs_load_super_block(struct the_nilfs *nilfs,
 	u64 sb2off = NILFS_SB2_OFFSET_BYTES(nilfs->ns_bdev->bd_inode->i_size);
 	int valid[2], swp = 0;
 
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, sb %p, blocksize %d, sbpp %p\n",
+			nilfs, sb, blocksize, sbpp);
+
 	sbp[0] = nilfs_read_super_block(sb, NILFS_SB_OFFSET_BYTES, blocksize,
 					&sbh[0]);
 	sbp[1] = nilfs_read_super_block(sb, sb2off, blocksize, &sbh[1]);
@@ -563,6 +589,9 @@ int init_nilfs(struct the_nilfs *nilfs, struct super_block *sb, char *data)
 	struct nilfs_super_block *sbp;
 	int blocksize;
 	int err;
+
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, sb %p, data %p\n", nilfs, sb, data);
 
 	down_write(&nilfs->ns_sem);
 
@@ -650,6 +679,10 @@ int nilfs_discard_segments(struct the_nilfs *nilfs, __u64 *segnump,
 	__u64 *sn;
 	int ret = 0;
 
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, segnump %p, nsegs %zu\n",
+			nilfs, segnump, nsegs);
+
 	sects_per_block = (1 << nilfs->ns_blocksize_bits) /
 		bdev_logical_block_size(nilfs->ns_bdev);
 	for (sn = segnump; sn < segnump + nsegs; sn++) {
@@ -705,6 +738,9 @@ struct nilfs_root *nilfs_lookup_root(struct the_nilfs *nilfs, __u64 cno)
 	struct rb_node *n;
 	struct nilfs_root *root;
 
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, cno %llu\n", nilfs, cno);
+
 	spin_lock(&nilfs->ns_cptree_lock);
 	n = nilfs->ns_cptree.rb_node;
 	while (n) {
@@ -730,6 +766,9 @@ nilfs_find_or_create_root(struct the_nilfs *nilfs, __u64 cno)
 {
 	struct rb_node **p, *parent;
 	struct nilfs_root *root, *new;
+
+	nilfs2_debug(DBG_THE_NILFS,
+			"nilfs %p, cno %llu\n", nilfs, cno);
 
 	root = nilfs_lookup_root(nilfs, cno);
 	if (root)
@@ -779,6 +818,9 @@ void nilfs_put_root(struct nilfs_root *root)
 {
 	if (atomic_dec_and_test(&root->count)) {
 		struct the_nilfs *nilfs = root->nilfs;
+
+		nilfs2_debug(DBG_THE_NILFS,
+				"cno %llu\n", root->cno);
 
 		spin_lock(&nilfs->ns_cptree_lock);
 		rb_erase(&root->rb_node, &nilfs->ns_cptree);

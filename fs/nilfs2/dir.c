@@ -268,6 +268,8 @@ static int nilfs_readdir(struct file *filp, void *dirent, filldir_t filldir)
 	unsigned char *types = NULL;
 	int ret;
 
+	nilfs2_debug(DBG_DIR, "i_ino %lu\n", inode->i_ino);
+
 	if (pos > inode->i_size - NILFS_DIR_REC_LEN(1))
 		goto success;
 
@@ -345,6 +347,8 @@ nilfs_find_entry(struct inode *dir, const struct qstr *qstr,
 	struct nilfs_inode_info *ei = NILFS_I(dir);
 	struct nilfs_dir_entry *de;
 
+	nilfs2_debug(DBG_DIR, "i_ino %lu\n", dir->i_ino);
+
 	if (npages == 0)
 		goto out;
 
@@ -400,6 +404,8 @@ struct nilfs_dir_entry *nilfs_dotdot(struct inode *dir, struct page **p)
 	struct page *page = nilfs_get_page(dir, 0);
 	struct nilfs_dir_entry *de = NULL;
 
+	nilfs2_debug(DBG_DIR, "i_ino %lu\n", dir->i_ino);
+
 	if (!IS_ERR(page)) {
 		de = nilfs_next_entry(
 			(struct nilfs_dir_entry *)page_address(page));
@@ -413,6 +419,8 @@ ino_t nilfs_inode_by_name(struct inode *dir, const struct qstr *qstr)
 	ino_t res = 0;
 	struct nilfs_dir_entry *de;
 	struct page *page;
+
+	nilfs2_debug(DBG_DIR, "i_ino %lu\n", dir->i_ino);
 
 	de = nilfs_find_entry(dir, qstr, &page);
 	if (de) {
@@ -431,6 +439,10 @@ void nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 	unsigned to = from + nilfs_rec_len_from_disk(de->rec_len);
 	struct address_space *mapping = page->mapping;
 	int err;
+
+	nilfs2_debug(DBG_DIR,
+			"dir->i_ino %lu, inode->i_ino %lu\n",
+			dir->i_ino, inode->i_ino);
 
 	lock_page(page);
 	err = nilfs_prepare_chunk(page, from, to);
@@ -460,6 +472,10 @@ int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 	char *kaddr;
 	unsigned from, to;
 	int err;
+
+	nilfs2_debug(DBG_DIR,
+			"dir->i_ino %lu, inode->i_ino %lu\n",
+			dir->i_ino, inode->i_ino);
 
 	/*
 	 * We take care of directory expansion in the same loop.
@@ -557,6 +573,8 @@ int nilfs_delete_entry(struct nilfs_dir_entry *dir, struct page *page)
 	struct nilfs_dir_entry *de = (struct nilfs_dir_entry *)(kaddr + from);
 	int err;
 
+	nilfs2_debug(DBG_DIR, "i_ino %lu\n", inode->i_ino);
+
 	while ((char *)de < (char *)dir) {
 		if (de->rec_len == 0) {
 			nilfs_error(inode->i_sb, __func__,
@@ -593,6 +611,10 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 	struct nilfs_dir_entry *de;
 	int err;
 	void *kaddr;
+
+	nilfs2_debug(DBG_DIR,
+			"parent->i_ino %lu, inode->i_ino %lu\n",
+			parent->i_ino, inode->i_ino);
 
 	if (!page)
 		return -ENOMEM;
@@ -631,6 +653,8 @@ int nilfs_empty_dir(struct inode *inode)
 {
 	struct page *page = NULL;
 	unsigned long i, npages = dir_pages(inode);
+
+	nilfs2_debug(DBG_DIR, "i_ino %lu\n", inode->i_ino);
 
 	for (i = 0; i < npages; i++) {
 		char *kaddr;

@@ -29,6 +29,7 @@
 #include <linux/spinlock.h>
 #include <linux/blkdev.h>
 #include <linux/nilfs2_fs.h>
+#include "debug.h"
 #include "the_nilfs.h"
 #include "bmap.h"
 

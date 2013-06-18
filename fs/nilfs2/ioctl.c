@@ -51,6 +51,10 @@ static int nilfs_ioctl_wrap_copy(struct the_nilfs *nilfs,
 	int ret, i;
 	__u64 pos, ppos;
 
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, argv %p, dir %d, dofunc %p\n",
+			nilfs, argv, dir, dofunc);
+
 	if (argv->v_nmembs == 0)
 		return 0;
 
@@ -103,6 +107,9 @@ static int nilfs_ioctl_getflags(struct inode *inode, void __user *argp)
 {
 	unsigned int flags = NILFS_I(inode)->i_flags & FS_FL_USER_VISIBLE;
 
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, argp %p\n", inode->i_ino, argp);
+
 	return put_user(flags, (int __user *)argp);
 }
 
@@ -112,6 +119,10 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 	struct nilfs_transaction_info ti;
 	unsigned int flags, oldflags;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, argp %p\n",
+			inode->i_ino, filp, argp);
 
 	if (!inode_owner_or_capable(inode))
 		return -EACCES;
@@ -160,6 +171,9 @@ out:
 
 static int nilfs_ioctl_getversion(struct inode *inode, void __user *argp)
 {
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, argp %p\n", inode->i_ino, argp);
+
 	return put_user(inode->i_generation, (int __user *)argp);
 }
 
@@ -170,6 +184,10 @@ static int nilfs_ioctl_change_cpmode(struct inode *inode, struct file *filp,
 	struct nilfs_transaction_info ti;
 	struct nilfs_cpmode cpmode;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -207,6 +225,10 @@ nilfs_ioctl_delete_checkpoint(struct inode *inode, struct file *filp,
 	__u64 cno;
 	int ret;
 
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
+
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
@@ -235,6 +257,11 @@ nilfs_ioctl_do_get_cpinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 {
 	int ret;
 
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, posp %p, flags %#x, "
+			"buf %p, size %zu, nmembs %zu\n",
+			nilfs, posp, flags, buf, size, nmembs);
+
 	down_read(&nilfs->ns_segctor_sem);
 	ret = nilfs_cpfile_get_cpinfo(nilfs->ns_cpfile, posp, flags, buf,
 				      size, nmembs);
@@ -248,6 +275,10 @@ static int nilfs_ioctl_get_cpstat(struct inode *inode, struct file *filp,
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	struct nilfs_cpstat cpstat;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
 
 	down_read(&nilfs->ns_segctor_sem);
 	ret = nilfs_cpfile_get_stat(nilfs->ns_cpfile, &cpstat);
@@ -266,6 +297,11 @@ nilfs_ioctl_do_get_suinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 {
 	int ret;
 
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, posp %p, flags %#x, "
+			"buf %p, size %zu, nmembs %zu\n",
+			nilfs, posp, flags, buf, size, nmembs);
+
 	down_read(&nilfs->ns_segctor_sem);
 	ret = nilfs_sufile_get_suinfo(nilfs->ns_sufile, *posp, buf, size,
 				      nmembs);
@@ -279,6 +315,10 @@ static int nilfs_ioctl_get_sustat(struct inode *inode, struct file *filp,
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	struct nilfs_sustat sustat;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
 
 	down_read(&nilfs->ns_segctor_sem);
 	ret = nilfs_sufile_get_stat(nilfs->ns_sufile, &sustat);
@@ -297,6 +337,11 @@ nilfs_ioctl_do_get_vinfo(struct the_nilfs *nilfs, __u64 *posp, int flags,
 {
 	int ret;
 
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, posp %p, flags %#x, "
+			"buf %p, size %zu, nmembs %zu\n",
+			nilfs, posp, flags, buf, size, nmembs);
+
 	down_read(&nilfs->ns_segctor_sem);
 	ret = nilfs_dat_get_vinfo(nilfs->ns_dat, buf, size, nmembs);
 	up_read(&nilfs->ns_segctor_sem);
@@ -310,6 +355,11 @@ nilfs_ioctl_do_get_bdescs(struct the_nilfs *nilfs, __u64 *posp, int flags,
 	struct nilfs_bmap *bmap = NILFS_I(nilfs->ns_dat)->i_bmap;
 	struct nilfs_bdesc *bdescs = buf;
 	int ret, i;
+
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, posp %p, flags %#x, "
+			"buf %p, size %zu, nmembs %zu\n",
+			nilfs, posp, flags, buf, size, nmembs);
 
 	down_read(&nilfs->ns_segctor_sem);
 	for (i = 0; i < nmembs; i++) {
@@ -336,6 +386,10 @@ static int nilfs_ioctl_get_bdescs(struct inode *inode, struct file *filp,
 	struct nilfs_argv argv;
 	int ret;
 
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
+
 	if (copy_from_user(&argv, argp, sizeof(argv)))
 		return -EFAULT;
 
@@ -358,6 +412,10 @@ static int nilfs_ioctl_move_inode_block(struct inode *inode,
 {
 	struct buffer_head *bh;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, vdesc %p, buffers %p\n",
+			inode->i_ino, vdesc, buffers);
 
 	if (vdesc->vd_flags == 0)
 		ret = nilfs_gccache_submit_read_data(
@@ -409,6 +467,9 @@ static int nilfs_ioctl_move_blocks(struct super_block *sb,
 	ino_t ino;
 	__u64 cno;
 	int i, ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"sb %p, argv %p, buf %p\n", sb, argv, buf);
 
 	for (i = 0, vdesc = buf; i < nmembs; ) {
 		ino = vdesc->vd_ino;
@@ -470,6 +531,9 @@ static int nilfs_ioctl_delete_checkpoints(struct the_nilfs *nilfs,
 	struct nilfs_period *periods = buf;
 	int ret, i;
 
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
+
 	for (i = 0; i < nmembs; i++) {
 		ret = nilfs_cpfile_delete_checkpoints(
 			cpfile, periods[i].p_start, periods[i].p_end);
@@ -485,6 +549,9 @@ static int nilfs_ioctl_free_vblocknrs(struct the_nilfs *nilfs,
 	size_t nmembs = argv->v_nmembs;
 	int ret;
 
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
+
 	ret = nilfs_dat_freev(nilfs->ns_dat, buf, nmembs);
 
 	return (ret < 0) ? ret : nmembs;
@@ -497,6 +564,9 @@ static int nilfs_ioctl_mark_blocks_dirty(struct the_nilfs *nilfs,
 	struct nilfs_bmap *bmap = NILFS_I(nilfs->ns_dat)->i_bmap;
 	struct nilfs_bdesc *bdescs = buf;
 	int ret, i;
+
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, argv %p, buf %p\n", nilfs, argv, buf);
 
 	for (i = 0; i < nmembs; i++) {
 		/* XXX: use macro or inline func to check liveness */
@@ -536,6 +606,9 @@ int nilfs_ioctl_prepare_clean_segments(struct the_nilfs *nilfs,
 {
 	const char *msg;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"nilfs %p, argv %p, kbufs %p\n", nilfs, argv, kbufs);
 
 	ret = nilfs_ioctl_delete_checkpoints(nilfs, &argv[1], kbufs[1]);
 	if (ret < 0) {
@@ -587,6 +660,10 @@ static int nilfs_ioctl_clean_segments(struct inode *inode, struct file *filp,
 	struct the_nilfs *nilfs;
 	size_t len, nsegs;
 	int n, ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
@@ -689,6 +766,10 @@ static int nilfs_ioctl_sync(struct inode *inode, struct file *filp,
 	int ret;
 	struct the_nilfs *nilfs;
 
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p\n",
+			inode->i_ino, filp, cmd, argp);
+
 	ret = nilfs_construct_segment(inode->i_sb);
 	if (ret < 0)
 		return ret;
@@ -716,6 +797,10 @@ static int nilfs_ioctl_resize(struct inode *inode, struct file *filp,
 	__u64 newsize;
 	int ret = -EPERM;
 
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, argp %p\n",
+			inode->i_ino, filp, argp);
+
 	if (!capable(CAP_SYS_ADMIN))
 		goto out;
 
@@ -742,6 +827,9 @@ static int nilfs_ioctl_set_alloc_range(struct inode *inode, void __user *argp)
 	__u64 minseg, maxseg;
 	unsigned long segbytes;
 	int ret = -EPERM;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, argp %p\n", inode->i_ino, argp);
 
 	if (!capable(CAP_SYS_ADMIN))
 		goto out;
@@ -778,6 +866,11 @@ static int nilfs_ioctl_get_info(struct inode *inode, struct file *filp,
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	struct nilfs_argv argv;
 	int ret;
+
+	nilfs2_debug(DBG_IOCTL,
+			"i_ino %lu, filp %p, cmd %#x, argp %p, "
+			"membsz %zu, dofunc %p\n",
+			inode->i_ino, filp, cmd, argp, membsz, dofunc);
 
 	if (copy_from_user(&argv, argp, sizeof(argv)))
 		return -EFAULT;

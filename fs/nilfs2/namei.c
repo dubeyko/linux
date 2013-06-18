@@ -48,7 +48,12 @@
 
 static inline int nilfs_add_nondir(struct dentry *dentry, struct inode *inode)
 {
-	int err = nilfs_add_link(dentry, inode);
+	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"i_ino %lu\n", inode->i_ino);
+
+	err = nilfs_add_link(dentry, inode);
 	if (!err) {
 		d_instantiate(dentry, inode);
 		return 0;
@@ -68,10 +73,14 @@ nilfs_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 	struct inode *inode;
 	ino_t ino;
 
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu, flags %#x\n", dir->i_ino, flags);
+
 	if (dentry->d_name.len > NILFS_NAME_LEN)
 		return ERR_PTR(-ENAMETOOLONG);
 
 	ino = nilfs_inode_by_name(dir, &dentry->d_name);
+	nilfs2_debug(DBG_NAMEI, "inode ino %lu\n", ino);
 	inode = ino ? nilfs_iget(dir->i_sb, NILFS_I(dir)->i_root, ino) : NULL;
 	return d_splice_alias(inode, dentry);
 }
@@ -90,6 +99,10 @@ static int nilfs_create(struct inode *dir, struct dentry *dentry, umode_t mode,
 	struct inode *inode;
 	struct nilfs_transaction_info ti;
 	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu, mode %#x, excl %d\n",
+			dir->i_ino, mode, excl);
 
 	err = nilfs_transaction_begin(dir->i_sb, &ti, 1);
 	if (err)
@@ -117,6 +130,10 @@ nilfs_mknod(struct inode *dir, struct dentry *dentry, umode_t mode, dev_t rdev)
 	struct inode *inode;
 	struct nilfs_transaction_info ti;
 	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu, mode %#x, rdev %#x\n",
+			dir->i_ino, mode, rdev);
 
 	if (!new_valid_dev(rdev))
 		return -EINVAL;
@@ -147,6 +164,9 @@ static int nilfs_symlink(struct inode *dir, struct dentry *dentry,
 	unsigned l = strlen(symname)+1;
 	struct inode *inode;
 	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu\n", dir->i_ino);
 
 	if (l > sb->s_blocksize)
 		return -ENAMETOOLONG;
@@ -193,6 +213,10 @@ static int nilfs_link(struct dentry *old_dentry, struct inode *dir,
 	struct nilfs_transaction_info ti;
 	int err;
 
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu, inode->i_ino %lu\n",
+			dir->i_ino, inode->i_ino);
+
 	err = nilfs_transaction_begin(dir->i_sb, &ti, 1);
 	if (err)
 		return err;
@@ -215,6 +239,10 @@ static int nilfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode)
 	struct inode *inode;
 	struct nilfs_transaction_info ti;
 	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu, mode %#x\n",
+			dir->i_ino, mode);
 
 	err = nilfs_transaction_begin(dir->i_sb, &ti, 1);
 	if (err)
@@ -269,6 +297,9 @@ static int nilfs_do_unlink(struct inode *dir, struct dentry *dentry)
 	struct page *page;
 	int err;
 
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu\n", dir->i_ino);
+
 	err = -ENOENT;
 	de = nilfs_find_entry(dir, &dentry->d_name, &page);
 	if (!de)
@@ -301,6 +332,9 @@ static int nilfs_unlink(struct inode *dir, struct dentry *dentry)
 	struct nilfs_transaction_info ti;
 	int err;
 
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu\n", dir->i_ino);
+
 	err = nilfs_transaction_begin(dir->i_sb, &ti, 0);
 	if (err)
 		return err;
@@ -322,6 +356,10 @@ static int nilfs_rmdir(struct inode *dir, struct dentry *dentry)
 	struct inode *inode = dentry->d_inode;
 	struct nilfs_transaction_info ti;
 	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"dir->i_ino %lu\n",
+			dir->i_ino);
 
 	err = nilfs_transaction_begin(dir->i_sb, &ti, 0);
 	if (err)
@@ -357,6 +395,10 @@ static int nilfs_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct nilfs_dir_entry *old_de;
 	struct nilfs_transaction_info ti;
 	int err;
+
+	nilfs2_debug(DBG_NAMEI,
+			"old_dir->i_ino %lu, new_dir->i_ino %lu\n",
+			old_dir->i_ino, new_dir->i_ino);
 
 	err = nilfs_transaction_begin(old_dir->i_sb, &ti, 1);
 	if (unlikely(err))
@@ -444,6 +486,9 @@ static struct dentry *nilfs_get_parent(struct dentry *child)
 	struct qstr dotdot = QSTR_INIT("..", 2);
 	struct nilfs_root *root;
 
+	nilfs2_debug(DBG_NAMEI,
+			"child inode ino %lu\n", child->d_inode->i_ino);
+
 	ino = nilfs_inode_by_name(child->d_inode, &dotdot);
 	if (!ino)
 		return ERR_PTR(-ENOENT);
@@ -462,6 +507,10 @@ static struct dentry *nilfs_get_dentry(struct super_block *sb, u64 cno,
 {
 	struct nilfs_root *root;
 	struct inode *inode;
+
+	nilfs2_debug(DBG_NAMEI,
+			"cno %llu, ino %llu, gen %u\n",
+			cno, ino, gen);
 
 	if (ino < NILFS_FIRST_INO(sb) && ino != NILFS_ROOT_INO)
 		return ERR_PTR(-ESTALE);

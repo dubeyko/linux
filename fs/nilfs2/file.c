@@ -41,6 +41,10 @@ int nilfs_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
 	struct inode *inode = file->f_mapping->host;
 	int err;
 
+	nilfs2_debug(DBG_FILE,
+			"i_ino %lu, start %llu, end %llu, datasync %d\n",
+			inode->i_ino, start, end, datasync);
+
 	err = filemap_write_and_wait_range(inode->i_mapping, start, end);
 	if (err)
 		return err;
@@ -70,6 +74,8 @@ static int nilfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct inode *inode = file_inode(vma->vm_file);
 	struct nilfs_transaction_info ti;
 	int ret = 0;
+
+	nilfs2_debug(DBG_FILE, "i_ino %lu\n", inode->i_ino);
 
 	if (unlikely(nilfs_near_disk_full(inode->i_sb->s_fs_info)))
 		return VM_FAULT_SIGBUS; /* -ENOSPC */

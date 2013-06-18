@@ -52,6 +52,8 @@ void nilfs_inode_add_blocks(struct inode *inode, int n)
 {
 	struct nilfs_root *root = NILFS_I(inode)->i_root;
 
+	nilfs2_debug(DBG_INODE, "i_ino %lu, n %d\n", inode->i_ino, n);
+
 	inode_add_bytes(inode, (1 << inode->i_blkbits) * n);
 	if (root)
 		atomic_add(n, &root->blocks_count);
@@ -60,6 +62,8 @@ void nilfs_inode_add_blocks(struct inode *inode, int n)
 void nilfs_inode_sub_blocks(struct inode *inode, int n)
 {
 	struct nilfs_root *root = NILFS_I(inode)->i_root;
+
+	nilfs2_debug(DBG_INODE, "i_ino %lu, n %d\n", inode->i_ino, n);
 
 	inode_sub_bytes(inode, (1 << inode->i_blkbits) * n);
 	if (root)
@@ -85,6 +89,10 @@ int nilfs_get_block(struct inode *inode, sector_t blkoff,
 	__u64 blknum = 0;
 	int err = 0, ret;
 	unsigned maxblocks = bh_result->b_size >> inode->i_blkbits;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, blkoff %lu, bh_result %p, create %d\n",
+			inode->i_ino, blkoff, bh_result, create);
 
 	down_read(&NILFS_MDT(nilfs->ns_dat)->mi_sem);
 	ret = nilfs_bmap_lookup_contig(ii->i_bmap, blkoff, &blknum, maxblocks);
@@ -219,7 +227,15 @@ static int nilfs_writepage(struct page *page, struct writeback_control *wbc)
 
 static int nilfs_set_page_dirty(struct page *page)
 {
-	int ret = __set_page_dirty_nobuffers(page);
+	int ret;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu. offset %llu\n",
+			page->mapping->host->i_ino,
+			i_size_read(page->mapping->host),
+			page_offset(page));
+
+	ret = __set_page_dirty_nobuffers(page);
 
 	if (page_has_buffers(page)) {
 		struct inode *inode = page->mapping->host;
@@ -253,6 +269,10 @@ void nilfs_write_failed(struct address_space *mapping, loff_t to)
 {
 	struct inode *inode = mapping->host;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, to %llu\n",
+			inode->i_ino, i_size_read(inode), to);
+
 	if (to > inode->i_size) {
 		truncate_pagecache(inode, to, inode->i_size);
 		nilfs_truncate(inode);
@@ -265,8 +285,13 @@ static int nilfs_write_begin(struct file *file, struct address_space *mapping,
 
 {
 	struct inode *inode = mapping->host;
-	int err = nilfs_transaction_begin(inode->i_sb, NULL, 1);
+	int err;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, pos %llu, len %u, flags %#x\n",
+			inode->i_ino, i_size_read(inode), pos, len, flags);
+
+	err = nilfs_transaction_begin(inode->i_sb, NULL, 1);
 	if (unlikely(err))
 		return err;
 
@@ -288,6 +313,10 @@ static int nilfs_write_end(struct file *file, struct address_space *mapping,
 	unsigned nr_dirty;
 	int err;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, pos %llu, len %u copied %u\n",
+			inode->i_ino, i_size_read(inode), pos, len, copied);
+
 	nr_dirty = nilfs_page_count_clean_buffers(page, start,
 						  start + copied);
 	copied = generic_write_end(file, mapping, pos, len, copied, page,
@@ -305,6 +334,10 @@ nilfs_direct_IO(int rw, struct kiocb *iocb, const struct iovec *iov,
 	struct address_space *mapping = file->f_mapping;
 	struct inode *inode = file->f_mapping->host;
 	ssize_t size;
+
+	nilfs2_debug(DBG_INODE,
+		"i_ino %lu, i_size %llu, rw %d, offset %llu, nr_segs %lu\n",
+		inode->i_ino, i_size_read(inode), rw, offset, nr_segs);
 
 	if (rw == WRITE)
 		return 0;
@@ -352,9 +385,14 @@ struct inode *nilfs_new_inode(struct inode *dir, umode_t mode)
 	int err = -ENOMEM;
 	ino_t ino;
 
+	nilfs2_debug(DBG_INODE,
+			"dir->i_ino %lu, mode %#x\n", dir->i_ino, mode);
+
 	inode = new_inode(sb);
 	if (unlikely(!inode))
 		goto failed;
+
+	nilfs2_debug(DBG_INODE, "inode->i_ino %lu\n", inode->i_ino);
 
 	mapping_set_gfp_mask(inode->i_mapping,
 			     mapping_gfp_mask(inode->i_mapping) & ~__GFP_FS);
@@ -422,6 +460,9 @@ void nilfs_set_inode_flags(struct inode *inode)
 {
 	unsigned int flags = NILFS_I(inode)->i_flags;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu\n", inode->i_ino);
+
 	inode->i_flags &= ~(S_SYNC | S_APPEND | S_IMMUTABLE | S_NOATIME |
 			    S_DIRSYNC);
 	if (flags & FS_SYNC_FL)
@@ -443,6 +484,9 @@ int nilfs_read_inode_common(struct inode *inode,
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int err;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu\n", inode->i_ino);
 
 	inode->i_mode = le16_to_cpu(raw_inode->i_mode);
 	i_uid_write(inode, le32_to_cpu(raw_inode->i_uid));
@@ -487,6 +531,10 @@ static int __nilfs_read_inode(struct super_block *sb,
 	struct buffer_head *bh;
 	struct nilfs_inode *raw_inode;
 	int err;
+
+	nilfs2_debug(DBG_INODE,
+			"sb %p, root %p, ino %lu, inode %p\n",
+			sb, root, ino, inode);
 
 	down_read(&NILFS_MDT(nilfs->ns_dat)->mi_sem);
 	err = nilfs_ifile_get_inode_block(root->ifile, ino, &bh);
@@ -536,6 +584,8 @@ static int nilfs_iget_test(struct inode *inode, void *opaque)
 	struct nilfs_iget_args *args = opaque;
 	struct nilfs_inode_info *ii;
 
+	nilfs2_debug(DBG_INODE, "i_ino %lu\n", inode->i_ino);
+
 	if (args->ino != inode->i_ino || args->root != NILFS_I(inode)->i_root)
 		return 0;
 
@@ -549,6 +599,8 @@ static int nilfs_iget_test(struct inode *inode, void *opaque)
 static int nilfs_iget_set(struct inode *inode, void *opaque)
 {
 	struct nilfs_iget_args *args = opaque;
+
+	nilfs2_debug(DBG_INODE, "i_ino %lu\n", inode->i_ino);
 
 	inode->i_ino = args->ino;
 	if (args->for_gc) {
@@ -570,6 +622,10 @@ struct inode *nilfs_ilookup(struct super_block *sb, struct nilfs_root *root,
 		.ino = ino, .root = root, .cno = 0, .for_gc = 0
 	};
 
+	nilfs2_debug(DBG_INODE,
+			"sb %p, root %p, ino %lu\n",
+			sb, root, ino);
+
 	return ilookup5(sb, ino, nilfs_iget_test, &args);
 }
 
@@ -580,6 +636,10 @@ struct inode *nilfs_iget_locked(struct super_block *sb, struct nilfs_root *root,
 		.ino = ino, .root = root, .cno = 0, .for_gc = 0
 	};
 
+	nilfs2_debug(DBG_INODE,
+			"sb %p, root %p, ino %lu\n",
+			sb, root, ino);
+
 	return iget5_locked(sb, ino, nilfs_iget_test, nilfs_iget_set, &args);
 }
 
@@ -588,6 +648,10 @@ struct inode *nilfs_iget(struct super_block *sb, struct nilfs_root *root,
 {
 	struct inode *inode;
 	int err;
+
+	nilfs2_debug(DBG_INODE,
+			"sb %p, root %p, ino %lu\n",
+			sb, root, ino);
 
 	inode = nilfs_iget_locked(sb, root, ino);
 	if (unlikely(!inode))
@@ -613,6 +677,10 @@ struct inode *nilfs_iget_for_gc(struct super_block *sb, unsigned long ino,
 	struct inode *inode;
 	int err;
 
+	nilfs2_debug(DBG_INODE,
+			"sb %p, ino %lu, cno %llu\n",
+			sb, ino, cno);
+
 	inode = iget5_locked(sb, ino, nilfs_iget_test, nilfs_iget_set, &args);
 	if (unlikely(!inode))
 		return ERR_PTR(-ENOMEM);
@@ -632,6 +700,10 @@ void nilfs_write_inode_common(struct inode *inode,
 			      struct nilfs_inode *raw_inode, int has_bmap)
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, raw_inode %p, has_bmap %d\n",
+			inode->i_ino, i_size_read(inode), raw_inode, has_bmap);
 
 	raw_inode->i_mode = cpu_to_le16(inode->i_mode);
 	raw_inode->i_uid = cpu_to_le32(i_uid_read(inode));
@@ -673,6 +745,10 @@ void nilfs_update_inode(struct inode *inode, struct buffer_head *ibh)
 	struct inode *ifile = ii->i_root->ifile;
 	struct nilfs_inode *raw_inode;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, ibh %p\n",
+			inode->i_ino, i_size_read(inode), ibh);
+
 	raw_inode = nilfs_ifile_map_inode(ifile, ino, ibh);
 
 	if (test_and_clear_bit(NILFS_I_NEW, &ii->i_state))
@@ -693,6 +769,12 @@ static void nilfs_truncate_bmap(struct nilfs_inode_info *ii,
 {
 	unsigned long b;
 	int ret;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, from %lu\n",
+			ii->vfs_inode.i_ino,
+			i_size_read(&ii->vfs_inode),
+			from);
 
 	if (!test_bit(NILFS_I_BMAP, &ii->i_state))
 		return;
@@ -727,6 +809,10 @@ void nilfs_truncate(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu\n",
+			inode->i_ino, i_size_read(inode));
+
 	if (!test_bit(NILFS_I_BMAP, &ii->i_state))
 		return;
 	if (IS_APPEND(inode) || IS_IMMUTABLE(inode))
@@ -756,6 +842,10 @@ static void nilfs_clear_inode(struct inode *inode)
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	struct nilfs_mdt_info *mdi = NILFS_MDT(inode);
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu\n",
+			inode->i_ino, i_size_read(inode));
+
 	/*
 	 * Free resources allocated in nilfs_read_inode(), here.
 	 */
@@ -781,6 +871,10 @@ void nilfs_evict_inode(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int ret;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu\n",
+			inode->i_ino, i_size_read(inode));
 
 	if (inode->i_nlink || !ii->i_root || unlikely(is_bad_inode(inode))) {
 		if (inode->i_data.nrpages)
@@ -819,6 +913,10 @@ int nilfs_setattr(struct dentry *dentry, struct iattr *iattr)
 	struct super_block *sb = inode->i_sb;
 	int err;
 
+	nilfs2_debug(DBG_INODE,
+		"i_ino %lu, inode->i_size %llu, iattr->ia_size %llu\n",
+		inode->i_ino, i_size_read(inode), iattr->ia_size);
+
 	err = inode_change_ok(inode, iattr);
 	if (err)
 		return err;
@@ -853,6 +951,11 @@ out_err:
 int nilfs_permission(struct inode *inode, int mask)
 {
 	struct nilfs_root *root = NILFS_I(inode)->i_root;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, mask %#x\n",
+			inode->i_ino, i_size_read(inode), mask);
+
 	if ((mask & MAY_WRITE) && root &&
 	    root->cno != NILFS_CPTREE_CURRENT_CNO)
 		return -EROFS; /* snapshot is not writable */
@@ -865,6 +968,9 @@ int nilfs_load_inode_block(struct inode *inode, struct buffer_head **pbh)
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	int err;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, pbh %p\n", inode->i_ino, pbh);
 
 	spin_lock(&nilfs->ns_inode_lock);
 	if (ii->i_bh == NULL) {
@@ -894,6 +1000,10 @@ int nilfs_inode_dirty(struct inode *inode)
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
 	int ret = 0;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu\n",
+			inode->i_ino, i_size_read(inode));
+
 	if (!list_empty(&ii->i_dirty)) {
 		spin_lock(&nilfs->ns_inode_lock);
 		ret = test_bit(NILFS_I_DIRTY, &ii->i_state) ||
@@ -907,6 +1017,10 @@ int nilfs_set_file_dirty(struct inode *inode, unsigned nr_dirty)
 {
 	struct nilfs_inode_info *ii = NILFS_I(inode);
 	struct the_nilfs *nilfs = inode->i_sb->s_fs_info;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, nr_dirty %u\n",
+			inode->i_ino, i_size_read(inode), nr_dirty);
 
 	atomic_add(nr_dirty, &nilfs->ns_ndirtyblks);
 
@@ -940,6 +1054,10 @@ int nilfs_mark_inode_dirty(struct inode *inode)
 	struct buffer_head *ibh;
 	int err;
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu\n",
+			inode->i_ino, i_size_read(inode));
+
 	err = nilfs_load_inode_block(inode, &ibh);
 	if (unlikely(err)) {
 		nilfs_warning(inode->i_sb, __func__,
@@ -968,6 +1086,10 @@ void nilfs_dirty_inode(struct inode *inode, int flags)
 	struct nilfs_transaction_info ti;
 	struct nilfs_mdt_info *mdi = NILFS_MDT(inode);
 
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, flags %#x\n",
+			inode->i_ino, i_size_read(inode), flags);
+
 	if (is_bad_inode(inode)) {
 		nilfs_warning(inode->i_sb, __func__,
 			      "tried to mark bad_inode dirty. ignored.\n");
@@ -995,6 +1117,10 @@ int nilfs_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 	unsigned long delalloc_blklen;
 	unsigned int blkbits = inode->i_blkbits;
 	int ret, n;
+
+	nilfs2_debug(DBG_INODE,
+			"i_ino %lu, i_size %llu, start %llu, len %llu\n",
+			inode->i_ino, i_size_read(inode), start, len);
 
 	ret = fiemap_check_flags(fieinfo, FIEMAP_FLAG_SYNC);
 	if (ret)
