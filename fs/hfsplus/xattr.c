@@ -53,8 +53,15 @@ static inline int is_known_namespace(const char *name)
 static int can_set_xattr(struct inode *inode, const char *name,
 				const void *value, size_t value_len)
 {
+	/*
+	 * ACLs handler makes conversion from "system.richacl"
+	 * into "com.apple.system.Security".
+	 */
 	if (!strncmp(name, XATTR_SYSTEM_PREFIX, XATTR_SYSTEM_PREFIX_LEN))
-		return -EOPNOTSUPP; /* TODO: implement ACL support */
+		return -EOPNOTSUPP;
+	else if (!strncmp(name, HFSPLUS_XATTR_ACL_NAME,
+				sizeof(HFSPLUS_XATTR_ACL_NAME)))
+		return 0;
 
 	if (!strncmp(name, XATTR_MAC_OSX_PREFIX, XATTR_MAC_OSX_PREFIX_LEN)) {
 		/*

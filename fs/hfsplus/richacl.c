@@ -7,10 +7,11 @@
  */
 
 #include <linux/uuid.h>
+#include <linux/nfs4_acl.h>
 
 #include "hfsplus_fs.h"
 #include "xattr.h"
-#include "nfs4_acl.h"
+#include "richacl.h"
 
 #define HFSPLUS_ACE_ID_MASK 0xFFFFFFFF
 
@@ -393,8 +394,7 @@ uint32_t hfsplus_ace_extract_nfsv4_type(struct hfsplus_acl_entry *hfs_ace)
 	return -1;
 }
 
-static uint32_t convert_rights[32] = {
-	0,				/* 0 */
+static uint32_t convert_to_nfsv4_rights[32] = {
 	NFS4_ACE_READ_DATA,		/* HFSPLUS_VNODE_READ_DATA */
 	NFS4_ACE_WRITE_DATA,		/* HFSPLUS_VNODE_WRITE_DATA */
 	NFS4_ACE_EXECUTE,		/* HFSPLUS_VNODE_EXECUTE */
@@ -441,9 +441,9 @@ static uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 
 	if (rights & ACE_RIGHTS_MASK) {
 		end_bit = ffs(HFSPLUS_VNODE_TAKE_OWNERSHIP) + 1;
-		for (cur_bit = 1; cur_bit < end_bit; cur_bit++) {
+		for (cur_bit = 0; cur_bit < end_bit; cur_bit++) {
 			if ((rights >> cur_bit) & 0x1)
-				access_mask |= convert_rights[cur_bit];
+				access_mask |= convert_to_nfsv4_rights[cur_bit];
 		}
 	}
 
@@ -452,7 +452,7 @@ static uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 		end_bit = ffs(HFSPLUS_ACE_GENERIC_READ) + 1;
 		for (cur_bit = start_bit; cur_bit < end_bit; cur_bit++) {
 			if ((rights >> cur_bit) & 0x1) {
-				access_mask |= convert_rights[cur_bit];
+				access_mask |= convert_to_nfsv4_rights[cur_bit];
 				if (cur_bit == start_bit)
 					break;
 			}
@@ -464,7 +464,7 @@ static uint32_t hfsplus_ace_rights_to_nfsv4(struct hfsplus_acl_entry *hfs_ace)
 	return access_mask;
 }
 
-static u8 convert_flags[16] = {
+static uint32_t convert_to_nfsv4_flags[16] = {
 	0,				/* 0 */
 	0,				/* 1 */
 	0,				/* 2 */
@@ -497,7 +497,7 @@ static uint32_t hfsplus_ace_flags_to_nfsv4(struct inode *inode,
 	end_bit = ffs(HFSPLUS_ACE_FAILURE) + 1;
 	for (cur_bit = start_bit; cur_bit < end_bit; cur_bit++) {
 		if ((ace_flags >> cur_bit) & 0x1)
-			flags |= convert_flags[cur_bit];
+			flags |= convert_to_nfsv4_flags[cur_bit];
 	}
 	if (S_ISDIR(inode->i_mode))
 		flags |= NFS4_ACE_IDENTIFIER_GROUP;
@@ -612,12 +612,6 @@ hfsplus_richacl_from_xattr(struct inode *inode,
 	return acl;
 }
 
-
-
-
-
-
-
 static void hfsplus_prepare_ace_applicable(struct inode *inode,
 					    struct user_namespace *user_ns,
 					    struct nfs4_ace *nfs4ace,
@@ -648,7 +642,100 @@ static void hfsplus_prepare_ace_applicable(struct inode *inode,
 	};
 }
 
+static uint32_t convert_to_hfs_rights[16] = {
+	HFSPLUS_VNODE_READ_DATA,		/* NFS4_ACE_READ_DATA */
+	HFSPLUS_VNODE_WRITE_DATA,		/* NFS4_ACE_WRITE_DATA */
+	HFSPLUS_VNODE_APPEND_DATA,		/* NFS4_ACE_APPEND_DATA */
+	HFSPLUS_VNODE_READ_EXTATTRIBUTES,	/* NFS4_ACE_READ_NAMED_ATTRS */
+	HFSPLUS_VNODE_WRITE_EXTATTRIBUTES,	/* NFS4_ACE_WRITE_NAMED_ATTRS */
+	HFSPLUS_VNODE_EXECUTE,			/* NFS4_ACE_EXECUTE */
+	HFSPLUS_VNODE_DELETE_CHILD,		/* NFS4_ACE_DELETE_CHILD */
+	HFSPLUS_VNODE_READ_ATTRIBUTES,		/* NFS4_ACE_READ_ATTRIBUTES */
+	HFSPLUS_VNODE_WRITE_ATTRIBUTES,		/* NFS4_ACE_WRITE_ATTRIBUTES */
+	HFSPLUS_VNODE_DELETE,			/* NFS4_ACE_DELETE */
+	HFSPLUS_VNODE_READ_SECURITY,		/* NFS4_ACE_READ_ACL */
+	HFSPLUS_VNODE_WRITE_SECURITY,		/* NFS4_ACE_WRITE_ACL */
+	HFSPLUS_VNODE_TAKE_OWNERSHIP,		/* NFS4_ACE_WRITE_OWNER */
+	0,					/* NFS4_ACE_SYNCHRONIZE */
+	0,					/* 14 */
+	0,					/* 15 */
+};
 
+static u32 hfsplus_ace_rights_from_nfsv4(struct nfs4_ace *nfs4ace)
+{
+	u32 ace_rights = 0;
+	u32 start_bit, end_bit, cur_bit;
+
+	hfs_dbg(ACL_MOD, "[%s]: NFSv4 access mask %#x\n",
+			__func__, nfs4ace->access_mask);
+
+	end_bit = ffs(NFS4_ACE_SYNCHRONIZE);
+	for (cur_bit = 0; cur_bit < end_bit; cur_bit++) {
+		if ((nfs4ace->access_mask >> cur_bit) & 0x1)
+			ace_rights |= convert_to_hfs_rights[cur_bit];
+	}
+
+	if (nfs4ace->access_mask & NFS4_ACE_GENERIC_READ)
+		ace_rights |= HFSPLUS_ACE_GENERIC_READ;
+	if (nfs4ace->access_mask & NFS4_ACE_GENERIC_WRITE)
+		ace_rights |= HFSPLUS_ACE_GENERIC_WRITE;
+	if (nfs4ace->access_mask & NFS4_ACE_GENERIC_EXECUTE)
+		ace_rights |= HFSPLUS_ACE_GENERIC_EXECUTE;
+	if (nfs4ace->access_mask & NFS4_ACE_MASK_ALL)
+		ace_rights |= HFSPLUS_ACE_GENERIC_ALL;
+
+	hfs_dbg(ACL_MOD, "[%s]: hfs+ rights %#x\n", __func__, ace_rights);
+
+	return ace_rights;
+}
+
+static uint32_t convert_to_hfs_flags[8] = {
+	HFSPLUS_ACE_FILE_INHERIT,	/*NFS4_ACE_FILE_INHERIT_ACE*/
+	HFSPLUS_ACE_DIRECTORY_INHERIT,	/*NFS4_ACE_DIRECTORY_INHERIT_ACE*/
+	HFSPLUS_ACE_LIMIT_INHERIT,	/*NFS4_ACE_NO_PROPAGATE_INHERIT_ACE*/
+	HFSPLUS_ACE_ONLY_INHERIT,	/*NFS4_ACE_INHERIT_ONLY_ACE*/
+	HFSPLUS_ACE_SUCCESS,		/*NFS4_ACE_SUCCESSFUL_ACCESS_ACE_FLAG*/
+	HFSPLUS_ACE_FAILURE,		/*NFS4_ACE_FAILED_ACCESS_ACE_FLAG*/
+	0,				/*6*/
+	0,				/*7*/
+};
+
+static u32 hfsplus_ace_flags_from_nfsv4(struct nfs4_ace *nfs4ace)
+{
+	u32 ace_flags = 0;
+	u32 start_bit, end_bit, cur_bit;
+
+	hfs_dbg(ACL_MOD, "[%s]: NFSv4 type %#x, flags %#x\n",
+			__func__, nfs4ace->type, nfs4ace->flag);
+
+	switch (nfs4ace->type) {
+	case NFS4_ACE_ACCESS_ALLOWED_ACE_TYPE:
+		ace_flags = HFSPLUS_ACE_PERMIT;
+		break;
+	case NFS4_ACE_ACCESS_DENIED_ACE_TYPE:
+		ace_flags = HFSPLUS_ACE_DENY;
+		break;
+	case NFS4_ACE_SYSTEM_AUDIT_ACE_TYPE:
+		ace_flags = HFSPLUS_ACE_AUDIT;
+		break;
+	case NFS4_ACE_SYSTEM_ALARM_ACE_TYPE:
+		ace_flags = HFSPLUS_ACE_ALARM;
+		break;
+	default:
+		BUG();
+		break;
+	};
+
+	end_bit = ffs(NFS4_ACE_IDENTIFIER_GROUP);
+	for (cur_bit = 0; cur_bit < end_bit; cur_bit++) {
+		if ((nfs4ace->flag >> cur_bit) & 0x1)
+			ace_flags |= convert_to_hfs_flags[cur_bit];
+	}
+
+	hfs_dbg(ACL_MOD, "[%s]: hfs+ flags %#x\n", __func__, ace_flags);
+
+	return ace_flags;
+}
 
 static int hfsplus_nfsv4_to_hfs_acl(struct inode *inode,
 					struct user_namespace *user_ns,
@@ -662,6 +749,7 @@ static int hfsplus_nfsv4_to_hfs_acl(struct inode *inode,
 	size_t filesec_hdr_size = sizeof(struct hfsplus_filesec);
 	size_t ace_size = sizeof(struct hfsplus_acl_entry);
 	size_t calculated_size = filesec_hdr_size;
+	u32 entrycount = 0;
 	int err;
 
 	hfs_dbg(ACL_MOD,
@@ -679,73 +767,18 @@ static int hfsplus_nfsv4_to_hfs_acl(struct inode *inode,
 		if ((calculated_size + ace_size) > allocated_size)
 			return HFS_ERR_DBG(ACL_MOD, -ENOMEM);
 
-		hfsplus_prepare_ace_applicable(inode, user_ns,
-						nfs4ace, ace_applicable);
-
-
-
-
-
-		ace->type = hfsplus_ace_extract_nfsv4_type(hfs_ace);
-		ace->access_mask = hfsplus_ace_rights_to_nfsv4(hfs_ace);
-		ace->flag = hfsplus_ace_flags_to_nfsv4(inode, hfs_ace);
-		ace->whotype = hfsplus_ace_extract_nfsv4_whotype(hfs_ace);
-		hfsplus_ace_extract_id(hfs_ace, ace);
-		ace++;
-		acl->naces++;
-
-
-
+		hfsplus_prepare_ace_applicable(inode, user_ns, nfs4ace, ace);
+		ace->ace_flags =
+			cpu_to_be32(hfsplus_ace_flags_from_nfsv4(nfs4ace));
+		ace->ace_rights =
+			cpu_to_be32(hfsplus_ace_rights_from_nfsv4(nfs4ace));
+		entrycount++;
+		calculated_size += ace_size;
 	}
 
+	fsec_acl->acl_entrycount = cpu_to_be32(entrycount);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-	struct hfsplus_acl_record *fsec_acl = &(filesec->fsec_acl);
-	struct hfsplus_acl_entry *ace = fsec_acl->acl_ace;
-	const struct richace *ace;
-	u8 ace_applicable[HFSPLUS_GUID_SIZE];
-	size_t calculated_size = 0;
-	size_t filesec_hdr_size = sizeof(struct hfsplus_filesec);
-	size_t ace_size = sizeof(struct hfsplus_acl_entry);
-	unsigned int flags = 0;
-	int err;
-
-	hfs_dbg(ACL_MOD,
-		"[%s]: ino %lu, nfs4acl %p, filesec %p, alloc_sz %zu\n",
-		__func__, inode->i_ino, nfs4acl, filesec, allocated_size);
-
-	if ((calculated_size + filesec_hdr_size) > allocated_size)
-		return HFS_ERR_DBG(ACL_MOD, -ENOMEM);
-
-	memset(filesec, 0, sizeof(struct hfsplus_filesec));
-	filesec->fsec_magic = cpu_to_be32(HFSPLUS_FILESEC_MAGIC);
-	calculated_size += filesec_hdr_size;
-
-	richacl_for_each_entry(ace, acl) {
-
-
-
-
-
-
-	}
-
-
-	err = sort_hfsplus_ace(&acl_info);
+	err = sort_hfsplus_ace(inode, filesec, calculated_size);
 	if (unlikely(err)) {
 		hfs_dbg(ACL_MOD,
 			"(%s, %d): %s: err %d\n",
@@ -753,12 +786,8 @@ static int hfsplus_nfsv4_to_hfs_acl(struct inode *inode,
 		return err;
 	}
 
-
-
-
+	return 0;
 }
-
-
 
 static int hfsplus_compose_filesec_from_richacl(struct inode *inode,
 						struct user_namespace *user_ns,
@@ -804,7 +833,8 @@ static struct hfsplus_filesec *hfsplus_richacl_to_filesec(struct inode *inode,
 	 * HFSPLUS_MAX_INLINE_DATA_SIZE (3802) bytes
 	 * in size.
 	 */
-	composed_filesec = kzalloc(HFSPLUS_MAX_INLINE_DATA_SIZE, GFP_KERNEL);
+	composed_filesec =
+		(struct hfsplus_filesec *)hfsplus_alloc_attr_entry();
 	if (unlikely(!composed_filesec))
 		return ERR_PTR(HFS_ERR_DBG(ACL_MOD, -ENOMEM));
 
@@ -819,7 +849,7 @@ static struct hfsplus_filesec *hfsplus_richacl_to_filesec(struct inode *inode,
 	return composed_filesec;
 
 failed_conversion:
-	kfree(composed_filesec);
+	hfsplus_destroy_attr_entry((hfsplus_attr_entry *)composed_filesec);
 	return ERR_PTR(err);
 }
 
@@ -841,7 +871,7 @@ struct richacl *hfsplus_get_richacl(struct inode *inode)
 	size = __hfsplus_getxattr(inode, xattr_name, NULL, 0);
 
 	if (size > 0) {
-		value = kzalloc(size, GFP_NOFS);
+		value = hfsplus_alloc_attr_entry();
 		if (unlikely(!value))
 			return ERR_PTR(HFS_ERR_DBG(ACL_MOD, -ENOMEM));
 		size = __hfsplus_getxattr(inode, xattr_name, value, size);
@@ -855,7 +885,7 @@ struct richacl *hfsplus_get_richacl(struct inode *inode)
 	else
 		acl = ERR_PTR(HFS_ERR_DBG(ACL_MOD, (int)size));
 
-	kfree(value);
+	hfsplus_destroy_attr_entry((hfsplus_attr_entry *)value);
 
 	if (!IS_ERR_OR_NULL(acl))
 		set_cached_richacl(inode, acl);
@@ -912,7 +942,7 @@ static int hfsplus_set_richacl(struct inode *inode, struct richacl *acl)
 		HFS_ERR_DBG(ACL_MOD, err);
 
 end_set_acl:
-	kfree(filesec);
+	hfsplus_destroy_attr_entry((hfsplus_attr_entry *)filesec);
 
 	if (!err)
 		set_cached_richacl(inode, acl);
