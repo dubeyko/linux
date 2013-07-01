@@ -396,9 +396,11 @@ int nilfs_dat_move(struct inode *dat, __u64 vblocknr, sector_t blocknr)
  */
 int nilfs_dat_translate(struct inode *dat, __u64 vblocknr, sector_t *blocknrp)
 {
+	struct the_nilfs *nilfs = dat->i_sb->s_fs_info;
 	struct buffer_head *entry_bh, *bh;
 	struct nilfs_dat_entry *entry;
 	sector_t blocknr;
+	__u64 cur_cno, start_cno, end_cno;
 	void *kaddr;
 	int ret;
 
@@ -419,6 +421,13 @@ int nilfs_dat_translate(struct inode *dat, __u64 vblocknr, sector_t *blocknrp)
 	entry = nilfs_palloc_block_get_entry(dat, vblocknr, entry_bh, kaddr);
 	blocknr = le64_to_cpu(entry->de_blocknr);
 	if (blocknr == 0) {
+		ret = -ENOENT;
+		goto out;
+	}
+	cur_cno = nilfs->ns_cno;
+	start_cno = le64_to_cpu(entry->de_start);
+	end_cno = le64_to_cpu(entry->de_end);
+	if (cur_cno < start_cno || cur_cno > end_cno) {
 		ret = -ENOENT;
 		goto out;
 	}
