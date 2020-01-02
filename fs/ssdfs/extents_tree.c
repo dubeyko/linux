@@ -4,11 +4,11 @@
  *
  * fs/ssdfs/extents_tree.c - extents tree functionality.
  *
- * Copyright (c) 2014-2019 HGST, a Western Digital Company.
+ * Copyright (c) 2014-2020 HGST, a Western Digital Company.
  *              http://www.hgst.com/
  *
  * HGST Confidential
- * (C) Copyright 2014-2019, HGST, Inc., All rights reserved.
+ * (C) Copyright 2014-2020, HGST, Inc., All rights reserved.
  *
  * Created by HGST, San Jose Research Center, Storage Architecture Group
  * Authors: Vyacheslav Dubeyko <slava@dubeyko.com>
@@ -625,6 +625,14 @@ finish_add_range:
 
 	if (unlikely(err))
 		goto destroy_generic_tree;
+
+	err = ssdfs_btree_synchronize_root_node(tree->generic_tree,
+						tree->root);
+	if (unlikely(err)) {
+		SSDFS_ERR("fail to synchronize the root node: "
+			  "err %d\n", err);
+		goto destroy_generic_tree;
+	}
 
 	atomic_set(&tree->type, SSDFS_PRIVATE_EXTENTS_BTREE);
 	atomic_set(&tree->state, SSDFS_EXTENTS_BTREE_DIRTY);
@@ -2268,6 +2276,14 @@ int ssdfs_extents_tree_add_fork(struct ssdfs_extents_btree_info *tree,
 		SSDFS_WARN("forks_count is too much\n");
 		atomic_set(&tree->state, SSDFS_EXTENTS_BTREE_CORRUPTED);
 		return -ERANGE;
+	}
+
+	err = ssdfs_btree_synchronize_root_node(tree->generic_tree,
+						tree->root);
+	if (unlikely(err)) {
+		SSDFS_ERR("fail to synchronize the root node: "
+			  "err %d\n", err);
+		return err;
 	}
 
 	atomic_set(&tree->state, SSDFS_EXTENTS_BTREE_DIRTY);
