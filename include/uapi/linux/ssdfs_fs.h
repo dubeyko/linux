@@ -4,11 +4,11 @@
  *
  * include/uapi/linux/ssdfs_fs.h - SSDFS common declarations.
  *
- * Copyright (c) 2014-2020 HGST, a Western Digital Company.
+ * Copyright (c) 2014-2021 HGST, a Western Digital Company.
  *              http://www.hgst.com/
  *
  * HGST Confidential
- * (C) Copyright 2014-2020, HGST, Inc., All rights reserved.
+ * (C) Copyright 2014-2021, HGST, Inc., All rights reserved.
  *
  * Created by HGST, San Jose Research Center, Storage Architecture Group
  * Authors: Vyacheslav Dubeyko <slava@dubeyko.com>
@@ -83,6 +83,7 @@
 #define SSDFS_LAST_KNOWN_FS_ERROR	SSDFS_ERRORS_PANIC
 
 /* Reserved inode id */
+#define SSDFS_TESTING_INO			7
 #define SSDFS_SHARED_DICT_BTREE_INO		8
 #define SSDFS_INODES_BTREE_INO			9
 #define SSDFS_SHARED_EXTENTS_BTREE_INO		10
