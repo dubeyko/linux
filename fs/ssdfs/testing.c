@@ -420,7 +420,8 @@ int ssdfs_testing_dentries_tree_add_file(struct ssdfs_fs_info *fsi,
 		  (u64)dentry_inode->d_name.hash,
 		  dentry_inode->d_parent);
 
-	err = ssdfs_create(root_i, dentry_inode, S_IFREG | S_IRWXU, false);
+	err = ssdfs_create(&init_user_ns, root_i, dentry_inode,
+			   S_IFREG | S_IRWXU, false);
 	if (err) {
 		SSDFS_ERR("fail to create file: "
 			  "file_index %llu\n",
