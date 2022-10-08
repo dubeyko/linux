@@ -10,13 +10,11 @@
  */
 
 #include <linux/vfio.h>
-#include <linux/mdev.h>
+
+#include <asm/isc.h>
 
 #include "ioasm.h"
 #include "vfio_ccw_private.h"
-
-#define CREATE_TRACE_POINTS
-#include "vfio_ccw_trace.h"
 
 static int fsm_io_helper(struct vfio_ccw_private *private)
 {
@@ -37,8 +35,13 @@ static int fsm_io_helper(struct vfio_ccw_private *private)
 		goto out;
 	}
 
+	VFIO_CCW_TRACE_EVENT(5, "stIO");
+	VFIO_CCW_TRACE_EVENT(5, dev_name(&sch->dev));
+
 	/* Issue "Start Subchannel" */
 	ccode = ssch(sch->schid, orb);
+
+	VFIO_CCW_HEX_EVENT(5, &ccode, sizeof(ccode));
 
 	switch (ccode) {
 	case 0:
@@ -86,8 +89,13 @@ static int fsm_do_halt(struct vfio_ccw_private *private)
 
 	spin_lock_irqsave(sch->lock, flags);
 
+	VFIO_CCW_TRACE_EVENT(2, "haltIO");
+	VFIO_CCW_TRACE_EVENT(2, dev_name(&sch->dev));
+
 	/* Issue "Halt Subchannel" */
 	ccode = hsch(sch->schid);
+
+	VFIO_CCW_HEX_EVENT(2, &ccode, sizeof(ccode));
 
 	switch (ccode) {
 	case 0:
@@ -122,8 +130,13 @@ static int fsm_do_clear(struct vfio_ccw_private *private)
 
 	spin_lock_irqsave(sch->lock, flags);
 
+	VFIO_CCW_TRACE_EVENT(2, "clearIO");
+	VFIO_CCW_TRACE_EVENT(2, dev_name(&sch->dev));
+
 	/* Issue "Clear Subchannel" */
 	ccode = csch(sch->schid);
+
+	VFIO_CCW_HEX_EVENT(2, &ccode, sizeof(ccode));
 
 	switch (ccode) {
 	case 0:
@@ -149,12 +162,22 @@ static void fsm_notoper(struct vfio_ccw_private *private,
 {
 	struct subchannel *sch = private->sch;
 
+	VFIO_CCW_MSG_EVENT(2, "sch %x.%x.%04x: notoper event %x state %x\n",
+			   sch->schid.cssid,
+			   sch->schid.ssid,
+			   sch->schid.sch_no,
+			   event,
+			   private->state);
+
 	/*
 	 * TODO:
 	 * Probably we should send the machine check to the guest.
 	 */
 	css_sched_sch_todo(sch, SCH_TODO_UNREG);
 	private->state = VFIO_CCW_STATE_NOT_OPER;
+
+	/* This is usually handled during CLOSE event */
+	cp_free(&private->cp);
 }
 
 /*
@@ -227,8 +250,8 @@ static void fsm_io_request(struct vfio_ccw_private *private,
 	union orb *orb;
 	union scsw *scsw = &private->scsw;
 	struct ccw_io_region *io_region = private->io_region;
-	struct mdev_device *mdev = private->mdev;
 	char *errstr = "request";
+	struct subchannel_id schid = get_schid(private);
 
 	private->state = VFIO_CCW_STATE_CP_PROCESSING;
 	memcpy(scsw, io_region->scsw_area, sizeof(*scsw));
@@ -239,18 +262,31 @@ static void fsm_io_request(struct vfio_ccw_private *private,
 		/* Don't try to build a cp if transport mode is specified. */
 		if (orb->tm.b) {
 			io_region->ret_code = -EOPNOTSUPP;
+			VFIO_CCW_MSG_EVENT(2,
+					   "sch %x.%x.%04x: transport mode\n",
+					   schid.cssid,
+					   schid.ssid, schid.sch_no);
 			errstr = "transport mode";
 			goto err_out;
 		}
-		io_region->ret_code = cp_init(&private->cp, mdev_dev(mdev),
-					      orb);
+		io_region->ret_code = cp_init(&private->cp, orb);
 		if (io_region->ret_code) {
+			VFIO_CCW_MSG_EVENT(2,
+					   "sch %x.%x.%04x: cp_init=%d\n",
+					   schid.cssid,
+					   schid.ssid, schid.sch_no,
+					   io_region->ret_code);
 			errstr = "cp init";
 			goto err_out;
 		}
 
 		io_region->ret_code = cp_prefetch(&private->cp);
 		if (io_region->ret_code) {
+			VFIO_CCW_MSG_EVENT(2,
+					   "sch %x.%x.%04x: cp_prefetch=%d\n",
+					   schid.cssid,
+					   schid.ssid, schid.sch_no,
+					   io_region->ret_code);
 			errstr = "cp prefetch";
 			cp_free(&private->cp);
 			goto err_out;
@@ -259,24 +295,38 @@ static void fsm_io_request(struct vfio_ccw_private *private,
 		/* Start channel program and wait for I/O interrupt. */
 		io_region->ret_code = fsm_io_helper(private);
 		if (io_region->ret_code) {
+			VFIO_CCW_MSG_EVENT(2,
+					   "sch %x.%x.%04x: fsm_io_helper=%d\n",
+					   schid.cssid,
+					   schid.ssid, schid.sch_no,
+					   io_region->ret_code);
 			errstr = "cp fsm_io_helper";
 			cp_free(&private->cp);
 			goto err_out;
 		}
 		return;
 	} else if (scsw->cmd.fctl & SCSW_FCTL_HALT_FUNC) {
+		VFIO_CCW_MSG_EVENT(2,
+				   "sch %x.%x.%04x: halt on io_region\n",
+				   schid.cssid,
+				   schid.ssid, schid.sch_no);
 		/* halt is handled via the async cmd region */
 		io_region->ret_code = -EOPNOTSUPP;
 		goto err_out;
 	} else if (scsw->cmd.fctl & SCSW_FCTL_CLEAR_FUNC) {
+		VFIO_CCW_MSG_EVENT(2,
+				   "sch %x.%x.%04x: clear on io_region\n",
+				   schid.cssid,
+				   schid.ssid, schid.sch_no);
 		/* clear is handled via the async cmd region */
 		io_region->ret_code = -EOPNOTSUPP;
 		goto err_out;
 	}
 
 err_out:
-	trace_vfio_ccw_io_fctl(scsw->cmd.fctl, get_schid(private),
-			       io_region->ret_code, errstr);
+	private->state = VFIO_CCW_STATE_IDLE;
+	trace_vfio_ccw_fsm_io_request(scsw->cmd.fctl, schid,
+				      io_region->ret_code, errstr);
 }
 
 /*
@@ -298,6 +348,10 @@ static void fsm_async_request(struct vfio_ccw_private *private,
 		/* should not happen? */
 		cmd_region->ret_code = -EINVAL;
 	}
+
+	trace_vfio_ccw_fsm_async_request(get_schid(private),
+					 cmd_region->command,
+					 cmd_region->ret_code);
 }
 
 /*
@@ -308,12 +362,63 @@ static void fsm_irq(struct vfio_ccw_private *private,
 {
 	struct irb *irb = this_cpu_ptr(&cio_irb);
 
+	VFIO_CCW_TRACE_EVENT(6, "IRQ");
+	VFIO_CCW_TRACE_EVENT(6, dev_name(&private->sch->dev));
+
 	memcpy(&private->irb, irb, sizeof(*irb));
 
 	queue_work(vfio_ccw_work_q, &private->io_work);
 
 	if (private->completion)
 		complete(private->completion);
+}
+
+static void fsm_open(struct vfio_ccw_private *private,
+		     enum vfio_ccw_event event)
+{
+	struct subchannel *sch = private->sch;
+	int ret;
+
+	spin_lock_irq(sch->lock);
+	sch->isc = VFIO_CCW_ISC;
+	ret = cio_enable_subchannel(sch, (u32)(unsigned long)sch);
+	if (ret)
+		goto err_unlock;
+
+	private->state = VFIO_CCW_STATE_IDLE;
+	spin_unlock_irq(sch->lock);
+	return;
+
+err_unlock:
+	spin_unlock_irq(sch->lock);
+	vfio_ccw_fsm_event(private, VFIO_CCW_EVENT_NOT_OPER);
+}
+
+static void fsm_close(struct vfio_ccw_private *private,
+		      enum vfio_ccw_event event)
+{
+	struct subchannel *sch = private->sch;
+	int ret;
+
+	spin_lock_irq(sch->lock);
+
+	if (!sch->schib.pmcw.ena)
+		goto err_unlock;
+
+	ret = cio_disable_subchannel(sch);
+	if (ret == -EBUSY)
+		ret = vfio_ccw_sch_quiesce(sch);
+	if (ret)
+		goto err_unlock;
+
+	private->state = VFIO_CCW_STATE_STANDBY;
+	spin_unlock_irq(sch->lock);
+	cp_free(&private->cp);
+	return;
+
+err_unlock:
+	spin_unlock_irq(sch->lock);
+	vfio_ccw_fsm_event(private, VFIO_CCW_EVENT_NOT_OPER);
 }
 
 /*
@@ -325,29 +430,39 @@ fsm_func_t *vfio_ccw_jumptable[NR_VFIO_CCW_STATES][NR_VFIO_CCW_EVENTS] = {
 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_error,
 		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_error,
 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_disabled_irq,
+		[VFIO_CCW_EVENT_OPEN]		= fsm_nop,
+		[VFIO_CCW_EVENT_CLOSE]		= fsm_nop,
 	},
 	[VFIO_CCW_STATE_STANDBY] = {
 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_error,
 		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_error,
-		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_disabled_irq,
+		[VFIO_CCW_EVENT_OPEN]		= fsm_open,
+		[VFIO_CCW_EVENT_CLOSE]		= fsm_notoper,
 	},
 	[VFIO_CCW_STATE_IDLE] = {
 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_request,
 		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_request,
 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+		[VFIO_CCW_EVENT_OPEN]		= fsm_notoper,
+		[VFIO_CCW_EVENT_CLOSE]		= fsm_close,
 	},
 	[VFIO_CCW_STATE_CP_PROCESSING] = {
 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_retry,
 		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_retry,
 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+		[VFIO_CCW_EVENT_OPEN]		= fsm_notoper,
+		[VFIO_CCW_EVENT_CLOSE]		= fsm_close,
 	},
 	[VFIO_CCW_STATE_CP_PENDING] = {
 		[VFIO_CCW_EVENT_NOT_OPER]	= fsm_notoper,
 		[VFIO_CCW_EVENT_IO_REQ]		= fsm_io_busy,
 		[VFIO_CCW_EVENT_ASYNC_REQ]	= fsm_async_request,
 		[VFIO_CCW_EVENT_INTERRUPT]	= fsm_irq,
+		[VFIO_CCW_EVENT_OPEN]		= fsm_notoper,
+		[VFIO_CCW_EVENT_CLOSE]		= fsm_close,
 	},
 };

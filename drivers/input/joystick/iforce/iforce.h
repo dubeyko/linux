@@ -6,9 +6,6 @@
  *  USB/RS232 I-Force joysticks and wheels.
  */
 
-/*
- */
-
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/input.h>
@@ -120,6 +117,12 @@ static inline int iforce_get_id_packet(struct iforce *iforce, u8 id,
 {
 	return iforce->xport_ops->get_id(iforce, id,
 					 response_data, response_len);
+}
+
+static inline void iforce_clear_xmit_and_wake(struct iforce *iforce)
+{
+	clear_bit(IFORCE_XMIT_RUNNING, iforce->xmit_flags);
+	wake_up_all(&iforce->wait);
 }
 
 /* Public functions */

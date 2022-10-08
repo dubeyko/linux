@@ -10,96 +10,113 @@ maintainers:
   - Paul Walmsley <paul.walmsley@sifive.com>
   - Palmer Dabbelt <palmer@sifive.com>
 
-allOf:
-  - $ref: /schemas/cpus.yaml#
+description: |
+  This document uses some terminology common to the RISC-V community
+  that is not widely used, the definitions of which are listed here:
+
+  hart: A hardware execution context, which contains all the state
+  mandated by the RISC-V ISA: a PC and some registers.  This
+  terminology is designed to disambiguate software's view of execution
+  contexts from any particular microarchitectural implementation
+  strategy.  For example, an Intel laptop containing one socket with
+  two cores, each of which has two hyperthreads, could be described as
+  having four harts.
 
 properties:
-  $nodename:
-    const: cpus
-    description: Container of cpu nodes
-
-  '#address-cells':
-    const: 1
-    description: |
-      A single unsigned 32-bit integer uniquely identifies each RISC-V
-      hart in a system.  (See the "reg" node under the "cpu" node,
-      below).
-
-  '#size-cells':
-    const: 0
-
-patternProperties:
-  '^cpu@[0-9a-f]+$':
-    properties:
-      compatible:
-        type: array
-        items:
+  compatible:
+    oneOf:
+      - items:
           - enum:
               - sifive,rocket0
+              - sifive,bullet0
               - sifive,e5
+              - sifive,e7
+              - sifive,e71
+              - sifive,u74-mc
+              - sifive,u54
+              - sifive,u74
+              - sifive,u5
+              - sifive,u7
+              - canaan,k210
+          - const: riscv
+      - items:
+          - enum:
               - sifive,e51
               - sifive,u54-mc
-              - sifive,u54
-              - sifive,u5
+          - const: sifive,rocket0
           - const: riscv
-        description:
-          Identifies that the hart uses the RISC-V instruction set
-          and identifies the type of the hart.
+      - const: riscv    # Simulator only
+    description:
+      Identifies that the hart uses the RISC-V instruction set
+      and identifies the type of the hart.
 
-      mmu-type:
-        allOf:
-          - $ref: "/schemas/types.yaml#/definitions/string"
-          - enum:
-              - riscv,sv32
-              - riscv,sv39
-              - riscv,sv48
-        description:
-          Identifies the MMU address translation mode used on this
-          hart.  These values originate from the RISC-V Privileged
-          Specification document, available from
-          https://riscv.org/specifications/
+  mmu-type:
+    description:
+      Identifies the MMU address translation mode used on this
+      hart.  These values originate from the RISC-V Privileged
+      Specification document, available from
+      https://riscv.org/specifications/
+    $ref: "/schemas/types.yaml#/definitions/string"
+    enum:
+      - riscv,sv32
+      - riscv,sv39
+      - riscv,sv48
+      - riscv,none
 
-      riscv,isa:
-        allOf:
-          - $ref: "/schemas/types.yaml#/definitions/string"
-          - enum:
-              - rv64imac
-              - rv64imafdc
-        description:
-          Identifies the specific RISC-V instruction set architecture
-          supported by the hart.  These are documented in the RISC-V
-          User-Level ISA document, available from
-          https://riscv.org/specifications/
+  riscv,cbom-block-size:
+    $ref: /schemas/types.yaml#/definitions/uint32
+    description:
+      The blocksize in bytes for the Zicbom cache operations.
 
-      timebase-frequency:
-        type: integer
-        minimum: 1
-        description:
-          Specifies the clock frequency of the system timer in Hz.
-          This value is common to all harts on a single system image.
+  riscv,isa:
+    description:
+      Identifies the specific RISC-V instruction set architecture
+      supported by the hart.  These are documented in the RISC-V
+      User-Level ISA document, available from
+      https://riscv.org/specifications/
 
-      interrupt-controller:
-        type: object
-        description: Describes the CPU's local interrupt controller
+      While the isa strings in ISA specification are case
+      insensitive, letters in the riscv,isa string must be all
+      lowercase to simplify parsing.
+    $ref: "/schemas/types.yaml#/definitions/string"
+    enum:
+      - rv64imac
+      - rv64imafdc
 
-        properties:
-          '#interrupt-cells':
-            const: 1
+  # RISC-V requires 'timebase-frequency' in /cpus, so disallow it here
+  timebase-frequency: false
 
-          compatible:
-            const: riscv,cpu-intc
+  interrupt-controller:
+    type: object
+    description: Describes the CPU's local interrupt controller
 
-          interrupt-controller: true
+    properties:
+      '#interrupt-cells':
+        const: 1
 
-        required:
-          - '#interrupt-cells'
-          - compatible
-          - interrupt-controller
+      compatible:
+        const: riscv,cpu-intc
+
+      interrupt-controller: true
 
     required:
-      - riscv,isa
-      - timebase-frequency
+      - '#interrupt-cells'
+      - compatible
       - interrupt-controller
+
+  cpu-idle-states:
+    $ref: '/schemas/types.yaml#/definitions/phandle-array'
+    items:
+      maxItems: 1
+    description: |
+      List of phandles to idle state nodes supported
+      by this hart (see ./idle-states.yaml).
+
+required:
+  - riscv,isa
+  - interrupt-controller
+
+additionalProperties: true
 
 examples:
   - |

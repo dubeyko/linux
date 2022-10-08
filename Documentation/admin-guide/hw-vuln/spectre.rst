@@ -41,10 +41,11 @@ Related CVEs
 
 The following CVE entries describe Spectre variants:
 
-   =============   =======================  =================
+   =============   =======================  ==========================
    CVE-2017-5753   Bounds check bypass      Spectre variant 1
    CVE-2017-5715   Branch target injection  Spectre variant 2
-   =============   =======================  =================
+   CVE-2019-1125   Spectre v1 swapgs        Spectre variant 1 (swapgs)
+   =============   =======================  ==========================
 
 Problem
 -------
@@ -59,8 +60,8 @@ privileged data touched during the speculative execution.
 Spectre variant 1 attacks take advantage of speculative execution of
 conditional branches, while Spectre variant 2 attacks use speculative
 execution of indirect branches to leak privileged memory.
-See :ref:`[1] <spec_ref1>` :ref:`[5] <spec_ref5>` :ref:`[7] <spec_ref7>`
-:ref:`[10] <spec_ref10>` :ref:`[11] <spec_ref11>`.
+See :ref:`[1] <spec_ref1>` :ref:`[5] <spec_ref5>` :ref:`[6] <spec_ref6>`
+:ref:`[7] <spec_ref7>` :ref:`[10] <spec_ref10>` :ref:`[11] <spec_ref11>`.
 
 Spectre variant 1 (Bounds Check Bypass)
 ---------------------------------------
@@ -77,6 +78,13 @@ leak information to the attacker.
 There are some extensions of Spectre variant 1 attacks for reading data
 over the network, see :ref:`[12] <spec_ref12>`. However such attacks
 are difficult, low bandwidth, fragile, and are considered low risk.
+
+Note that, despite "Bounds Check Bypass" name, Spectre variant 1 is not
+only about user-controlled array bounds checks.  It can affect any
+conditional checks.  The kernel entry code interrupt, exception, and NMI
+handlers all have conditional swapgs checks.  Those may be problematic
+in the context of Spectre v1, as kernel code can speculatively run with
+a user GS.
 
 Spectre variant 2 (Branch Target Injection)
 -------------------------------------------
@@ -123,6 +131,19 @@ steer its indirect branch speculations to gadget code, and measure the
 speculative execution's side effects left in level 1 cache to infer the
 victim's data.
 
+Yet another variant 2 attack vector is for the attacker to poison the
+Branch History Buffer (BHB) to speculatively steer an indirect branch
+to a specific Branch Target Buffer (BTB) entry, even if the entry isn't
+associated with the source address of the indirect branch. Specifically,
+the BHB might be shared across privilege levels even in the presence of
+Enhanced IBRS.
+
+Currently the only known real-world BHB attack vector is via
+unprivileged eBPF. Therefore, it's highly recommended to not enable
+unprivileged eBPF, especially when eIBRS is used (without retpolines).
+For a full mitigation against BHB attacks, it's recommended to use
+retpolines (or eIBRS combined with retpolines).
+
 Attack scenarios
 ----------------
 
@@ -131,6 +152,9 @@ not cover all possible attack vectors.
 
 1. A user process attacking the kernel
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Spectre variant 1
+~~~~~~~~~~~~~~~~~
 
    The attacker passes a parameter to the kernel via a register or
    via a known address in memory during a syscall. Such parameter may
@@ -144,7 +168,40 @@ not cover all possible attack vectors.
    potentially be influenced for Spectre attacks, new "nospec" accessor
    macros are used to prevent speculative loading of data.
 
-   Spectre variant 2 attacker can :ref:`poison <poison_btb>` the branch
+Spectre variant 1 (swapgs)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   An attacker can train the branch predictor to speculatively skip the
+   swapgs path for an interrupt or exception.  If they initialize
+   the GS register to a user-space value, if the swapgs is speculatively
+   skipped, subsequent GS-related percpu accesses in the speculation
+   window will be done with the attacker-controlled GS value.  This
+   could cause privileged memory to be accessed and leaked.
+
+   For example:
+
+   ::
+
+     if (coming from user space)
+         swapgs
+     mov %gs:<percpu_offset>, %reg
+     mov (%reg), %reg1
+
+   When coming from user space, the CPU can speculatively skip the
+   swapgs, and then do a speculative percpu load using the user GS
+   value.  So the user can speculatively force a read of any kernel
+   value.  If a gadget exists which uses the percpu value as an address
+   in another load/store, then the contents of the kernel value may
+   become visible via an L1 side channel attack.
+
+   A similar attack exists when coming from kernel space.  The CPU can
+   speculatively do the swapgs, causing the user GS to get used for the
+   rest of the speculative window.
+
+Spectre variant 2
+~~~~~~~~~~~~~~~~~
+
+   A spectre variant 2 attacker can :ref:`poison <poison_btb>` the branch
    target buffer (BTB) before issuing syscall to launch an attack.
    After entering the kernel, the kernel could use the poisoned branch
    target buffer on indirect jump and jump to gadget code in speculative
@@ -280,11 +337,18 @@ The sysfs file showing Spectre variant 1 mitigation status is:
 
 The possible values in this file are:
 
-  =======================================  =================================
-  'Mitigation: __user pointer sanitation'  Protection in kernel on a case by
-                                           case base with explicit pointer
-                                           sanitation.
-  =======================================  =================================
+  .. list-table::
+
+     * - 'Not affected'
+       - The processor is not vulnerable.
+     * - 'Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers'
+       - The swapgs protections are disabled; otherwise it has
+         protection in the kernel on a case by case base with explicit
+         pointer sanitation and usercopy LFENCE barriers.
+     * - 'Mitigation: usercopy/swapgs barriers and __user pointer sanitization'
+       - Protection in the kernel on a case by case base with explicit
+         pointer sanitation, usercopy LFENCE barriers, and swapgs LFENCE
+         barriers.
 
 However, the protections are put in place on a case by case basis,
 and there is no guarantee that all possible attack vectors for Spectre
@@ -313,13 +377,15 @@ The possible values in this file are:
 
   - Kernel status:
 
-  ====================================  =================================
-  'Not affected'                        The processor is not vulnerable
-  'Vulnerable'                          Vulnerable, no mitigation
-  'Mitigation: Full generic retpoline'  Software-focused mitigation
-  'Mitigation: Full AMD retpoline'      AMD-specific software mitigation
-  'Mitigation: Enhanced IBRS'           Hardware-focused mitigation
-  ====================================  =================================
+  ========================================  =================================
+  'Not affected'                            The processor is not vulnerable
+  'Mitigation: None'                        Vulnerable, no mitigation
+  'Mitigation: Retpolines'                  Use Retpoline thunks
+  'Mitigation: LFENCE'                      Use LFENCE instructions
+  'Mitigation: Enhanced IBRS'               Hardware-focused mitigation
+  'Mitigation: Enhanced IBRS + Retpolines'  Hardware-focused + Retpolines
+  'Mitigation: Enhanced IBRS + LFENCE'      Hardware-focused + LFENCE
+  ========================================  =================================
 
   - Firmware status: Show if Indirect Branch Restricted Speculation (IBRS) is
     used to protect against Spectre variant 2 attacks when calling firmware (x86 only).
@@ -356,6 +422,14 @@ The possible values in this file are:
   'RSB filling'   Protection of RSB on context switch enabled
   =============   ===========================================
 
+  - EIBRS Post-barrier Return Stack Buffer (PBRSB) protection status:
+
+  ===========================  =======================================================
+  'PBRSB-eIBRS: SW sequence'   CPU is affected and protection of RSB on VMEXIT enabled
+  'PBRSB-eIBRS: Vulnerable'    CPU is vulnerable
+  'PBRSB-eIBRS: Not affected'  CPU is not affected by PBRSB
+  ===========================  =======================================================
+
 Full mitigation might require a microcode update from the CPU
 vendor. When the necessary microcode is not available, the kernel will
 report vulnerability.
@@ -366,11 +440,26 @@ Turning on mitigation for Spectre variant 1 and Spectre variant 2
 1. Kernel mitigation
 ^^^^^^^^^^^^^^^^^^^^
 
+Spectre variant 1
+~~~~~~~~~~~~~~~~~
+
    For the Spectre variant 1, vulnerable kernel code (as determined
    by code audit or scanning tools) is annotated on a case by case
    basis to use nospec accessor macros for bounds clipping :ref:`[2]
    <spec_ref2>` to avoid any usable disclosure gadgets. However, it may
    not cover all attack vectors for Spectre variant 1.
+
+   Copy-from-user code has an LFENCE barrier to prevent the access_ok()
+   check from being mis-speculated.  The barrier is done by the
+   barrier_nospec() macro.
+
+   For the swapgs variant of Spectre variant 1, LFENCE barriers are
+   added to interrupt, exception and NMI entry where needed.  These
+   barriers are done by the FENCE_SWAPGS_KERNEL_ENTRY and
+   FENCE_SWAPGS_USER_ENTRY macros.
+
+Spectre variant 2
+~~~~~~~~~~~~~~~~~
 
    For Spectre variant 2 mitigation, the compiler turns indirect calls or
    jumps in the kernel into equivalent return trampolines (retpolines)
@@ -402,7 +491,7 @@ Turning on mitigation for Spectre variant 1 and Spectre variant 2
    before invoking any firmware code to prevent Spectre variant 2 exploits
    using the firmware.
 
-   Using kernel address space randomization (CONFIG_RANDOMIZE_SLAB=y
+   Using kernel address space randomization (CONFIG_RANDOMIZE_BASE=y
    and CONFIG_SLAB_FREELIST_RANDOM=y in the kernel configuration) makes
    attacks on the kernel generally more difficult.
 
@@ -424,9 +513,8 @@ Turning on mitigation for Spectre variant 1 and Spectre variant 2
 
    Restricting indirect branch speculation on a user program will
    also prevent the program from launching a variant 2 attack
-   on x86.  All sand-boxed SECCOMP programs have indirect branch
-   speculation restricted by default.  Administrators can change
-   that behavior via the kernel command line and sysfs control files.
+   on x86.  Administrators can change that behavior via the kernel
+   command line and sysfs control files.
    See :ref:`spectre_mitigation_control_command_line`.
 
    Programs that disable their indirect branch speculation will have
@@ -473,6 +561,12 @@ Mitigation control on the kernel command line
 Spectre variant 2 mitigation can be disabled or force enabled at the
 kernel command line.
 
+	nospectre_v1
+
+		[X86,PPC] Disable mitigations for Spectre Variant 1
+		(bounds check bypass). With this option data leaks are
+		possible in the system.
+
 	nospectre_v2
 
 		[X86] Disable all mitigations for the Spectre variant 2
@@ -512,70 +606,25 @@ kernel command line.
 
 		Specific mitigations can also be selected manually:
 
-		retpoline
-					replace indirect branches
-		retpoline,generic
-					google's original retpoline
-		retpoline,amd
-					AMD-specific minimal thunk
+                retpoline               auto pick between generic,lfence
+                retpoline,generic       Retpolines
+                retpoline,lfence        LFENCE; indirect branch
+                retpoline,amd           alias for retpoline,lfence
+                eibrs                   enhanced IBRS
+                eibrs,retpoline         enhanced IBRS + Retpolines
+                eibrs,lfence            enhanced IBRS + LFENCE
+                ibrs                    use IBRS to protect kernel
 
 		Not specifying this option is equivalent to
 		spectre_v2=auto.
-
-For user space mitigation:
-
-        spectre_v2_user=
-
-		[X86] Control mitigation of Spectre variant 2
-		(indirect branch speculation) vulnerability between
-		user space tasks
-
-		on
-			Unconditionally enable mitigations. Is
-			enforced by spectre_v2=on
-
-		off
-			Unconditionally disable mitigations. Is
-			enforced by spectre_v2=off
-
-		prctl
-			Indirect branch speculation is enabled,
-			but mitigation can be enabled via prctl
-			per thread. The mitigation control state
-			is inherited on fork.
-
-		prctl,ibpb
-			Like "prctl" above, but only STIBP is
-			controlled per thread. IBPB is issued
-			always when switching between different user
-			space processes.
-
-		seccomp
-			Same as "prctl" above, but all seccomp
-			threads will enable the mitigation unless
-			they explicitly opt out.
-
-		seccomp,ibpb
-			Like "seccomp" above, but only STIBP is
-			controlled per thread. IBPB is issued
-			always when switching between different
-			user space processes.
-
-		auto
-			Kernel selects the mitigation depending on
-			the available CPU features and vulnerability.
-
-		Default mitigation:
-		If CONFIG_SECCOMP=y then "seccomp", otherwise "prctl"
-
-		Not specifying this option is equivalent to
-		spectre_v2_user=auto.
 
 		In general the kernel by default selects
 		reasonable mitigations for the current CPU. To
 		disable Spectre variant 2 mitigations, boot with
 		spectre_v2=off. Spectre variant 1 mitigations
 		cannot be disabled.
+
+For spectre_v2_user see Documentation/admin-guide/kernel-parameters.txt
 
 Mitigation selection guide
 --------------------------
@@ -602,9 +651,8 @@ Mitigation selection guide
    off by disabling their indirect branch speculation when they are run
    (See :ref:`Documentation/userspace-api/spec_ctrl.rst <set_spec_ctrl>`).
    This prevents untrusted programs from polluting the branch target
-   buffer.  All programs running in SECCOMP sandboxes have indirect
-   branch speculation restricted by default. This behavior can be
-   changed via the kernel command line and sysfs control files. See
+   buffer.  This behavior can be changed via the kernel command line
+   and sysfs control files. See
    :ref:`spectre_mitigation_control_command_line`.
 
 3. High security mode
@@ -658,7 +706,7 @@ AMD white papers:
 
 .. _spec_ref6:
 
-[6] `Software techniques for managing speculation on AMD processors <https://developer.amd.com/wp-content/resources/90343-B_SoftwareTechniquesforManagingSpeculation_WP_7-18Update_FNL.pdf>`_.
+[6] `Software techniques for managing speculation on AMD processors <https://developer.amd.com/wp-content/resources/Managing-Speculation-on-AMD-Processors.pdf>`_.
 
 ARM white papers:
 

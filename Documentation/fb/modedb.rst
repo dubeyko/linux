@@ -53,6 +53,23 @@ Specifying the option multiple times for different ports is possible, e.g.::
 
     video=LVDS-1:d video=HDMI-1:D
 
+Options can also be passed after the mode, using commas as separator.
+
+       Sample usage: 720x480,rotate=180 - 720x480 mode, rotated by 180 degrees
+
+Valid options are::
+
+  - margin_top, margin_bottom, margin_left, margin_right (integer):
+    Number of pixels in the margins, typically to deal with overscan on TVs
+  - reflect_x (boolean): Perform an axial symmetry on the X axis
+  - reflect_y (boolean): Perform an axial symmetry on the Y axis
+  - rotate (integer): Rotate the initial framebuffer by x
+    degrees. Valid values are 0, 90, 180 and 270.
+  - panel_orientation, one of "normal", "upside_down", "left_side_up", or
+    "right_side_up". For KMS drivers only, this sets the "panel orientation"
+    property on the kms connector as hint for kms users.
+
+
 -----------------------------------------------------------------------------
 
 What is the VESA(TM) Coordinated Video Timings (CVT)?
@@ -135,7 +152,7 @@ To specify a video mode at bootup, use the following boot options::
     video=<driver>:<xres>x<yres>[-<bpp>][@refresh]
 
 where <driver> is a name from the table below.  Valid default modes can be
-found in linux/drivers/video/modedb.c.  Check your driver's documentation.
+found in drivers/video/fbdev/core/modedb.c.  Check your driver's documentation.
 There may be more modes::
 
     Drivers that support modedb boot options

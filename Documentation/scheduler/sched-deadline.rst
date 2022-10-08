@@ -669,7 +669,7 @@ Deadline Task Scheduling
 
  -deadline tasks cannot have an affinity mask smaller that the entire
  root_domain they are created on. However, affinities can be specified
- through the cpuset facility (Documentation/cgroup-v1/cpusets.rst).
+ through the cpuset facility (Documentation/admin-guide/cgroup-v1/cpusets.rst).
 
 5.1 SCHED_DEADLINE and cpusets HOWTO
 ------------------------------------
@@ -707,7 +707,7 @@ Deadline Task Scheduling
     and how to prevent non-root users "cheat" the system?
 
  As already discussed, we are planning also to merge this work with the EDF
- throttling patches [https://lkml.org/lkml/2010/2/23/239] but we still are in
+ throttling patches [https://lore.kernel.org/r/cover.1266931410.git.fabio@helm.retis] but we still are in
  the preliminary phases of the merge and we really seek feedback that would
  help us decide on the direction it should take.
 

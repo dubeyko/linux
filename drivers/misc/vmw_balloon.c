@@ -17,6 +17,7 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/types.h>
+#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/vmalloc.h>
@@ -28,7 +29,6 @@
 #include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-#include <linux/mount.h>
 #include <linux/balloon_compaction.h>
 #include <linux/vmw_vmci_defs.h>
 #include <linux/vmw_vmci_api.h>
@@ -343,11 +343,6 @@ struct vmballoon {
 
 	/* statistics */
 	struct vmballoon_stats *stats;
-
-#ifdef CONFIG_DEBUG_FS
-	/* debugfs file exporting statistics */
-	struct dentry *dbg_entry;
-#endif
 
 	/**
 	 * @b_dev_info: balloon device information descriptor.
@@ -690,7 +685,6 @@ static int vmballoon_alloc_page_list(struct vmballoon *b,
 		}
 
 		if (page) {
-			vmballoon_mark_page_offline(page, ctl->page_size);
 			/* Success. Add the page to the list and continue. */
 			list_add(&page->lru, &ctl->pages);
 			continue;
@@ -929,7 +923,6 @@ static void vmballoon_release_page_list(struct list_head *page_list,
 
 	list_for_each_entry_safe(page, tmp, page_list, lru) {
 		list_del(&page->lru);
-		vmballoon_mark_page_online(page, page_size);
 		__free_pages(page, vmballoon_page_order(page_size));
 	}
 
@@ -1004,6 +997,7 @@ static void vmballoon_enqueue_page_list(struct vmballoon *b,
 					enum vmballoon_page_size_type page_size)
 {
 	unsigned long flags;
+	struct page *page;
 
 	if (page_size == VMW_BALLOON_4K_PAGE) {
 		balloon_page_list_enqueue(&b->b_dev_info, pages);
@@ -1013,6 +1007,11 @@ static void vmballoon_enqueue_page_list(struct vmballoon *b,
 		 * for the balloon compaction mechanism.
 		 */
 		spin_lock_irqsave(&b->b_dev_info.pages_lock, flags);
+
+		list_for_each_entry(page, pages, lru) {
+			vmballoon_mark_page_offline(page, VMW_BALLOON_2M_PAGE);
+		}
+
 		list_splice_init(pages, &b->huge_pages);
 		__count_vm_events(BALLOON_INFLATE, *n_pages *
 				  vmballoon_page_in_frames(VMW_BALLOON_2M_PAGE));
@@ -1055,6 +1054,8 @@ static void vmballoon_dequeue_page_list(struct vmballoon *b,
 	/* 2MB pages */
 	spin_lock_irqsave(&b->b_dev_info.pages_lock, flags);
 	list_for_each_entry_safe(page, tmp, &b->huge_pages, lru) {
+		vmballoon_mark_page_online(page, VMW_BALLOON_2M_PAGE);
+
 		list_move(&page->lru, pages);
 		if (++i == n_req_pages)
 			break;
@@ -1449,10 +1450,10 @@ static void vmballoon_reset(struct vmballoon *b)
 
 	error = vmballoon_vmci_init(b);
 	if (error)
-		pr_err("failed to initialize vmci doorbell\n");
+		pr_err_once("failed to initialize vmci doorbell\n");
 
 	if (vmballoon_send_guest_id(b))
-		pr_err("failed to send guest ID to the host\n");
+		pr_err_once("failed to send guest ID to the host\n");
 
 unlock:
 	up_write(&b->conf_sem);
@@ -1584,7 +1585,7 @@ static int vmballoon_register_shrinker(struct vmballoon *b)
 	b->shrinker.count_objects = vmballoon_shrinker_count;
 	b->shrinker.seeks = DEFAULT_SEEKS;
 
-	r = register_shrinker(&b->shrinker);
+	r = register_shrinker(&b->shrinker, "vmw-balloon");
 
 	if (r == 0)
 		b->shrinker_registered = true;
@@ -1701,14 +1702,14 @@ DEFINE_SHOW_ATTRIBUTE(vmballoon_debug);
 
 static void __init vmballoon_debugfs_init(struct vmballoon *b)
 {
-	b->dbg_entry = debugfs_create_file("vmmemctl", S_IRUGO, NULL, b,
-					   &vmballoon_debug_fops);
+	debugfs_create_file("vmmemctl", S_IRUGO, NULL, b,
+			    &vmballoon_debug_fops);
 }
 
 static void __exit vmballoon_debugfs_exit(struct vmballoon *b)
 {
 	static_key_disable(&balloon_stat_enabled.key);
-	debugfs_remove(b->dbg_entry);
+	debugfs_remove(debugfs_lookup("vmmemctl", NULL));
 	kfree(b->stats);
 	b->stats = NULL;
 }
@@ -1727,27 +1728,6 @@ static inline void vmballoon_debugfs_exit(struct vmballoon *b)
 
 
 #ifdef CONFIG_BALLOON_COMPACTION
-
-static struct dentry *vmballoon_mount(struct file_system_type *fs_type,
-				      int flags, const char *dev_name,
-				      void *data)
-{
-	static const struct dentry_operations ops = {
-		.d_dname = simple_dname,
-	};
-
-	return mount_pseudo(fs_type, "balloon-vmware:", NULL, &ops,
-			    BALLOON_VMW_MAGIC);
-}
-
-static struct file_system_type vmballoon_fs = {
-	.name           = "balloon-vmware",
-	.mount          = vmballoon_mount,
-	.kill_sb        = kill_anon_super,
-};
-
-static struct vfsmount *vmballoon_mnt;
-
 /**
  * vmballoon_migratepage() - migrates a balloon page.
  * @b_dev_info: balloon device information descriptor.
@@ -1867,21 +1847,6 @@ out_unlock:
 }
 
 /**
- * vmballoon_compaction_deinit() - removes compaction related data.
- *
- * @b: pointer to the balloon.
- */
-static void vmballoon_compaction_deinit(struct vmballoon *b)
-{
-	if (!IS_ERR(b->b_dev_info.inode))
-		iput(b->b_dev_info.inode);
-
-	b->b_dev_info.inode = NULL;
-	kern_unmount(vmballoon_mnt);
-	vmballoon_mnt = NULL;
-}
-
-/**
  * vmballoon_compaction_init() - initialized compaction for the balloon.
  *
  * @b: pointer to the balloon.
@@ -1892,33 +1857,15 @@ static void vmballoon_compaction_deinit(struct vmballoon *b)
  *
  * Return: zero on success or error code on failure.
  */
-static __init int vmballoon_compaction_init(struct vmballoon *b)
+static __init void vmballoon_compaction_init(struct vmballoon *b)
 {
-	vmballoon_mnt = kern_mount(&vmballoon_fs);
-	if (IS_ERR(vmballoon_mnt))
-		return PTR_ERR(vmballoon_mnt);
-
 	b->b_dev_info.migratepage = vmballoon_migratepage;
-	b->b_dev_info.inode = alloc_anon_inode(vmballoon_mnt->mnt_sb);
-
-	if (IS_ERR(b->b_dev_info.inode))
-		return PTR_ERR(b->b_dev_info.inode);
-
-	b->b_dev_info.inode->i_mapping->a_ops = &balloon_aops;
-	return 0;
 }
 
 #else /* CONFIG_BALLOON_COMPACTION */
-
-static void vmballoon_compaction_deinit(struct vmballoon *b)
+static inline void vmballoon_compaction_init(struct vmballoon *b)
 {
 }
-
-static int vmballoon_compaction_init(struct vmballoon *b)
-{
-	return 0;
-}
-
 #endif /* CONFIG_BALLOON_COMPACTION */
 
 static int __init vmballoon_init(void)
@@ -1943,9 +1890,7 @@ static int __init vmballoon_init(void)
 	 * balloon_devinfo_init() .
 	 */
 	balloon_devinfo_init(&balloon.b_dev_info);
-	error = vmballoon_compaction_init(&balloon);
-	if (error)
-		goto fail;
+	vmballoon_compaction_init(&balloon);
 
 	INIT_LIST_HEAD(&balloon.huge_pages);
 	spin_lock_init(&balloon.comm_lock);
@@ -1962,7 +1907,6 @@ static int __init vmballoon_init(void)
 	return 0;
 fail:
 	vmballoon_unregister_shrinker(&balloon);
-	vmballoon_compaction_deinit(&balloon);
 	return error;
 }
 
@@ -1989,8 +1933,5 @@ static void __exit vmballoon_exit(void)
 	 */
 	vmballoon_send_start(&balloon, 0);
 	vmballoon_pop(&balloon);
-
-	/* Only once we popped the balloon, compaction can be deinit */
-	vmballoon_compaction_deinit(&balloon);
 }
 module_exit(vmballoon_exit);

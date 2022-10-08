@@ -172,10 +172,10 @@ EXPORT_SYMBOL_GPL(dev_pm_domain_attach_by_name);
  * @dev: Device to detach.
  * @power_off: Used to indicate whether we should power off the device.
  *
- * This functions will reverse the actions from dev_pm_domain_attach() and
- * dev_pm_domain_attach_by_id(), thus it detaches @dev from its PM domain.
- * Typically it should be invoked during the remove phase, either from
- * subsystem level code or from drivers.
+ * This functions will reverse the actions from dev_pm_domain_attach(),
+ * dev_pm_domain_attach_by_id() and dev_pm_domain_attach_by_name(), thus it
+ * detaches @dev from its PM domain.  Typically it should be invoked during the
+ * remove phase, either from subsystem level code or from drivers.
  *
  * Callers must ensure proper synchronization of this function with power
  * management callbacks.
@@ -186,6 +186,26 @@ void dev_pm_domain_detach(struct device *dev, bool power_off)
 		dev->pm_domain->detach(dev, power_off);
 }
 EXPORT_SYMBOL_GPL(dev_pm_domain_detach);
+
+/**
+ * dev_pm_domain_start - Start the device through its PM domain.
+ * @dev: Device to start.
+ *
+ * This function should typically be called during probe by a subsystem/driver,
+ * when it needs to start its device from the PM domain's perspective. Note
+ * that, it's assumed that the PM domain is already powered on when this
+ * function is called.
+ *
+ * Returns 0 on success and negative error values on failures.
+ */
+int dev_pm_domain_start(struct device *dev)
+{
+	if (dev->pm_domain && dev->pm_domain->start)
+		return dev->pm_domain->start(dev);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(dev_pm_domain_start);
 
 /**
  * dev_pm_domain_set - Set PM domain of a device.

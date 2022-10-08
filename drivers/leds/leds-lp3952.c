@@ -7,7 +7,7 @@
  */
 
 #include <linux/delay.h>
-#include <linux/gpio.h>
+#include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
@@ -255,15 +255,13 @@ static int lp3952_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int lp3952_remove(struct i2c_client *client)
+static void lp3952_remove(struct i2c_client *client)
 {
 	struct lp3952_led_array *priv;
 
 	priv = i2c_get_clientdata(client);
 	lp3952_on_off(priv, LP3952_LED_ALL, false);
 	gpiod_set_value(priv->enable_gpio, 0);
-
-	return 0;
 }
 
 static const struct i2c_device_id lp3952_id[] = {

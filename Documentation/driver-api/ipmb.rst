@@ -71,8 +71,12 @@ b) Example for device tree::
             ipmb@10 {
                     compatible = "ipmb-dev";
                     reg = <0x10>;
+                    i2c-protocol;
             };
      };
+
+If xmit of data to be done using raw i2c block vs smbus
+then "i2c-protocol" needs to be defined as above.
 
 2) Manually from Linux::
 
@@ -83,7 +87,7 @@ Instantiate the device
 ----------------------
 
 After loading the driver, you can instantiate the device as
-described in 'Documentation/i2c/instantiating-devices'.
+described in 'Documentation/i2c/instantiating-devices.rst'.
 If you have multiple BMCs, each connected to your Satellite MC via
 a different I2C bus, you can instantiate a device for each of
 those BMCs.

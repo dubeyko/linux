@@ -1264,7 +1264,7 @@ static int abituguru_probe(struct platform_device *pdev)
 	 * El weirdo probe order, to keep the sysfs order identical to the
 	 * BIOS and window-appliction listing order.
 	 */
-	const u8 probe_order[ABIT_UGURU_MAX_BANK1_SENSORS] = {
+	static const u8 probe_order[ABIT_UGURU_MAX_BANK1_SENSORS] = {
 		0x00, 0x01, 0x03, 0x04, 0x0A, 0x08, 0x0E, 0x02,
 		0x09, 0x06, 0x05, 0x0B, 0x0F, 0x0D, 0x07, 0x0C };
 
@@ -1504,7 +1504,6 @@ LEAVE_UPDATE:
 		return NULL;
 }
 
-#ifdef CONFIG_PM_SLEEP
 static int abituguru_suspend(struct device *dev)
 {
 	struct abituguru_data *data = dev_get_drvdata(dev);
@@ -1526,16 +1525,12 @@ static int abituguru_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(abituguru_pm, abituguru_suspend, abituguru_resume);
-#define ABIT_UGURU_PM	(&abituguru_pm)
-#else
-#define ABIT_UGURU_PM	NULL
-#endif /* CONFIG_PM */
+static DEFINE_SIMPLE_DEV_PM_OPS(abituguru_pm, abituguru_suspend, abituguru_resume);
 
 static struct platform_driver abituguru_driver = {
 	.driver = {
 		.name	= ABIT_UGURU_NAME,
-		.pm	= ABIT_UGURU_PM,
+		.pm	= pm_sleep_ptr(&abituguru_pm),
 	},
 	.probe		= abituguru_probe,
 	.remove		= abituguru_remove,

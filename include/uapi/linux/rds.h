@@ -64,10 +64,12 @@
 
 /* supported values for SO_RDS_TRANSPORT */
 #define	RDS_TRANS_IB	0
-#define	RDS_TRANS_IWARP	1
+#define	RDS_TRANS_GAP	1
 #define	RDS_TRANS_TCP	2
 #define RDS_TRANS_COUNT	3
 #define	RDS_TRANS_NONE	(~0)
+/* don't use RDS_TRANS_IWARP - it is deprecated */
+#define RDS_TRANS_IWARP RDS_TRANS_GAP
 
 /* IOCTLS commands for SOL_RDS */
 #define SIOCRDSSETTOS		(SIOCPROTOPRIVATE)
@@ -250,6 +252,7 @@ struct rds_info_rdma_connection {
 	__u32		rdma_mr_max;
 	__u32		rdma_mr_size;
 	__u8		tos;
+	__u8		sl;
 	__u32		cache_allocs;
 };
 
@@ -265,6 +268,7 @@ struct rds6_info_rdma_connection {
 	__u32		rdma_mr_max;
 	__u32		rdma_mr_size;
 	__u8		tos;
+	__u8		sl;
 	__u32		cache_allocs;
 };
 

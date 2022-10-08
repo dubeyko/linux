@@ -25,7 +25,7 @@ static char *create;
  * Format: dm-mod.create=<name>,<uuid>,<minor>,<flags>,<table>[,<table>+][;<name>,<uuid>,<minor>,<flags>,<table>[,<table>+]+]
  * Table format: <start_sector> <num_sectors> <target_type> <target_args>
  *
- * See Documentation/device-mapper/dm-init.rst for dm-mod.create="..." format
+ * See Documentation/admin-guide/device-mapper/dm-init.rst for dm-mod.create="..." format
  * details.
  */
 
@@ -36,7 +36,7 @@ struct dm_device {
 	struct list_head list;
 };
 
-const char * const dm_allowed_targets[] __initconst = {
+static const char * const dm_allowed_targets[] __initconst = {
 	"crypt",
 	"delay",
 	"linear",

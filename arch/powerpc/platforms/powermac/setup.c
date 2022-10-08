@@ -50,8 +50,6 @@
 
 #include <asm/reg.h>
 #include <asm/sections.h>
-#include <asm/prom.h>
-#include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/pci-bridge.h>
 #include <asm/ohare.h>
@@ -80,13 +78,7 @@ int pmac_newworld;
 
 static int current_root_goodness = -1;
 
-extern struct machdep_calls pmac_md;
-
 #define DEFAULT_ROOT_DEVICE Root_SDA1	/* sda1 - slightly silly choice */
-
-#ifdef CONFIG_PPC64
-int sccdbg;
-#endif
 
 sys_ctrler_t sys_ctrler = SYS_CTRLER_UNKNOWN;
 EXPORT_SYMBOL(sys_ctrler);
@@ -169,7 +161,7 @@ static void pmac_show_cpuinfo(struct seq_file *m)
 }
 
 #ifndef CONFIG_ADB_CUDA
-int find_via_cuda(void)
+int __init find_via_cuda(void)
 {
 	struct device_node *dn = of_find_node_by_name(NULL, "via-cuda");
 
@@ -183,7 +175,7 @@ int find_via_cuda(void)
 #endif
 
 #ifndef CONFIG_ADB_PMU
-int find_via_pmu(void)
+int __init find_via_pmu(void)
 {
 	struct device_node *dn = of_find_node_by_name(NULL, "via-pmu");
 
@@ -197,7 +189,7 @@ int find_via_pmu(void)
 #endif
 
 #ifndef CONFIG_PMAC_SMU
-int smu_init(void)
+int __init smu_init(void)
 {
 	/* should check and warn if SMU is present */
 	return 0;
@@ -285,7 +277,7 @@ static void __init pmac_setup_arch(void)
 				/* 604, G3, G4 etc. */
 				loops_per_jiffy = *fp / HZ;
 			else
-				/* 601, 603, etc. */
+				/* 603, etc. */
 				loops_per_jiffy = *fp / (2 * HZ);
 			of_node_put(cpu);
 			break;
@@ -298,9 +290,6 @@ static void __init pmac_setup_arch(void)
 		pmac_newworld = 1;
 		of_node_put(ic);
 	}
-
-	/* Lookup PCI hosts */
-	pmac_pci_init();
 
 #ifdef CONFIG_PPC32
 	ohare_init();
@@ -330,13 +319,6 @@ static void __init pmac_setup_arch(void)
 	}
 #endif /* CONFIG_ADB */
 }
-
-#ifdef CONFIG_SCSI
-void note_scsi_host(struct device_node *node, void *host)
-{
-}
-EXPORT_SYMBOL(note_scsi_host);
-#endif
 
 static int initializing = 1;
 
@@ -586,7 +568,6 @@ static int __init pmac_probe(void)
 
 #ifdef CONFIG_PPC32
 	/* isa_io_base gets set in pmac_pci_init */
-	ISA_DMA_THRESHOLD = ~0L;
 	DMA_MODE_READ = 1;
 	DMA_MODE_WRITE = 2;
 #endif /* CONFIG_PPC32 */
@@ -602,6 +583,7 @@ define_machine(powermac) {
 	.name			= "PowerMac",
 	.probe			= pmac_probe,
 	.setup_arch		= pmac_setup_arch,
+	.discover_phbs		= pmac_pci_init,
 	.show_cpuinfo		= pmac_show_cpuinfo,
 	.init_IRQ		= pmac_pic_init,
 	.get_irq		= NULL,	/* changed later */

@@ -17,162 +17,204 @@
 #include <asm/stacktrace.h>
 
 /*
- * AArch64 PCS assigns the frame pointer to x29.
+ * Start an unwind from a pt_regs.
  *
- * A simple function prologue looks like this:
- * 	sub	sp, sp, #0x10
- *   	stp	x29, x30, [sp]
- *	mov	x29, sp
+ * The unwind will begin at the PC within the regs.
  *
- * A simple function epilogue looks like this:
- *	mov	sp, x29
- *	ldp	x29, x30, [sp]
- *	add	sp, sp, #0x10
+ * The regs must be on a stack currently owned by the calling task.
  */
-int notrace unwind_frame(struct task_struct *tsk, struct stackframe *frame)
+static inline void unwind_init_from_regs(struct unwind_state *state,
+					 struct pt_regs *regs)
 {
-	unsigned long fp = frame->fp;
+	unwind_init_common(state, current);
 
-	if (fp & 0xf)
-		return -EINVAL;
+	state->fp = regs->regs[29];
+	state->pc = regs->pc;
+}
 
-	if (!tsk)
-		tsk = current;
+/*
+ * Start an unwind from a caller.
+ *
+ * The unwind will begin at the caller of whichever function this is inlined
+ * into.
+ *
+ * The function which invokes this must be noinline.
+ */
+static __always_inline void unwind_init_from_caller(struct unwind_state *state)
+{
+	unwind_init_common(state, current);
 
-	if (!on_accessible_stack(tsk, fp, NULL))
-		return -EINVAL;
+	state->fp = (unsigned long)__builtin_frame_address(1);
+	state->pc = (unsigned long)__builtin_return_address(0);
+}
 
-	frame->fp = READ_ONCE_NOCHECK(*(unsigned long *)(fp));
-	frame->pc = READ_ONCE_NOCHECK(*(unsigned long *)(fp + 8));
+/*
+ * Start an unwind from a blocked task.
+ *
+ * The unwind will begin at the blocked tasks saved PC (i.e. the caller of
+ * cpu_switch_to()).
+ *
+ * The caller should ensure the task is blocked in cpu_switch_to() for the
+ * duration of the unwind, or the unwind will be bogus. It is never valid to
+ * call this for the current task.
+ */
+static inline void unwind_init_from_task(struct unwind_state *state,
+					 struct task_struct *task)
+{
+	unwind_init_common(state, task);
+
+	state->fp = thread_saved_fp(task);
+	state->pc = thread_saved_pc(task);
+}
+
+/*
+ * Unwind from one frame record (A) to the next frame record (B).
+ *
+ * We terminate early if the location of B indicates a malformed chain of frame
+ * records (e.g. a cycle), determined based on the location and fp value of A
+ * and the location (but not the fp value) of B.
+ */
+static int notrace unwind_next(struct unwind_state *state)
+{
+	struct task_struct *tsk = state->task;
+	unsigned long fp = state->fp;
+	int err;
+
+	/* Final frame; nothing to unwind */
+	if (fp == (unsigned long)task_pt_regs(tsk)->stackframe)
+		return -ENOENT;
+
+	err = unwind_next_frame_record(state);
+	if (err)
+		return err;
+
+	state->pc = ptrauth_strip_insn_pac(state->pc);
 
 #ifdef CONFIG_FUNCTION_GRAPH_TRACER
 	if (tsk->ret_stack &&
-			(frame->pc == (unsigned long)return_to_handler)) {
-		struct ftrace_ret_stack *ret_stack;
+		(state->pc == (unsigned long)return_to_handler)) {
+		unsigned long orig_pc;
 		/*
 		 * This is a case where function graph tracer has
 		 * modified a return address (LR) in a stack frame
 		 * to hook a function return.
 		 * So replace it to an original value.
 		 */
-		ret_stack = ftrace_graph_get_ret_stack(tsk, frame->graph++);
-		if (WARN_ON_ONCE(!ret_stack))
+		orig_pc = ftrace_graph_ret_addr(tsk, NULL, state->pc,
+						(void *)state->fp);
+		if (WARN_ON_ONCE(state->pc == orig_pc))
 			return -EINVAL;
-		frame->pc = ret_stack->ret;
+		state->pc = orig_pc;
 	}
 #endif /* CONFIG_FUNCTION_GRAPH_TRACER */
-
-	/*
-	 * Frames created upon entry from EL0 have NULL FP and PC values, so
-	 * don't bother reporting these. Frames created by __noreturn functions
-	 * might have a valid FP even if PC is bogus, so only terminate where
-	 * both are NULL.
-	 */
-	if (!frame->fp && !frame->pc)
-		return -EINVAL;
+#ifdef CONFIG_KRETPROBES
+	if (is_kretprobe_trampoline(state->pc))
+		state->pc = kretprobe_find_ret_addr(tsk, (void *)state->fp, &state->kr_cur);
+#endif
 
 	return 0;
 }
+NOKPROBE_SYMBOL(unwind_next);
 
-void notrace walk_stackframe(struct task_struct *tsk, struct stackframe *frame,
-		     int (*fn)(struct stackframe *, void *), void *data)
+static void notrace unwind(struct unwind_state *state,
+			   stack_trace_consume_fn consume_entry, void *cookie)
 {
 	while (1) {
 		int ret;
 
-		if (fn(frame, data))
+		if (!consume_entry(cookie, state->pc))
 			break;
-		ret = unwind_frame(tsk, frame);
+		ret = unwind_next(state);
 		if (ret < 0)
 			break;
 	}
 }
+NOKPROBE_SYMBOL(unwind);
 
-#ifdef CONFIG_STACKTRACE
-struct stack_trace_data {
-	struct stack_trace *trace;
-	unsigned int no_sched_functions;
-	unsigned int skip;
-};
-
-static int save_trace(struct stackframe *frame, void *d)
+static bool dump_backtrace_entry(void *arg, unsigned long where)
 {
-	struct stack_trace_data *data = d;
-	struct stack_trace *trace = data->trace;
-	unsigned long addr = frame->pc;
-
-	if (data->no_sched_functions && in_sched_functions(addr))
-		return 0;
-	if (data->skip) {
-		data->skip--;
-		return 0;
-	}
-
-	trace->entries[trace->nr_entries++] = addr;
-
-	return trace->nr_entries >= trace->max_entries;
+	char *loglvl = arg;
+	printk("%s %pSb\n", loglvl, (void *)where);
+	return true;
 }
 
-void save_stack_trace_regs(struct pt_regs *regs, struct stack_trace *trace)
+void dump_backtrace(struct pt_regs *regs, struct task_struct *tsk,
+		    const char *loglvl)
 {
-	struct stack_trace_data data;
-	struct stackframe frame;
+	pr_debug("%s(regs = %p tsk = %p)\n", __func__, regs, tsk);
 
-	data.trace = trace;
-	data.skip = trace->skip;
-	data.no_sched_functions = 0;
+	if (regs && user_mode(regs))
+		return;
 
-	frame.fp = regs->regs[29];
-	frame.pc = regs->pc;
-#ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	frame.graph = 0;
-#endif
-
-	walk_stackframe(current, &frame, save_trace, &data);
-}
-EXPORT_SYMBOL_GPL(save_stack_trace_regs);
-
-static noinline void __save_stack_trace(struct task_struct *tsk,
-	struct stack_trace *trace, unsigned int nosched)
-{
-	struct stack_trace_data data;
-	struct stackframe frame;
+	if (!tsk)
+		tsk = current;
 
 	if (!try_get_task_stack(tsk))
 		return;
 
-	data.trace = trace;
-	data.skip = trace->skip;
-	data.no_sched_functions = nosched;
-
-	if (tsk != current) {
-		frame.fp = thread_saved_fp(tsk);
-		frame.pc = thread_saved_pc(tsk);
-	} else {
-		/* We don't want this function nor the caller */
-		data.skip += 2;
-		frame.fp = (unsigned long)__builtin_frame_address(0);
-		frame.pc = (unsigned long)__save_stack_trace;
-	}
-#ifdef CONFIG_FUNCTION_GRAPH_TRACER
-	frame.graph = 0;
-#endif
-
-	walk_stackframe(tsk, &frame, save_trace, &data);
+	printk("%sCall trace:\n", loglvl);
+	arch_stack_walk(dump_backtrace_entry, (void *)loglvl, tsk, regs);
 
 	put_task_stack(tsk);
 }
-EXPORT_SYMBOL_GPL(save_stack_trace_tsk);
 
-void save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
+void show_stack(struct task_struct *tsk, unsigned long *sp, const char *loglvl)
 {
-	__save_stack_trace(tsk, trace, 1);
+	dump_backtrace(NULL, tsk, loglvl);
+	barrier();
 }
 
-void save_stack_trace(struct stack_trace *trace)
-{
-	__save_stack_trace(current, trace, 0);
-}
+/*
+ * Per-cpu stacks are only accessible when unwinding the current task in a
+ * non-preemptible context.
+ */
+#define STACKINFO_CPU(name)					\
+	({							\
+		((task == current) && !preemptible())		\
+			? stackinfo_get_##name()		\
+			: stackinfo_get_unknown();		\
+	})
 
-EXPORT_SYMBOL_GPL(save_stack_trace);
+/*
+ * SDEI stacks are only accessible when unwinding the current task in an NMI
+ * context.
+ */
+#define STACKINFO_SDEI(name)					\
+	({							\
+		((task == current) && in_nmi())			\
+			? stackinfo_get_sdei_##name()		\
+			: stackinfo_get_unknown();		\
+	})
+
+noinline notrace void arch_stack_walk(stack_trace_consume_fn consume_entry,
+			      void *cookie, struct task_struct *task,
+			      struct pt_regs *regs)
+{
+	struct stack_info stacks[] = {
+		stackinfo_get_task(task),
+		STACKINFO_CPU(irq),
+#if defined(CONFIG_VMAP_STACK)
+		STACKINFO_CPU(overflow),
 #endif
+#if defined(CONFIG_VMAP_STACK) && defined(CONFIG_ARM_SDE_INTERFACE)
+		STACKINFO_SDEI(normal),
+		STACKINFO_SDEI(critical),
+#endif
+	};
+	struct unwind_state state = {
+		.stacks = stacks,
+		.nr_stacks = ARRAY_SIZE(stacks),
+	};
+
+	if (regs) {
+		if (task != current)
+			return;
+		unwind_init_from_regs(&state, regs);
+	} else if (task == current) {
+		unwind_init_from_caller(&state);
+	} else {
+		unwind_init_from_task(&state, task);
+	}
+
+	unwind(&state, consume_entry, cookie);
+}

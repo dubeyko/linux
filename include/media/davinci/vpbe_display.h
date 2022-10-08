@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (C) 2010 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2010 Texas Instruments Incorporated - https://www.ti.com/
  */
 #ifndef VPBE_DISPLAY_H
 #define VPBE_DISPLAY_H
@@ -69,13 +69,13 @@ struct vpbe_layer {
 	struct vpbe_disp_buffer *cur_frm;
 	/* Pointer pointing to next v4l2_buffer */
 	struct vpbe_disp_buffer *next_frm;
-	/* videobuf specific parameters
-	 * Buffer queue used in video-buf
+	/* vb2 specific parameters
+	 * Buffer queue used in vb2
 	 */
 	struct vb2_queue buffer_queue;
 	/* Queue of filled frames */
 	struct list_head dma_queue;
-	/* Used in video-buf */
+	/* Used for video buffer handling */
 	spinlock_t irqlock;
 	/* V4l2 specific parameters */
 	/* Identifies video device for this layer */

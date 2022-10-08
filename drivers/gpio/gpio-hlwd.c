@@ -65,7 +65,7 @@ static void hlwd_gpio_irqhandler(struct irq_desc *desc)
 	int hwirq;
 	u32 emulated_pending;
 
-	spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
 	pending = ioread32be(hlwd->regs + HW_GPIOB_INTFLAG);
 	pending &= ioread32be(hlwd->regs + HW_GPIOB_INTMASK);
 
@@ -93,15 +93,12 @@ static void hlwd_gpio_irqhandler(struct irq_desc *desc)
 		/* Mark emulated interrupts as pending */
 		pending |= rising | falling;
 	}
-	spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
 
 	chained_irq_enter(chip, desc);
 
-	for_each_set_bit(hwirq, &pending, 32) {
-		int irq = irq_find_mapping(hlwd->gpioc.irq.domain, hwirq);
-
-		generic_handle_irq(irq);
-	}
+	for_each_set_bit(hwirq, &pending, 32)
+		generic_handle_domain_irq(hlwd->gpioc.irq.domain, hwirq);
 
 	chained_irq_exit(chip, desc);
 }
@@ -121,11 +118,11 @@ static void hlwd_gpio_irq_mask(struct irq_data *data)
 	unsigned long flags;
 	u32 mask;
 
-	spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
 	mask = ioread32be(hlwd->regs + HW_GPIOB_INTMASK);
 	mask &= ~BIT(data->hwirq);
 	iowrite32be(mask, hlwd->regs + HW_GPIOB_INTMASK);
-	spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
 }
 
 static void hlwd_gpio_irq_unmask(struct irq_data *data)
@@ -135,11 +132,11 @@ static void hlwd_gpio_irq_unmask(struct irq_data *data)
 	unsigned long flags;
 	u32 mask;
 
-	spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
 	mask = ioread32be(hlwd->regs + HW_GPIOB_INTMASK);
 	mask |= BIT(data->hwirq);
 	iowrite32be(mask, hlwd->regs + HW_GPIOB_INTMASK);
-	spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
 }
 
 static void hlwd_gpio_irq_enable(struct irq_data *data)
@@ -176,7 +173,7 @@ static int hlwd_gpio_irq_set_type(struct irq_data *data, unsigned int flow_type)
 	unsigned long flags;
 	u32 level;
 
-	spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_lock_irqsave(&hlwd->gpioc.bgpio_lock, flags);
 
 	hlwd->edge_emulation &= ~BIT(data->hwirq);
 
@@ -197,11 +194,11 @@ static int hlwd_gpio_irq_set_type(struct irq_data *data, unsigned int flow_type)
 		hlwd_gpio_irq_setup_emulation(hlwd, data->hwirq, flow_type);
 		break;
 	default:
-		spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
+		raw_spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
 		return -EINVAL;
 	}
 
-	spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
+	raw_spin_unlock_irqrestore(&hlwd->gpioc.bgpio_lock, flags);
 	return 0;
 }
 
@@ -244,43 +241,45 @@ static int hlwd_gpio_probe(struct platform_device *pdev)
 		ngpios = 32;
 	hlwd->gpioc.ngpio = ngpios;
 
-	res = devm_gpiochip_add_data(&pdev->dev, &hlwd->gpioc, hlwd);
-	if (res)
-		return res;
-
 	/* Mask and ack all interrupts */
 	iowrite32be(0, hlwd->regs + HW_GPIOB_INTMASK);
 	iowrite32be(0xffffffff, hlwd->regs + HW_GPIOB_INTFLAG);
 
 	/*
 	 * If this GPIO controller is not marked as an interrupt controller in
-	 * the DT, return.
+	 * the DT, skip interrupt support.
 	 */
-	if (!of_property_read_bool(pdev->dev.of_node, "interrupt-controller"))
-		return 0;
+	if (of_property_read_bool(pdev->dev.of_node, "interrupt-controller")) {
+		struct gpio_irq_chip *girq;
 
-	hlwd->irq = platform_get_irq(pdev, 0);
-	if (hlwd->irq < 0) {
-		dev_info(&pdev->dev, "platform_get_irq returned %d\n",
-			 hlwd->irq);
-		return hlwd->irq;
+		hlwd->irq = platform_get_irq(pdev, 0);
+		if (hlwd->irq < 0) {
+			dev_info(&pdev->dev, "platform_get_irq returned %d\n",
+				 hlwd->irq);
+			return hlwd->irq;
+		}
+
+		hlwd->irqc.name = dev_name(&pdev->dev);
+		hlwd->irqc.irq_mask = hlwd_gpio_irq_mask;
+		hlwd->irqc.irq_unmask = hlwd_gpio_irq_unmask;
+		hlwd->irqc.irq_enable = hlwd_gpio_irq_enable;
+		hlwd->irqc.irq_set_type = hlwd_gpio_irq_set_type;
+
+		girq = &hlwd->gpioc.irq;
+		girq->chip = &hlwd->irqc;
+		girq->parent_handler = hlwd_gpio_irqhandler;
+		girq->num_parents = 1;
+		girq->parents = devm_kcalloc(&pdev->dev, 1,
+					     sizeof(*girq->parents),
+					     GFP_KERNEL);
+		if (!girq->parents)
+			return -ENOMEM;
+		girq->parents[0] = hlwd->irq;
+		girq->default_type = IRQ_TYPE_NONE;
+		girq->handler = handle_level_irq;
 	}
 
-	hlwd->irqc.name = dev_name(&pdev->dev);
-	hlwd->irqc.irq_mask = hlwd_gpio_irq_mask;
-	hlwd->irqc.irq_unmask = hlwd_gpio_irq_unmask;
-	hlwd->irqc.irq_enable = hlwd_gpio_irq_enable;
-	hlwd->irqc.irq_set_type = hlwd_gpio_irq_set_type;
-
-	res = gpiochip_irqchip_add(&hlwd->gpioc, &hlwd->irqc, 0,
-				   handle_level_irq, IRQ_TYPE_NONE);
-	if (res)
-		return res;
-
-	gpiochip_set_chained_irqchip(&hlwd->gpioc, &hlwd->irqc,
-				     hlwd->irq, hlwd_gpio_irqhandler);
-
-	return 0;
+	return devm_gpiochip_add_data(&pdev->dev, &hlwd->gpioc, hlwd);
 }
 
 static const struct of_device_id hlwd_gpio_match[] = {

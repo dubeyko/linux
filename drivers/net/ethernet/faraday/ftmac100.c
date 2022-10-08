@@ -23,7 +23,6 @@
 #include "ftmac100.h"
 
 #define DRV_NAME	"ftmac100"
-#define DRV_VERSION	"0.2"
 
 #define RX_QUEUE_ENTRIES	128	/* must be power of 2 */
 #define TX_QUEUE_ENTRIES	16	/* must be power of 2 */
@@ -808,9 +807,8 @@ static void ftmac100_mdio_write(struct net_device *netdev, int phy_id, int reg,
 static void ftmac100_get_drvinfo(struct net_device *netdev,
 				 struct ethtool_drvinfo *info)
 {
-	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
-	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
-	strlcpy(info->bus_info, dev_name(&netdev->dev), sizeof(info->bus_info));
+	strscpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strscpy(info->bus_info, dev_name(&netdev->dev), sizeof(info->bus_info));
 }
 
 static int ftmac100_get_link_ksettings(struct net_device *netdev,
@@ -1045,7 +1043,7 @@ static const struct net_device_ops ftmac100_netdev_ops = {
 	.ndo_start_xmit		= ftmac100_hard_start_xmit,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
-	.ndo_do_ioctl		= ftmac100_do_ioctl,
+	.ndo_eth_ioctl		= ftmac100_do_ioctl,
 };
 
 /******************************************************************************
@@ -1058,9 +1056,6 @@ static int ftmac100_probe(struct platform_device *pdev)
 	struct net_device *netdev;
 	struct ftmac100 *priv;
 	int err;
-
-	if (!pdev)
-		return -ENODEV;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res)
@@ -1080,6 +1075,11 @@ static int ftmac100_probe(struct platform_device *pdev)
 	SET_NETDEV_DEV(netdev, &pdev->dev);
 	netdev->ethtool_ops = &ftmac100_ethtool_ops;
 	netdev->netdev_ops = &ftmac100_netdev_ops;
+	netdev->max_mtu = MAX_PKT_SIZE;
+
+	err = platform_get_ethdev_address(&pdev->dev, netdev);
+	if (err == -EPROBE_DEFER)
+		goto defer_get_mac;
 
 	platform_set_drvdata(pdev, netdev);
 
@@ -1091,7 +1091,7 @@ static int ftmac100_probe(struct platform_device *pdev)
 	spin_lock_init(&priv->tx_lock);
 
 	/* initialize NAPI */
-	netif_napi_add(netdev, &priv->napi, ftmac100_poll, 64);
+	netif_napi_add(netdev, &priv->napi, ftmac100_poll);
 
 	/* map io memory */
 	priv->res = request_mem_region(res->start, resource_size(res),
@@ -1142,6 +1142,7 @@ err_ioremap:
 	release_resource(priv->res);
 err_req_mem:
 	netif_napi_del(&priv->napi);
+defer_get_mac:
 	free_netdev(netdev);
 err_alloc_etherdev:
 	return err;
@@ -1182,19 +1183,7 @@ static struct platform_driver ftmac100_driver = {
 /******************************************************************************
  * initialization / finalization
  *****************************************************************************/
-static int __init ftmac100_init(void)
-{
-	pr_info("Loading version " DRV_VERSION " ...\n");
-	return platform_driver_register(&ftmac100_driver);
-}
-
-static void __exit ftmac100_exit(void)
-{
-	platform_driver_unregister(&ftmac100_driver);
-}
-
-module_init(ftmac100_init);
-module_exit(ftmac100_exit);
+module_platform_driver(ftmac100_driver);
 
 MODULE_AUTHOR("Po-Yu Chuang <ratbert@faraday-tech.com>");
 MODULE_DESCRIPTION("FTMAC100 driver");

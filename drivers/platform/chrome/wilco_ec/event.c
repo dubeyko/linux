@@ -79,7 +79,7 @@ static DEFINE_IDA(event_ida);
 struct ec_event {
 	u16 size;
 	u16 type;
-	u16 event[0];
+	u16 event[];
 } __packed;
 
 #define ec_event_num_words(ev) (ev->size - 1)
@@ -96,7 +96,7 @@ struct ec_event_queue {
 	int capacity;
 	int head;
 	int tail;
-	struct ec_event *entries[0];
+	struct ec_event *entries[];
 };
 
 /* Maximum number of events to store in ec_event_queue */
@@ -343,7 +343,7 @@ static __poll_t event_poll(struct file *filp, poll_table *wait)
  *
  * Removes the first event from the queue, places it in the passed buffer.
  *
- * If there are no events in the the queue, then one of two things happens,
+ * If there are no events in the queue, then one of two things happens,
  * depending on if the file was opened in nonblocking mode: If in nonblocking
  * mode, then return -EAGAIN to say there's no data. If in blocking mode, then
  * block until an event is available.

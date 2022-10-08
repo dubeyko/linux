@@ -5,8 +5,10 @@
 #include <linux/bpf.h>
 #include <sys/socket.h>
 
-#include "bpf_helpers.h"
-#include "bpf_endian.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+#include <bpf_sockopt_helpers.h>
 
 #define SRC_REWRITE_IP6_0	0
 #define SRC_REWRITE_IP6_1	0
@@ -20,12 +22,13 @@
 
 #define DST_REWRITE_PORT6	6666
 
-int _version SEC("version") = 1;
-
 SEC("cgroup/sendmsg6")
 int sendmsg_v6_prog(struct bpf_sock_addr *ctx)
 {
 	if (ctx->type != SOCK_DGRAM)
+		return 0;
+
+	if (!get_set_sk_priority(ctx))
 		return 0;
 
 	/* Rewrite source. */
@@ -41,8 +44,7 @@ int sendmsg_v6_prog(struct bpf_sock_addr *ctx)
 	}
 
 	/* Rewrite destination. */
-	if ((ctx->user_ip6[0] & 0xFFFF) == bpf_htons(0xFACE) &&
-	     ctx->user_ip6[0] >> 16 == bpf_htons(0xB00C)) {
+	if (ctx->user_ip6[0] == bpf_htonl(0xFACEB00C)) {
 		ctx->user_ip6[0] = bpf_htonl(DST_REWRITE_IP6_0);
 		ctx->user_ip6[1] = bpf_htonl(DST_REWRITE_IP6_1);
 		ctx->user_ip6[2] = bpf_htonl(DST_REWRITE_IP6_2);

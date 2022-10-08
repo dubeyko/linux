@@ -195,7 +195,7 @@ META_COLLECTOR(int_priority)
 META_COLLECTOR(int_protocol)
 {
 	/* Let userspace take care of the byte ordering */
-	dst->value = tc_skb_protocol(skb);
+	dst->value = skb_protocol(skb, false);
 }
 
 META_COLLECTOR(int_pkttype)
@@ -311,12 +311,15 @@ META_COLLECTOR(int_sk_bound_if)
 
 META_COLLECTOR(var_sk_bound_if)
 {
+	int bound_dev_if;
+
 	if (skip_nonlocal(skb)) {
 		*err = -1;
 		return;
 	}
 
-	if (skb->sk->sk_bound_dev_if == 0) {
+	bound_dev_if = READ_ONCE(skb->sk->sk_bound_dev_if);
+	if (bound_dev_if == 0) {
 		dst->value = (unsigned long) "any";
 		dst->len = 3;
 	} else {
@@ -324,7 +327,7 @@ META_COLLECTOR(var_sk_bound_if)
 
 		rcu_read_lock();
 		dev = dev_get_by_index_rcu(sock_net(skb->sk),
-					   skb->sk->sk_bound_dev_if);
+					   bound_dev_if);
 		*err = var_dev(dev, dst);
 		rcu_read_unlock();
 	}
@@ -446,7 +449,7 @@ META_COLLECTOR(int_sk_wmem_queued)
 		*err = -1;
 		return;
 	}
-	dst->value = sk->sk_wmem_queued;
+	dst->value = READ_ONCE(sk->sk_wmem_queued);
 }
 
 META_COLLECTOR(int_sk_fwd_alloc)
@@ -457,7 +460,7 @@ META_COLLECTOR(int_sk_fwd_alloc)
 		*err = -1;
 		return;
 	}
-	dst->value = sk->sk_forward_alloc;
+	dst->value = sk_forward_alloc_get(sk);
 }
 
 META_COLLECTOR(int_sk_sndbuf)
@@ -521,7 +524,7 @@ META_COLLECTOR(int_sk_ack_bl)
 		*err = -1;
 		return;
 	}
-	dst->value = sk->sk_ack_backlog;
+	dst->value = READ_ONCE(sk->sk_ack_backlog);
 }
 
 META_COLLECTOR(int_sk_max_ack_bl)
@@ -532,7 +535,7 @@ META_COLLECTOR(int_sk_max_ack_bl)
 		*err = -1;
 		return;
 	}
-	dst->value = sk->sk_max_ack_backlog;
+	dst->value = READ_ONCE(sk->sk_max_ack_backlog);
 }
 
 META_COLLECTOR(int_sk_prio)
@@ -554,7 +557,7 @@ META_COLLECTOR(int_sk_rcvlowat)
 		*err = -1;
 		return;
 	}
-	dst->value = sk->sk_rcvlowat;
+	dst->value = READ_ONCE(sk->sk_rcvlowat);
 }
 
 META_COLLECTOR(int_sk_rcvtimeo)

@@ -429,13 +429,14 @@ static int wm831x_rtc_probe(struct platform_device *pdev)
 	wm831x_rtc->rtc->ops = &wm831x_rtc_ops;
 	wm831x_rtc->rtc->range_max = U32_MAX;
 
-	ret = rtc_register_device(wm831x_rtc->rtc);
+	ret = devm_rtc_register_device(wm831x_rtc->rtc);
 	if (ret)
 		return ret;
 
 	ret = devm_request_threaded_irq(&pdev->dev, alm_irq, NULL,
 				wm831x_alm_irq,
-				IRQF_TRIGGER_RISING, "RTC alarm",
+				IRQF_TRIGGER_RISING | IRQF_ONESHOT,
+				"RTC alarm",
 				wm831x_rtc);
 	if (ret != 0) {
 		dev_err(&pdev->dev, "Failed to request alarm IRQ %d: %d\n",

@@ -25,7 +25,6 @@
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 
-static unsigned int connmark_net_id;
 static struct tc_action_ops act_connmark_ops;
 
 static int tcf_connmark_act(struct sk_buff *skb, const struct tc_action *a,
@@ -43,17 +42,20 @@ static int tcf_connmark_act(struct sk_buff *skb, const struct tc_action *a,
 	tcf_lastuse_update(&ca->tcf_tm);
 	bstats_update(&ca->tcf_bstats, skb);
 
-	if (skb->protocol == htons(ETH_P_IP)) {
+	switch (skb_protocol(skb, true)) {
+	case htons(ETH_P_IP):
 		if (skb->len < sizeof(struct iphdr))
 			goto out;
 
 		proto = NFPROTO_IPV4;
-	} else if (skb->protocol == htons(ETH_P_IPV6)) {
+		break;
+	case htons(ETH_P_IPV6):
 		if (skb->len < sizeof(struct ipv6hdr))
 			goto out;
 
 		proto = NFPROTO_IPV6;
-	} else {
+		break;
+	default:
 		goto out;
 	}
 
@@ -93,16 +95,17 @@ static const struct nla_policy connmark_policy[TCA_CONNMARK_MAX + 1] = {
 
 static int tcf_connmark_init(struct net *net, struct nlattr *nla,
 			     struct nlattr *est, struct tc_action **a,
-			     int ovr, int bind, bool rtnl_held,
-			     struct tcf_proto *tp,
+			     struct tcf_proto *tp, u32 flags,
 			     struct netlink_ext_ack *extack)
 {
-	struct tc_action_net *tn = net_generic(net, connmark_net_id);
+	struct tc_action_net *tn = net_generic(net, act_connmark_ops.net_id);
 	struct nlattr *tb[TCA_CONNMARK_MAX + 1];
+	bool bind = flags & TCA_ACT_FLAGS_BIND;
 	struct tcf_chain *goto_ch = NULL;
 	struct tcf_connmark_info *ci;
 	struct tc_connmark *parm;
 	int ret = 0, err;
+	u32 index;
 
 	if (!nla)
 		return -EINVAL;
@@ -116,13 +119,13 @@ static int tcf_connmark_init(struct net *net, struct nlattr *nla,
 		return -EINVAL;
 
 	parm = nla_data(tb[TCA_CONNMARK_PARMS]);
-
-	ret = tcf_idr_check_alloc(tn, &parm->index, a, bind);
+	index = parm->index;
+	ret = tcf_idr_check_alloc(tn, &index, a, bind);
 	if (!ret) {
-		ret = tcf_idr_create(tn, parm->index, est, a,
-				     &act_connmark_ops, bind, false);
+		ret = tcf_idr_create(tn, index, est, a,
+				     &act_connmark_ops, bind, false, flags);
 		if (ret) {
-			tcf_idr_cleanup(tn, parm->index);
+			tcf_idr_cleanup(tn, index);
 			return ret;
 		}
 
@@ -135,13 +138,12 @@ static int tcf_connmark_init(struct net *net, struct nlattr *nla,
 		ci->net = net;
 		ci->zone = parm->zone;
 
-		tcf_idr_insert(tn, *a);
 		ret = ACT_P_CREATED;
 	} else if (ret > 0) {
 		ci = to_connmark(*a);
 		if (bind)
 			return 0;
-		if (!ovr) {
+		if (!(flags & TCA_ACT_FLAGS_REPLACE)) {
 			tcf_idr_release(*a, bind);
 			return -EEXIST;
 		}
@@ -197,23 +199,6 @@ nla_put_failure:
 	return -1;
 }
 
-static int tcf_connmark_walker(struct net *net, struct sk_buff *skb,
-			       struct netlink_callback *cb, int type,
-			       const struct tc_action_ops *ops,
-			       struct netlink_ext_ack *extack)
-{
-	struct tc_action_net *tn = net_generic(net, connmark_net_id);
-
-	return tcf_generic_walker(tn, skb, cb, type, ops, extack);
-}
-
-static int tcf_connmark_search(struct net *net, struct tc_action **a, u32 index)
-{
-	struct tc_action_net *tn = net_generic(net, connmark_net_id);
-
-	return tcf_idr_search(tn, a, index);
-}
-
 static struct tc_action_ops act_connmark_ops = {
 	.kind		=	"connmark",
 	.id		=	TCA_ID_CONNMARK,
@@ -221,27 +206,25 @@ static struct tc_action_ops act_connmark_ops = {
 	.act		=	tcf_connmark_act,
 	.dump		=	tcf_connmark_dump,
 	.init		=	tcf_connmark_init,
-	.walk		=	tcf_connmark_walker,
-	.lookup		=	tcf_connmark_search,
 	.size		=	sizeof(struct tcf_connmark_info),
 };
 
 static __net_init int connmark_init_net(struct net *net)
 {
-	struct tc_action_net *tn = net_generic(net, connmark_net_id);
+	struct tc_action_net *tn = net_generic(net, act_connmark_ops.net_id);
 
-	return tc_action_net_init(tn, &act_connmark_ops);
+	return tc_action_net_init(net, tn, &act_connmark_ops);
 }
 
 static void __net_exit connmark_exit_net(struct list_head *net_list)
 {
-	tc_action_net_exit(net_list, connmark_net_id);
+	tc_action_net_exit(net_list, act_connmark_ops.net_id);
 }
 
 static struct pernet_operations connmark_net_ops = {
 	.init = connmark_init_net,
 	.exit_batch = connmark_exit_net,
-	.id   = &connmark_net_id,
+	.id   = &act_connmark_ops.net_id,
 	.size = sizeof(struct tc_action_net),
 };
 

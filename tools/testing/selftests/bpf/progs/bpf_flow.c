@@ -16,24 +16,25 @@
 #include <sys/socket.h>
 #include <linux/if_tunnel.h>
 #include <linux/mpls.h>
-#include "bpf_helpers.h"
-#include "bpf_endian.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
-int _version SEC("version") = 1;
-#define PROG(F) SEC(#F) int bpf_func_##F
+#define PROG(F) PROG_(F, _##F)
+#define PROG_(NUM, NAME) SEC("flow_dissector") int flow_dissector_##NUM
+
+#define FLOW_CONTINUE_SADDR 0x7f00007f /* 127.0.0.127 */
 
 /* These are the identifiers of the BPF programs that will be used in tail
  * calls. Name is limited to 16 characters, with the terminating character and
  * bpf_func_ above, we have only 6 to work with, anything after will be cropped.
  */
-enum {
-	IP,
-	IPV6,
-	IPV6OP,	/* Destination/Hop-by-Hop Options IPv6 Extension header */
-	IPV6FR,	/* Fragmentation IPv6 Extension Header */
-	MPLS,
-	VLAN,
-};
+#define IP		0
+#define IPV6		1
+#define IPV6OP		2 /* Destination/Hop-by-Hop Options IPv6 Ext. Header */
+#define IPV6FR		3 /* Fragmentation IPv6 Extension Header */
+#define MPLS		4
+#define VLAN		5
+#define MAX_PROG	6
 
 #define IP_MF		0x2000
 #define IP_OFFSET	0x1FFF
@@ -59,14 +60,14 @@ struct frag_hdr {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PROG_ARRAY);
-	__uint(max_entries, 8);
+	__uint(max_entries, MAX_PROG);
 	__uint(key_size, sizeof(__u32));
 	__uint(value_size, sizeof(__u32));
 } jmp_table SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
 	__type(key, __u32);
 	__type(value, struct bpf_flow_keys);
 } last_dissection SEC(".maps");
@@ -74,13 +75,18 @@ struct {
 static __always_inline int export_flow_keys(struct bpf_flow_keys *keys,
 					    int ret)
 {
-	struct bpf_flow_keys *val;
-	__u32 key = 0;
+	__u32 key = (__u32)(keys->sport) << 16 | keys->dport;
+	struct bpf_flow_keys val;
 
-	val = bpf_map_lookup_elem(&last_dissection, &key);
-	if (val)
-		memcpy(val, keys, sizeof(*val));
+	memcpy(&val, keys, sizeof(val));
+	bpf_map_update_elem(&last_dissection, &key, &val, BPF_ANY);
 	return ret;
+}
+
+#define IPV6_FLOWLABEL_MASK		__bpf_constant_htonl(0x000FFFFF)
+static inline __be32 ip6_flowlabel(const struct ipv6hdr *hdr)
+{
+	return *(__be32 *)hdr & IPV6_FLOWLABEL_MASK;
 }
 
 static __always_inline void *bpf_flow_dissect_get_header(struct __sk_buff *skb,
@@ -113,18 +119,18 @@ static __always_inline int parse_eth_proto(struct __sk_buff *skb, __be16 proto)
 
 	switch (proto) {
 	case bpf_htons(ETH_P_IP):
-		bpf_tail_call(skb, &jmp_table, IP);
+		bpf_tail_call_static(skb, &jmp_table, IP);
 		break;
 	case bpf_htons(ETH_P_IPV6):
-		bpf_tail_call(skb, &jmp_table, IPV6);
+		bpf_tail_call_static(skb, &jmp_table, IPV6);
 		break;
 	case bpf_htons(ETH_P_MPLS_MC):
 	case bpf_htons(ETH_P_MPLS_UC):
-		bpf_tail_call(skb, &jmp_table, MPLS);
+		bpf_tail_call_static(skb, &jmp_table, MPLS);
 		break;
 	case bpf_htons(ETH_P_8021Q):
 	case bpf_htons(ETH_P_8021AD):
-		bpf_tail_call(skb, &jmp_table, VLAN);
+		bpf_tail_call_static(skb, &jmp_table, VLAN);
 		break;
 	default:
 		/* Protocol not supported */
@@ -138,6 +144,19 @@ SEC("flow_dissector")
 int _dissect(struct __sk_buff *skb)
 {
 	struct bpf_flow_keys *keys = skb->flow_keys;
+
+	if (keys->n_proto == bpf_htons(ETH_P_IP)) {
+		/* IP traffic from FLOW_CONTINUE_SADDR falls-back to
+		 * standard dissector
+		 */
+		struct iphdr *iph, _iph;
+
+		iph = bpf_flow_dissect_get_header(skb, sizeof(*iph), &_iph);
+		if (iph && iph->ihl == 5 &&
+		    iph->saddr == bpf_htonl(FLOW_CONTINUE_SADDR)) {
+			return BPF_FLOW_DISSECTOR_CONTINUE;
+		}
+	}
 
 	return parse_eth_proto(skb, keys->n_proto);
 }
@@ -153,7 +172,6 @@ static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 	struct tcphdr *tcp, _tcp;
 	struct udphdr *udp, _udp;
 
-	keys->ip_proto = proto;
 	switch (proto) {
 	case IPPROTO_ICMP:
 		icmp = bpf_flow_dissect_get_header(skb, sizeof(*icmp), &_icmp);
@@ -162,9 +180,15 @@ static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 		return export_flow_keys(keys, BPF_OK);
 	case IPPROTO_IPIP:
 		keys->is_encap = true;
+		if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP)
+			return export_flow_keys(keys, BPF_OK);
+
 		return parse_eth_proto(skb, bpf_htons(ETH_P_IP));
 	case IPPROTO_IPV6:
 		keys->is_encap = true;
+		if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP)
+			return export_flow_keys(keys, BPF_OK);
+
 		return parse_eth_proto(skb, bpf_htons(ETH_P_IPV6));
 	case IPPROTO_GRE:
 		gre = bpf_flow_dissect_get_header(skb, sizeof(*gre), &_gre);
@@ -184,6 +208,8 @@ static __always_inline int parse_ip_proto(struct __sk_buff *skb, __u8 proto)
 			keys->thoff += 4; /* Step over sequence number */
 
 		keys->is_encap = true;
+		if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_ENCAP)
+			return export_flow_keys(keys, BPF_OK);
 
 		if (gre->proto == bpf_htons(ETH_P_TEB)) {
 			eth = bpf_flow_dissect_get_header(skb, sizeof(*eth),
@@ -231,14 +257,13 @@ static __always_inline int parse_ipv6_proto(struct __sk_buff *skb, __u8 nexthdr)
 {
 	struct bpf_flow_keys *keys = skb->flow_keys;
 
-	keys->ip_proto = nexthdr;
 	switch (nexthdr) {
 	case IPPROTO_HOPOPTS:
 	case IPPROTO_DSTOPTS:
-		bpf_tail_call(skb, &jmp_table, IPV6OP);
+		bpf_tail_call_static(skb, &jmp_table, IPV6OP);
 		break;
 	case IPPROTO_FRAGMENT:
-		bpf_tail_call(skb, &jmp_table, IPV6FR);
+		bpf_tail_call_static(skb, &jmp_table, IPV6FR);
 		break;
 	default:
 		return parse_ip_proto(skb, nexthdr);
@@ -266,6 +291,7 @@ PROG(IP)(struct __sk_buff *skb)
 	keys->addr_proto = ETH_P_IP;
 	keys->ipv4_src = iph->saddr;
 	keys->ipv4_dst = iph->daddr;
+	keys->ip_proto = iph->protocol;
 
 	keys->thoff += iph->ihl << 2;
 	if (data + keys->thoff > data_end)
@@ -273,13 +299,20 @@ PROG(IP)(struct __sk_buff *skb)
 
 	if (iph->frag_off & bpf_htons(IP_MF | IP_OFFSET)) {
 		keys->is_frag = true;
-		if (iph->frag_off & bpf_htons(IP_OFFSET))
+		if (iph->frag_off & bpf_htons(IP_OFFSET)) {
 			/* From second fragment on, packets do not have headers
 			 * we can parse.
 			 */
 			done = true;
-		else
+		} else {
 			keys->is_first_frag = true;
+			/* No need to parse fragmented packet unless
+			 * explicitly asked for.
+			 */
+			if (!(keys->flags &
+			      BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG))
+				done = true;
+		}
 	}
 
 	if (done)
@@ -301,6 +334,11 @@ PROG(IPV6)(struct __sk_buff *skb)
 	memcpy(&keys->ipv6_src, &ip6h->saddr, 2*sizeof(ip6h->saddr));
 
 	keys->thoff += sizeof(struct ipv6hdr);
+	keys->ip_proto = ip6h->nexthdr;
+	keys->flow_label = ip6_flowlabel(ip6h);
+
+	if (keys->flags & BPF_FLOW_DISSECTOR_F_STOP_AT_FLOW_LABEL)
+		return export_flow_keys(keys, BPF_OK);
 
 	return parse_ipv6_proto(skb, ip6h->nexthdr);
 }
@@ -317,7 +355,8 @@ PROG(IPV6OP)(struct __sk_buff *skb)
 	/* hlen is in 8-octets and does not include the first 8 bytes
 	 * of the header
 	 */
-	skb->flow_keys->thoff += (1 + ip6h->hdrlen) << 3;
+	keys->thoff += (1 + ip6h->hdrlen) << 3;
+	keys->ip_proto = ip6h->nexthdr;
 
 	return parse_ipv6_proto(skb, ip6h->nexthdr);
 }
@@ -333,8 +372,19 @@ PROG(IPV6FR)(struct __sk_buff *skb)
 
 	keys->thoff += sizeof(*fragh);
 	keys->is_frag = true;
-	if (!(fragh->frag_off & bpf_htons(IP6_OFFSET)))
+	keys->ip_proto = fragh->nexthdr;
+
+	if (!(fragh->frag_off & bpf_htons(IP6_OFFSET))) {
 		keys->is_first_frag = true;
+
+		/* No need to parse fragmented packet unless
+		 * explicitly asked for.
+		 */
+		if (!(keys->flags & BPF_FLOW_DISSECTOR_F_PARSE_1ST_FRAG))
+			return export_flow_keys(keys, BPF_OK);
+	} else {
+		return export_flow_keys(keys, BPF_OK);
+	}
 
 	return parse_ipv6_proto(skb, fragh->nexthdr);
 }

@@ -396,18 +396,14 @@ static int __init micro_probe(struct platform_device *pdev)
 	if (IS_ERR(micro->base))
 		return PTR_ERR(micro->base);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-	if (!res)
-		return -EINVAL;
-
-	micro->sdlc = devm_ioremap_resource(&pdev->dev, res);
+	micro->sdlc = devm_platform_ioremap_resource(pdev, 1);
 	if (IS_ERR(micro->sdlc))
 		return PTR_ERR(micro->sdlc);
 
 	micro_reset_comm(micro);
 
 	irq = platform_get_irq(pdev, 0);
-	if (!irq)
+	if (irq < 0)
 		return -EINVAL;
 	ret = devm_request_irq(&pdev->dev, irq, micro_serial_isr,
 			       IRQF_SHARED, "ipaq-micro",

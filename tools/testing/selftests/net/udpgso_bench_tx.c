@@ -405,7 +405,8 @@ static int send_udp_segment(int fd, char *data)
 	if (ret == -1)
 		error(1, errno, "sendmsg");
 	if (ret != iov.iov_len)
-		error(1, 0, "sendmsg: %u != %lu\n", ret, iov.iov_len);
+		error(1, 0, "sendmsg: %u != %llu\n", ret,
+			(unsigned long long)iov.iov_len);
 
 	return 1;
 }
@@ -418,6 +419,7 @@ static void usage(const char *filepath)
 
 static void parse_opts(int argc, char **argv)
 {
+	const char *bind_addr = NULL;
 	int max_len, hdrlen;
 	int c;
 
@@ -445,7 +447,7 @@ static void parse_opts(int argc, char **argv)
 			cfg_cpu = strtol(optarg, NULL, 0);
 			break;
 		case 'D':
-			setup_sockaddr(cfg_family, optarg, &cfg_dst_addr);
+			bind_addr = optarg;
 			break;
 		case 'l':
 			cfg_runtime_ms = strtoul(optarg, NULL, 10) * 1000;
@@ -490,6 +492,11 @@ static void parse_opts(int argc, char **argv)
 			break;
 		}
 	}
+
+	if (!bind_addr)
+		bind_addr = cfg_family == PF_INET6 ? "::" : "0.0.0.0";
+
+	setup_sockaddr(cfg_family, bind_addr, &cfg_dst_addr);
 
 	if (optind != argc)
 		usage(argv[0]);

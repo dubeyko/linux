@@ -89,10 +89,8 @@ static int pxa930_rotary_probe(struct platform_device *pdev)
 	int err;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "no irq for rotary controller\n");
+	if (irq < 0)
 		return -ENXIO;
-	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -109,7 +107,7 @@ static int pxa930_rotary_probe(struct platform_device *pdev)
 	if (!r)
 		return -ENOMEM;
 
-	r->mmio_base = ioremap_nocache(res->start, resource_size(res));
+	r->mmio_base = ioremap(res->start, resource_size(res));
 	if (r->mmio_base == NULL) {
 		dev_err(&pdev->dev, "failed to remap IO memory\n");
 		err = -ENXIO;

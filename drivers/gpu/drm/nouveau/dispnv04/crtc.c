@@ -22,11 +22,10 @@
  * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
  * DEALINGS IN THE SOFTWARE.
  */
-#include <linux/pm_runtime.h>
-
-#include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_fourcc.h>
 #include <drm/drm_plane_helper.h>
+#include <drm/drm_vblank.h>
 
 #include "nouveau_drv.h"
 #include "nouveau_reg.h"
@@ -44,6 +43,11 @@
 
 #include <subdev/bios/pll.h>
 #include <subdev/clk.h>
+
+#include <nvif/push006c.h>
+
+#include <nvif/event.h>
+#include <nvif/cl0046.h>
 
 static int
 nv04_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
@@ -606,15 +610,16 @@ static int
 nv_crtc_swap_fbs(struct drm_crtc *crtc, struct drm_framebuffer *old_fb)
 {
 	struct nv04_display *disp = nv04_display(crtc->dev);
-	struct nouveau_framebuffer *nvfb = nouveau_framebuffer(crtc->primary->fb);
+	struct drm_framebuffer *fb = crtc->primary->fb;
+	struct nouveau_bo *nvbo = nouveau_gem_object(fb->obj[0]);
 	struct nouveau_crtc *nv_crtc = nouveau_crtc(crtc);
 	int ret;
 
-	ret = nouveau_bo_pin(nvfb->nvbo, TTM_PL_FLAG_VRAM, false);
+	ret = nouveau_bo_pin(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, false);
 	if (ret == 0) {
 		if (disp->image[nv_crtc->index])
 			nouveau_bo_unpin(disp->image[nv_crtc->index]);
-		nouveau_bo_ref(nvfb->nvbo, &disp->image[nv_crtc->index]);
+		nouveau_bo_ref(nvbo, &disp->image[nv_crtc->index]);
 	}
 
 	return ret;
@@ -756,6 +761,7 @@ static void nv_crtc_destroy(struct drm_crtc *crtc)
 	nouveau_bo_unmap(nv_crtc->cursor.nvbo);
 	nouveau_bo_unpin(nv_crtc->cursor.nvbo);
 	nouveau_bo_ref(NULL, &nv_crtc->cursor.nvbo);
+	nvif_notify_dtor(&nv_crtc->vblank);
 	kfree(nv_crtc);
 }
 
@@ -823,8 +829,8 @@ nv04_crtc_do_mode_set_base(struct drm_crtc *crtc,
 	struct drm_device *dev = crtc->dev;
 	struct nouveau_drm *drm = nouveau_drm(dev);
 	struct nv04_crtc_reg *regp = &nv04_display(dev)->mode_reg.crtc_reg[nv_crtc->index];
+	struct nouveau_bo *nvbo;
 	struct drm_framebuffer *drm_fb;
-	struct nouveau_framebuffer *fb;
 	int arb_burst, arb_lwm;
 
 	NV_DEBUG(drm, "index %d\n", nv_crtc->index);
@@ -840,13 +846,12 @@ nv04_crtc_do_mode_set_base(struct drm_crtc *crtc,
 	 */
 	if (atomic) {
 		drm_fb = passed_fb;
-		fb = nouveau_framebuffer(passed_fb);
 	} else {
 		drm_fb = crtc->primary->fb;
-		fb = nouveau_framebuffer(crtc->primary->fb);
 	}
 
-	nv_crtc->fb.offset = fb->nvbo->bo.offset;
+	nvbo = nouveau_gem_object(drm_fb->obj[0]);
+	nv_crtc->fb.offset = nvbo->offset;
 
 	if (nv_crtc->lut.depth != drm_fb->format->depth) {
 		nv_crtc->lut.depth = drm_fb->format->depth;
@@ -1014,11 +1019,11 @@ nv04_crtc_cursor_set(struct drm_crtc *crtc, struct drm_file *file_priv,
 		nv04_cursor_upload(dev, cursor, nv_crtc->cursor.nvbo);
 
 	nouveau_bo_unmap(cursor);
-	nv_crtc->cursor.offset = nv_crtc->cursor.nvbo->bo.offset;
+	nv_crtc->cursor.offset = nv_crtc->cursor.nvbo->offset;
 	nv_crtc->cursor.set_offset(nv_crtc, nv_crtc->cursor.offset);
 	nv_crtc->cursor.show(nv_crtc, true);
 out:
-	drm_gem_object_put_unlocked(gem);
+	drm_gem_object_put(gem);
 	return ret;
 }
 
@@ -1029,53 +1034,6 @@ nv04_crtc_cursor_move(struct drm_crtc *crtc, int x, int y)
 
 	nv_crtc->cursor.set_pos(nv_crtc, x, y);
 	return 0;
-}
-
-static int
-nouveau_crtc_set_config(struct drm_mode_set *set,
-			struct drm_modeset_acquire_ctx *ctx)
-{
-	struct drm_device *dev;
-	struct nouveau_drm *drm;
-	int ret;
-	struct drm_crtc *crtc;
-	bool active = false;
-	if (!set || !set->crtc)
-		return -EINVAL;
-
-	dev = set->crtc->dev;
-
-	/* get a pm reference here */
-	ret = pm_runtime_get_sync(dev->dev);
-	if (ret < 0 && ret != -EACCES)
-		return ret;
-
-	ret = drm_crtc_helper_set_config(set, ctx);
-
-	drm = nouveau_drm(dev);
-
-	/* if we get here with no crtcs active then we can drop a reference */
-	list_for_each_entry(crtc, &dev->mode_config.crtc_list, head) {
-		if (crtc->enabled)
-			active = true;
-	}
-
-	pm_runtime_mark_last_busy(dev->dev);
-	/* if we have active crtcs and we don't have a power ref,
-	   take the current one */
-	if (active && !drm->have_disp_power_ref) {
-		drm->have_disp_power_ref = true;
-		return ret;
-	}
-	/* if we have no active crtcs, then drop the power ref
-	   we got before */
-	if (!active && drm->have_disp_power_ref) {
-		pm_runtime_put_autosuspend(dev->dev);
-		drm->have_disp_power_ref = false;
-	}
-	/* drop the power reference we got coming in here */
-	pm_runtime_put_autosuspend(dev->dev);
-	return ret;
 }
 
 struct nv04_page_flip_state {
@@ -1149,6 +1107,7 @@ nv04_page_flip_emit(struct nouveau_channel *chan,
 	struct nouveau_fence_chan *fctx = chan->fence;
 	struct nouveau_drm *drm = chan->drm;
 	struct drm_device *dev = drm->dev;
+	struct nvif_push *push = chan->chan.push;
 	unsigned long flags;
 	int ret;
 
@@ -1163,13 +1122,12 @@ nv04_page_flip_emit(struct nouveau_channel *chan,
 		goto fail;
 
 	/* Emit the pageflip */
-	ret = RING_SPACE(chan, 2);
+	ret = PUSH_WAIT(push, 2);
 	if (ret)
 		goto fail;
 
-	BEGIN_NV04(chan, NvSubSw, NV_SW_PAGE_FLIP, 1);
-	OUT_RING  (chan, 0x00000000);
-	FIRE_RING (chan);
+	PUSH_NVSQ(push, NV_SW, NV_SW_PAGE_FLIP, 0x00000000);
+	PUSH_KICK(push);
 
 	ret = nouveau_fence_new(chan, false, pfence);
 	if (ret)
@@ -1191,13 +1149,15 @@ nv04_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	const int swap_interval = (flags & DRM_MODE_PAGE_FLIP_ASYNC) ? 0 : 1;
 	struct drm_device *dev = crtc->dev;
 	struct nouveau_drm *drm = nouveau_drm(dev);
-	struct nouveau_bo *old_bo = nouveau_framebuffer(crtc->primary->fb)->nvbo;
-	struct nouveau_bo *new_bo = nouveau_framebuffer(fb)->nvbo;
+	struct drm_framebuffer *old_fb = crtc->primary->fb;
+	struct nouveau_bo *old_bo = nouveau_gem_object(old_fb->obj[0]);
+	struct nouveau_bo *new_bo = nouveau_gem_object(fb->obj[0]);
 	struct nv04_page_flip_state *s;
 	struct nouveau_channel *chan;
 	struct nouveau_cli *cli;
 	struct nouveau_fence *fence;
 	struct nv04_display *dispnv04 = nv04_display(dev);
+	struct nvif_push *push;
 	int head = nouveau_crtc(crtc)->index;
 	int ret;
 
@@ -1205,13 +1165,14 @@ nv04_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	if (!chan)
 		return -ENODEV;
 	cli = (void *)chan->user.client;
+	push = chan->chan.push;
 
 	s = kzalloc(sizeof(*s), GFP_KERNEL);
 	if (!s)
 		return -ENOMEM;
 
 	if (new_bo != old_bo) {
-		ret = nouveau_bo_pin(new_bo, TTM_PL_FLAG_VRAM, true);
+		ret = nouveau_bo_pin(new_bo, NOUVEAU_GEM_DOMAIN_VRAM, true);
 		if (ret)
 			goto fail_free;
 	}
@@ -1239,25 +1200,21 @@ nv04_crtc_page_flip(struct drm_crtc *crtc, struct drm_framebuffer *fb,
 	/* Initialize a page flip struct */
 	*s = (struct nv04_page_flip_state)
 		{ { }, event, crtc, fb->format->cpp[0] * 8, fb->pitches[0],
-		  new_bo->bo.offset };
+		  new_bo->offset };
 
 	/* Keep vblanks on during flip, for the target crtc of this flip */
 	drm_crtc_vblank_get(crtc);
 
 	/* Emit a page flip */
 	if (swap_interval) {
-		ret = RING_SPACE(chan, 8);
+		ret = PUSH_WAIT(push, 8);
 		if (ret)
 			goto fail_unreserve;
 
-		BEGIN_NV04(chan, NvSubImageBlit, 0x012c, 1);
-		OUT_RING  (chan, 0);
-		BEGIN_NV04(chan, NvSubImageBlit, 0x0134, 1);
-		OUT_RING  (chan, head);
-		BEGIN_NV04(chan, NvSubImageBlit, 0x0100, 1);
-		OUT_RING  (chan, 0);
-		BEGIN_NV04(chan, NvSubImageBlit, 0x0130, 1);
-		OUT_RING  (chan, 0);
+		PUSH_NVSQ(push, NV05F, 0x012c, 0);
+		PUSH_NVSQ(push, NV05F, 0x0134, head);
+		PUSH_NVSQ(push, NV05F, 0x0100, 0);
+		PUSH_NVSQ(push, NV05F, 0x0130, 0);
 	}
 
 	nouveau_bo_ref(new_bo, &dispnv04->image[head]);
@@ -1293,9 +1250,12 @@ static const struct drm_crtc_funcs nv04_crtc_funcs = {
 	.cursor_set = nv04_crtc_cursor_set,
 	.cursor_move = nv04_crtc_cursor_move,
 	.gamma_set = nv_crtc_gamma_set,
-	.set_config = nouveau_crtc_set_config,
+	.set_config = drm_crtc_helper_set_config,
 	.page_flip = nv04_crtc_page_flip,
 	.destroy = nv_crtc_destroy,
+	.enable_vblank = nouveau_display_vblank_enable,
+	.disable_vblank = nouveau_display_vblank_disable,
+	.get_vblank_timestamp = drm_crtc_vblank_helper_get_vblank_timestamp,
 };
 
 static const struct drm_crtc_helper_funcs nv04_crtc_helper_funcs = {
@@ -1306,6 +1266,7 @@ static const struct drm_crtc_helper_funcs nv04_crtc_helper_funcs = {
 	.mode_set_base = nv04_crtc_mode_set_base,
 	.mode_set_base_atomic = nv04_crtc_mode_set_base_atomic,
 	.disable = nv_crtc_disable,
+	.get_scanout_position = nouveau_display_scanoutpos,
 };
 
 static const uint32_t modeset_formats[] = {
@@ -1314,36 +1275,25 @@ static const uint32_t modeset_formats[] = {
         DRM_FORMAT_XRGB1555,
 };
 
-static struct drm_plane *
-create_primary_plane(struct drm_device *dev)
+static const struct drm_plane_funcs nv04_primary_plane_funcs = {
+	DRM_PLANE_NON_ATOMIC_FUNCS,
+};
+
+static int nv04_crtc_vblank_handler(struct nvif_notify *notify)
 {
-        struct drm_plane *primary;
-        int ret;
+	struct nouveau_crtc *nv_crtc =
+		container_of(notify, struct nouveau_crtc, vblank);
 
-        primary = kzalloc(sizeof(*primary), GFP_KERNEL);
-        if (primary == NULL) {
-                DRM_DEBUG_KMS("Failed to allocate primary plane\n");
-                return NULL;
-        }
-
-        /* possible_crtc's will be filled in later by crtc_init */
-        ret = drm_universal_plane_init(dev, primary, 0,
-                                       &drm_primary_helper_funcs,
-                                       modeset_formats,
-                                       ARRAY_SIZE(modeset_formats), NULL,
-                                       DRM_PLANE_TYPE_PRIMARY, NULL);
-        if (ret) {
-                kfree(primary);
-                primary = NULL;
-        }
-
-        return primary;
+	drm_crtc_handle_vblank(&nv_crtc->base);
+	return NVIF_NOTIFY_KEEP;
 }
 
 int
 nv04_crtc_create(struct drm_device *dev, int crtc_num)
 {
+	struct nouveau_display *disp = nouveau_display(dev);
 	struct nouveau_crtc *nv_crtc;
+	struct drm_plane *primary;
 	int ret;
 
 	nv_crtc = kzalloc(sizeof(*nv_crtc), GFP_KERNEL);
@@ -1358,17 +1308,28 @@ nv04_crtc_create(struct drm_device *dev, int crtc_num)
 	nv_crtc->save = nv_crtc_save;
 	nv_crtc->restore = nv_crtc_restore;
 
-	drm_crtc_init_with_planes(dev, &nv_crtc->base,
-                                  create_primary_plane(dev), NULL,
+	primary = __drm_universal_plane_alloc(dev, sizeof(*primary), 0, 0,
+					      &nv04_primary_plane_funcs,
+					      modeset_formats,
+					      ARRAY_SIZE(modeset_formats), NULL,
+					      DRM_PLANE_TYPE_PRIMARY, NULL);
+	if (IS_ERR(primary)) {
+		ret = PTR_ERR(primary);
+		kfree(nv_crtc);
+		return ret;
+	}
+
+	drm_crtc_init_with_planes(dev, &nv_crtc->base, primary, NULL,
                                   &nv04_crtc_funcs, NULL);
 	drm_crtc_helper_add(&nv_crtc->base, &nv04_crtc_helper_funcs);
 	drm_mode_crtc_set_gamma_size(&nv_crtc->base, 256);
 
 	ret = nouveau_bo_new(&nouveau_drm(dev)->client, 64*64*4, 0x100,
-			     TTM_PL_FLAG_VRAM, 0, 0x0000, NULL, NULL,
+			     NOUVEAU_GEM_DOMAIN_VRAM, 0, 0x0000, NULL, NULL,
 			     &nv_crtc->cursor.nvbo);
 	if (!ret) {
-		ret = nouveau_bo_pin(nv_crtc->cursor.nvbo, TTM_PL_FLAG_VRAM, false);
+		ret = nouveau_bo_pin(nv_crtc->cursor.nvbo,
+				     NOUVEAU_GEM_DOMAIN_VRAM, false);
 		if (!ret) {
 			ret = nouveau_bo_map(nv_crtc->cursor.nvbo);
 			if (ret)
@@ -1380,5 +1341,14 @@ nv04_crtc_create(struct drm_device *dev, int crtc_num)
 
 	nv04_cursor_init(nv_crtc);
 
-	return 0;
+	ret = nvif_notify_ctor(&disp->disp.object, "kmsVbl", nv04_crtc_vblank_handler,
+			       false, NV04_DISP_NTFY_VBLANK,
+			       &(struct nvif_notify_head_req_v0) {
+				    .head = nv_crtc->index,
+			       },
+			       sizeof(struct nvif_notify_head_req_v0),
+			       sizeof(struct nvif_notify_head_rep_v0),
+			       &nv_crtc->vblank);
+
+	return ret;
 }

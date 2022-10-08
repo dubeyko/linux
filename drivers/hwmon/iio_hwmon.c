@@ -6,11 +6,13 @@
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
+#include <linux/property.h>
+
 #include <linux/hwmon.h>
-#include <linux/of.h>
 #include <linux/hwmon-sysfs.h>
 #include <linux/iio/consumer.h>
 #include <linux/iio/types.h>
@@ -44,11 +46,19 @@ static ssize_t iio_hwmon_read_val(struct device *dev,
 	int ret;
 	struct sensor_device_attribute *sattr = to_sensor_dev_attr(attr);
 	struct iio_hwmon_state *state = dev_get_drvdata(dev);
+	struct iio_channel *chan = &state->channels[sattr->index];
+	enum iio_chan_type type;
 
-	ret = iio_read_channel_processed(&state->channels[sattr->index],
-					&result);
+	ret = iio_read_channel_processed(chan, &result);
 	if (ret < 0)
 		return ret;
+
+	ret = iio_get_channel_type(chan, &type);
+	if (ret < 0)
+		return ret;
+
+	if (type == IIO_POWER)
+		result *= 1000; /* mili-Watts to micro-Watts conversion */
 
 	return sprintf(buf, "%d\n", result);
 }
@@ -59,7 +69,7 @@ static int iio_hwmon_probe(struct platform_device *pdev)
 	struct iio_hwmon_state *st;
 	struct sensor_device_attribute *a;
 	int ret, i;
-	int in_i = 1, temp_i = 1, curr_i = 1, humidity_i = 1;
+	int in_i = 1, temp_i = 1, curr_i = 1, humidity_i = 1, power_i = 1;
 	enum iio_chan_type type;
 	struct iio_channel *channels;
 	struct device *hwmon_dev;
@@ -114,6 +124,10 @@ static int iio_hwmon_probe(struct platform_device *pdev)
 			n = curr_i++;
 			prefix = "curr";
 			break;
+		case IIO_POWER:
+			n = power_i++;
+			prefix = "power";
+			break;
 		case IIO_HUMIDITYRELATIVE:
 			n = humidity_i++;
 			prefix = "humidity";
@@ -137,8 +151,8 @@ static int iio_hwmon_probe(struct platform_device *pdev)
 	st->attr_group.attrs = st->attrs;
 	st->groups[0] = &st->attr_group;
 
-	if (dev->of_node) {
-		sname = devm_kasprintf(dev, GFP_KERNEL, "%pOFn", dev->of_node);
+	if (dev_fwnode(dev)) {
+		sname = devm_kasprintf(dev, GFP_KERNEL, "%pfwP", dev_fwnode(dev));
 		if (!sname)
 			return -ENOMEM;
 		strreplace(sname, '-', '_');
@@ -157,7 +171,7 @@ static const struct of_device_id iio_hwmon_of_match[] = {
 };
 MODULE_DEVICE_TABLE(of, iio_hwmon_of_match);
 
-static struct platform_driver __refdata iio_hwmon_driver = {
+static struct platform_driver iio_hwmon_driver = {
 	.driver = {
 		.name = "iio_hwmon",
 		.of_match_table = iio_hwmon_of_match,

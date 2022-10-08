@@ -53,6 +53,7 @@ A menu entry can have a number of attributes. Not all of them are
 applicable everywhere (see syntax).
 
 - type definition: "bool"/"tristate"/"string"/"hex"/"int"
+
   Every config option must have a type. There are only two basic types:
   tristate and string; the other types are based on these two. The type
   definition optionally accepts an input prompt, so these two examples
@@ -66,11 +67,13 @@ applicable everywhere (see syntax).
 	prompt "Networking support"
 
 - input prompt: "prompt" <prompt> ["if" <expr>]
+
   Every menu entry can have at most one prompt, which is used to display
   to the user. Optionally dependencies only for this prompt can be added
   with "if".
 
 - default value: "default" <expr> ["if" <expr>]
+
   A config option can have any number of default values. If multiple
   default values are visible, only the first defined one is active.
   Default values are not limited to the menu entry where they are
@@ -112,6 +115,7 @@ applicable everywhere (see syntax).
   Optionally dependencies for this default value can be added with "if".
 
 - dependencies: "depends on" <expr>
+
   This defines a dependency for this menu entry. If multiple
   dependencies are defined, they are connected with '&&'. Dependencies
   are applied to all other options within this menu entry (which also
@@ -127,6 +131,7 @@ applicable everywhere (see syntax).
 	default y
 
 - reverse dependencies: "select" <symbol> ["if" <expr>]
+
   While normal dependencies reduce the upper limit of a symbol (see
   below), reverse dependencies can be used to force a lower limit of
   another symbol. The value of the current menu symbol is used as the
@@ -146,6 +151,7 @@ applicable everywhere (see syntax).
 	the illegal configurations all over.
 
 - weak reverse dependencies: "imply" <symbol> ["if" <expr>]
+
   This is similar to "select" as it enforces a lower limit on another
   symbol except that the "implied" symbol's value may still be set to n
   from a direct dependency or with a visible prompt.
@@ -153,11 +159,11 @@ applicable everywhere (see syntax).
   Given the following example::
 
     config FOO
-	tristate
+	tristate "foo"
 	imply BAZ
 
     config BAZ
-	tristate
+	tristate "baz"
 	depends on BAR
 
   The following values are possible:
@@ -167,7 +173,10 @@ applicable everywhere (see syntax).
 	===		===		=============	==============
 	n		y		n		N/m/y
 	m		y		m		M/y/n
-	y		y		y		Y/n
+	y		y		y		Y/m/n
+	n		m		n		N/m
+	m		m		m		M/n
+	y		m		m		M/n
 	y		n		*		N
 	===		===		=============	==============
 
@@ -175,7 +184,26 @@ applicable everywhere (see syntax).
   ability to hook into a secondary subsystem while allowing the user to
   configure that subsystem out without also having to unset these drivers.
 
+  Note: If the combination of FOO=y and BAR=m causes a link error,
+  you can guard the function call with IS_REACHABLE()::
+
+	foo_init()
+	{
+		if (IS_REACHABLE(CONFIG_BAZ))
+			baz_register(&foo);
+		...
+	}
+
+  Note: If the feature provided by BAZ is highly desirable for FOO,
+  FOO should imply not only BAZ, but also its dependency BAR::
+
+    config FOO
+	tristate "foo"
+	imply BAR
+	imply BAZ
+
 - limiting menu display: "visible if" <expr>
+
   This attribute is only applicable to menu blocks, if the condition is
   false, the menu block is not displayed to the user (the symbols
   contained there can still be selected by other symbols, though). It is
@@ -183,37 +211,22 @@ applicable everywhere (see syntax).
   entries. Default value of "visible" is true.
 
 - numerical ranges: "range" <symbol> <symbol> ["if" <expr>]
+
   This allows to limit the range of possible input values for int
   and hex symbols. The user can only input a value which is larger than
   or equal to the first symbol and smaller than or equal to the second
   symbol.
 
-- help text: "help" or "---help---"
+- help text: "help"
+
   This defines a help text. The end of the help text is determined by
   the indentation level, this means it ends at the first line which has
   a smaller indentation than the first line of the help text.
-  "---help---" and "help" do not differ in behaviour, "---help---" is
-  used to help visually separate configuration logic from help within
-  the file as an aid to developers.
 
-- misc options: "option" <symbol>[=<value>]
-  Various less common options can be defined via this option syntax,
-  which can modify the behaviour of the menu entry and its config
-  symbol. These options are currently possible:
-
-  - "defconfig_list"
-    This declares a list of default entries which can be used when
-    looking for the default configuration (which is used when the main
-    .config doesn't exists yet.)
-
-  - "modules"
-    This declares the symbol to be used as the MODULES symbol, which
-    enables the third modular state for all config symbols.
-    At most one symbol may have the "modules" option set.
-
-  - "allnoconfig_y"
-    This declares the symbol as one that should have the value y when
-    using "allnoconfig". Used for symbols that hide other symbols.
+- module attribute: "modules"
+  This declares the symbol to be used as the MODULES symbol, which
+  enables the third modular state for all config symbols.
+  At most one symbol may have the "modules" option set.
 
 Menu dependencies
 -----------------
@@ -325,6 +338,7 @@ end a menu entry:
 The first five also start the definition of a menu entry.
 
 config::
+
 	"config" <symbol>
 	<config options>
 
@@ -332,6 +346,7 @@ This defines a config symbol <symbol> and accepts any of above
 attributes as options.
 
 menuconfig::
+
 	"menuconfig" <symbol>
 	<config options>
 
@@ -510,8 +525,8 @@ followed by a test macro::
 If you need to expose a compiler capability to makefiles and/or C source files,
 `CC_HAS_` is the recommended prefix for the config option::
 
-  config CC_HAS_STACKPROTECTOR_NONE
-	def_bool $(cc-option,-fno-stack-protector)
+  config CC_HAS_FOO
+	def_bool $(success,$(srctree)/scripts/cc-check-foo.sh $(CC))
 
 Build as module only
 ~~~~~~~~~~~~~~~~~~~~
@@ -522,6 +537,41 @@ with "depends on m".  E.g.::
 	depends on BAR && m
 
 limits FOO to module (=m) or disabled (=n).
+
+Compile-testing
+~~~~~~~~~~~~~~~
+If a config symbol has a dependency, but the code controlled by the config
+symbol can still be compiled if the dependency is not met, it is encouraged to
+increase build coverage by adding an "|| COMPILE_TEST" clause to the
+dependency. This is especially useful for drivers for more exotic hardware, as
+it allows continuous-integration systems to compile-test the code on a more
+common system, and detect bugs that way.
+Note that compile-tested code should avoid crashing when run on a system where
+the dependency is not met.
+
+Architecture and platform dependencies
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Due to the presence of stubs, most drivers can now be compiled on most
+architectures. However, this does not mean it makes sense to have all drivers
+available everywhere, as the actual hardware may only exist on specific
+architectures and platforms. This is especially true for on-SoC IP cores,
+which may be limited to a specific vendor or SoC family.
+
+To prevent asking the user about drivers that cannot be used on the system(s)
+the user is compiling a kernel for, and if it makes sense, config symbols
+controlling the compilation of a driver should contain proper dependencies,
+limiting the visibility of the symbol to (a superset of) the platform(s) the
+driver can be used on. The dependency can be an architecture (e.g. ARM) or
+platform (e.g. ARCH_OMAP4) dependency. This makes life simpler not only for
+distro config owners, but also for every single developer or user who
+configures a kernel.
+
+Such a dependency can be relaxed by combining it with the compile-testing rule
+above, leading to:
+
+  config FOO
+	bool "Support for foo hardware"
+	depends on ARCH_FOO_VENDOR || COMPILE_TEST
 
 Kconfig recursive dependency limitations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -582,7 +632,8 @@ The two different resolutions for b) can be tested in the sample Kconfig file
 Documentation/kbuild/Kconfig.recursion-issue-02.
 
 Below is a list of examples of prior fixes for these types of recursive issues;
-all errors appear to involve one or more select's and one or more "depends on".
+all errors appear to involve one or more "select" statements and one or more
+"depends on".
 
 ============    ===================================
 commit          fix
@@ -621,7 +672,7 @@ Future kconfig work
 Work on kconfig is welcomed on both areas of clarifying semantics and on
 evaluating the use of a full SAT solver for it. A full SAT solver can be
 desirable to enable more complex dependency mappings and / or queries,
-for instance on possible use case for a SAT solver could be that of handling
+for instance one possible use case for a SAT solver could be that of handling
 the current known recursive dependency issues. It is not known if this would
 address such issues but such evaluation is desirable. If support for a full SAT
 solver proves too complex or that it cannot address recursive dependency issues
@@ -642,25 +693,29 @@ in documenting basic Kconfig syntax a more precise definition of Kconfig
 semantics is welcomed. One project deduced Kconfig semantics through
 the use of the xconfig configurator [1]_. Work should be done to confirm if
 the deduced semantics matches our intended Kconfig design goals.
+Another project formalized a denotational semantics of a core subset of
+the Kconfig language [10]_.
 
 Having well defined semantics can be useful for tools for practical
-evaluation of depenencies, for instance one such use known case was work to
+evaluation of dependencies, for instance one such case was work to
 express in boolean abstraction of the inferred semantics of Kconfig to
 translate Kconfig logic into boolean formulas and run a SAT solver on this to
 find dead code / features (always inactive), 114 dead features were found in
 Linux using this methodology [1]_ (Section 8: Threats to validity).
+The kismet tool, based on the semantics in [10]_, finds abuses of reverse
+dependencies and has led to dozens of committed fixes to Linux Kconfig files [11]_.
 
-Confirming this could prove useful as Kconfig stands as one of the the leading
+Confirming this could prove useful as Kconfig stands as one of the leading
 industrial variability modeling languages [1]_ [2]_. Its study would help
 evaluate practical uses of such languages, their use was only theoretical
 and real world requirements were not well understood. As it stands though
 only reverse engineering techniques have been used to deduce semantics from
 variability modeling languages such as Kconfig [3]_.
 
-.. [0] http://www.eng.uwaterloo.ca/~shshe/kconfig_semantics.pdf
-.. [1] http://gsd.uwaterloo.ca/sites/default/files/vm-2013-berger.pdf
-.. [2] http://gsd.uwaterloo.ca/sites/default/files/ase241-berger_0.pdf
-.. [3] http://gsd.uwaterloo.ca/sites/default/files/icse2011.pdf
+.. [0] https://www.eng.uwaterloo.ca/~shshe/kconfig_semantics.pdf
+.. [1] https://gsd.uwaterloo.ca/sites/default/files/vm-2013-berger.pdf
+.. [2] https://gsd.uwaterloo.ca/sites/default/files/ase241-berger_0.pdf
+.. [3] https://gsd.uwaterloo.ca/sites/default/files/icse2011.pdf
 
 Full SAT solver for Kconfig
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -671,7 +726,7 @@ abstraction the inferred semantics of Kconfig to translate Kconfig logic into
 boolean formulas and run a SAT solver on it [5]_. Another known related project
 is CADOS [6]_ (former VAMOS [7]_) and the tools, mainly undertaker [8]_, which
 has been introduced first with [9]_.  The basic concept of undertaker is to
-exract variability models from Kconfig, and put them together with a
+extract variability models from Kconfig and put them together with a
 propositional formula extracted from CPP #ifdefs and build-rules into a SAT
 solver in order to find dead code, dead files, and dead symbols. If using a SAT
 solver is desirable on Kconfig one approach would be to evaluate repurposing
@@ -679,11 +734,13 @@ such efforts somehow on Kconfig. There is enough interest from mentors of
 existing projects to not only help advise how to integrate this work upstream
 but also help maintain it long term. Interested developers should visit:
 
-http://kernelnewbies.org/KernelProjects/kconfig-sat
+https://kernelnewbies.org/KernelProjects/kconfig-sat
 
-.. [4] http://www.cs.cornell.edu/~sabhar/chapters/SATSolvers-KR-Handbook.pdf
-.. [5] http://gsd.uwaterloo.ca/sites/default/files/vm-2013-berger.pdf
+.. [4] https://www.cs.cornell.edu/~sabhar/chapters/SATSolvers-KR-Handbook.pdf
+.. [5] https://gsd.uwaterloo.ca/sites/default/files/vm-2013-berger.pdf
 .. [6] https://cados.cs.fau.de
 .. [7] https://vamos.cs.fau.de
 .. [8] https://undertaker.cs.fau.de
 .. [9] https://www4.cs.fau.de/Publications/2011/tartler_11_eurosys.pdf
+.. [10] https://paulgazzillo.com/papers/esecfse21.pdf
+.. [11] https://github.com/paulgazz/kmax

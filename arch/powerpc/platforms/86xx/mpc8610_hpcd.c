@@ -20,12 +20,13 @@
 #include <linux/delay.h>
 #include <linux/seq_file.h>
 #include <linux/of.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
 #include <linux/fsl/guts.h>
 
 #include <asm/time.h>
 #include <asm/machdep.h>
 #include <asm/pci-bridge.h>
-#include <asm/prom.h>
 #include <mm/mmu_decl.h>
 #include <asm/udbg.h>
 
@@ -34,7 +35,6 @@
 #include <linux/of_platform.h>
 #include <sysdev/fsl_pci.h>
 #include <sysdev/fsl_soc.h>
-#include <sysdev/simple_gpio.h>
 
 #include "mpc86xx.h"
 
@@ -93,9 +93,6 @@ static const struct of_device_id mpc8610_ids[] __initconst = {
 
 static int __init mpc8610_declare_of_platform_devices(void)
 {
-	/* Firstly, register PIXIS GPIOs. */
-	simple_gpiochip_init("fsl,fpga-pixis-gpio-bank");
-
 	/* Enable wakeup on PIXIS' event IRQ. */
 	mpc8610_suspend_init();
 

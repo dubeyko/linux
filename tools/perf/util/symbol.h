@@ -3,15 +3,15 @@
 #define __PERF_SYMBOL 1
 
 #include <linux/types.h>
+#include <linux/refcount.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <linux/list.h>
 #include <linux/rbtree.h>
 #include <stdio.h>
-#include "map_symbol.h"
-#include "branch.h"
 #include "path.h"
 #include "symbol_conf.h"
+#include "spark.h"
 
 #ifdef HAVE_LIBELF_SUPPORT
 #include <libelf.h>
@@ -19,17 +19,17 @@
 #endif
 #include <elf.h>
 
-#include "dso.h"
-
+struct dso;
 struct map;
-struct map_groups;
+struct maps;
 struct option;
+struct build_id;
 
 /*
  * libelf 0.8.x and earlier do not support ELF_C_READ_MMAP;
  * for newer versions we can use mmap to reduce memory usage:
  */
-#ifdef HAVE_LIBELF_MMAP_SUPPORT
+#ifdef ELF_C_READ_MMAP
 # define PERF_ELF_C_READ_MMAP ELF_C_READ_MMAP
 #else
 # define PERF_ELF_C_READ_MMAP ELF_C_READ
@@ -40,32 +40,34 @@ Elf_Scn *elf_section_by_name(Elf *elf, GElf_Ehdr *ep,
 			     GElf_Shdr *shp, const char *name, size_t *idx);
 #endif
 
-#ifndef DMGL_PARAMS
-#define DMGL_NO_OPTS     0              /* For readability... */
-#define DMGL_PARAMS      (1 << 0)       /* Include function args */
-#define DMGL_ANSI        (1 << 1)       /* Include const, volatile, etc */
-#endif
-
-#define DSO__NAME_KALLSYMS	"[kernel.kallsyms]"
-#define DSO__NAME_KCORE		"[kernel.kcore]"
-
-/** struct symbol - symtab entry
- *
- * @ignore - resolvable but tools ignore it (e.g. idle routines)
+/**
+ * A symtab entry. When allocated this may be preceded by an annotation (see
+ * symbol__annotation), a browser_index (see symbol__browser_index) and rb_node
+ * to sort by name (see struct symbol_name_rb_node).
  */
 struct symbol {
 	struct rb_node	rb_node;
+	/** Range of symbol [start, end). */
 	u64		start;
 	u64		end;
+	/** Length of the string name. */
 	u16		namelen;
+	/** ELF symbol type as defined for st_info. E.g STT_OBJECT or STT_FUNC. */
 	u8		type:4;
+	/** ELF binding type as defined for st_info. E.g. STB_WEAK or STB_GLOBAL. */
 	u8		binding:4;
+	/** Set true for kernel symbols of idle routines. */
 	u8		idle:1;
+	/** Resolvable but tools ignore it (e.g. idle routines). */
 	u8		ignore:1;
+	/** Symbol for an inlined function. */
 	u8		inlined:1;
+	/** Has symbol__annotate2 been performed. */
+	u8		annotate2:1;
+	/** Architecture specific. Unused except on PPC where it holds st_other. */
 	u8		arch_sym;
-	bool		annotate2;
-	char		name[0];
+	/** The name of length namelen associated with the symbol. */
+	char		name[];
 };
 
 void symbol__delete(struct symbol *sym);
@@ -116,35 +118,9 @@ struct ref_reloc_sym {
 	u64		unrelocated_addr;
 };
 
-struct branch_info {
-	struct addr_map_symbol from;
-	struct addr_map_symbol to;
-	struct branch_flags flags;
-	char			*srcline_from;
-	char			*srcline_to;
-};
-
-struct mem_info {
-	struct addr_map_symbol	iaddr;
-	struct addr_map_symbol	daddr;
-	union perf_mem_data_src	data_src;
-	refcount_t		refcnt;
-};
-
-struct block_info {
-	struct symbol		*sym;
-	u64			start;
-	u64			end;
-	u64			cycles;
-	u64			cycles_aggr;
-	int			num;
-	int			num_aggr;
-	refcount_t		refcnt;
-};
-
 struct addr_location {
-	struct machine *machine;
 	struct thread *thread;
+	struct maps   *maps;
 	struct map    *map;
 	struct symbol *sym;
 	const char    *srcline;
@@ -156,37 +132,6 @@ struct addr_location {
 	s32	      socket;
 };
 
-struct symsrc {
-	char *name;
-	int fd;
-	enum dso_binary_type type;
-
-#ifdef HAVE_LIBELF_SUPPORT
-	Elf *elf;
-	GElf_Ehdr ehdr;
-
-	Elf_Scn *opdsec;
-	size_t opdidx;
-	GElf_Shdr opdshdr;
-
-	Elf_Scn *symtab;
-	GElf_Shdr symshdr;
-
-	Elf_Scn *dynsym;
-	size_t dynsym_idx;
-	GElf_Shdr dynshdr;
-
-	bool adjust_symbols;
-	bool is_64_bit;
-#endif
-};
-
-void symsrc__destroy(struct symsrc *ss);
-int symsrc__init(struct symsrc *ss, struct dso *dso, const char *name,
-		 enum dso_binary_type type);
-bool symsrc__has_symtab(struct symsrc *ss);
-bool symsrc__possibly_runtime(struct symsrc *ss);
-
 int dso__load(struct dso *dso, struct map *map);
 int dso__load_vmlinux(struct dso *dso, struct map *map,
 		      const char *vmlinux, bool vmlinux_allocated);
@@ -196,6 +141,8 @@ int __dso__load_kallsyms(struct dso *dso, const char *filename, struct map *map,
 int dso__load_kallsyms(struct dso *dso, const char *filename, struct map *map);
 
 void dso__insert_symbol(struct dso *dso,
+			struct symbol *sym);
+void dso__delete_symbol(struct dso *dso,
 			struct symbol *sym);
 
 struct symbol *dso__find_symbol(struct dso *dso, u64 addr);
@@ -209,8 +156,8 @@ struct symbol *dso__next_symbol(struct symbol *sym);
 
 enum dso_type dso__type_fd(int fd);
 
-int filename__read_build_id(const char *filename, void *bf, size_t size);
-int sysfs__read_build_id(const char *filename, void *bf, size_t size);
+int filename__read_build_id(const char *filename, struct build_id *id);
+int sysfs__read_build_id(const char *filename, struct build_id *bid);
 int modules__parse(const char *filename, void *arg,
 		   int (*process_module)(void *arg, const char *name,
 					 u64 start, u64 size));
@@ -240,6 +187,12 @@ bool symbol__restricted_filename(const char *filename,
 int symbol__config_symfs(const struct option *opt __maybe_unused,
 			 const char *dir, int unset __maybe_unused);
 
+struct symsrc;
+
+#ifdef HAVE_LIBBFD_SUPPORT
+int dso__load_bfd_symbols(struct dso *dso, const char *debugfile);
+#endif
+
 int dso__load_sym(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 		  struct symsrc *runtime_ss, int kmodule);
 int dso__synthesize_plt_symbols(struct dso *dso, struct symsrc *ss);
@@ -250,8 +203,8 @@ void __symbols__insert(struct rb_root_cached *symbols, struct symbol *sym,
 		       bool kernel);
 void symbols__insert(struct rb_root_cached *symbols, struct symbol *sym);
 void symbols__fixup_duplicate(struct rb_root_cached *symbols);
-void symbols__fixup_end(struct rb_root_cached *symbols);
-void map_groups__fixup_end(struct map_groups *mg);
+void symbols__fixup_end(struct rb_root_cached *symbols, bool is_kallsyms);
+void maps__fixup_end(struct maps *maps);
 
 typedef int (*mapfn_t)(u64 start, u64 len, u64 pgoff, void *data);
 int file__read_maps(int fd, bool exe, mapfn_t mapfn, void *data,
@@ -343,16 +296,6 @@ static inline void __mem_info__zput(struct mem_info **mi)
 
 #define mem_info__zput(mi) __mem_info__zput(&mi)
 
-struct block_info *block_info__new(void);
-struct block_info *block_info__get(struct block_info *bi);
-void   block_info__put(struct block_info *bi);
-
-static inline void __block_info__zput(struct block_info **bi)
-{
-	block_info__put(*bi);
-	*bi = NULL;
-}
-
-#define block_info__zput(bi) __block_info__zput(&bi)
+int symbol__validate_sym_arguments(void);
 
 #endif /* __PERF_SYMBOL */

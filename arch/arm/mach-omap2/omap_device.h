@@ -68,14 +68,9 @@ int omap_device_idle(struct platform_device *pdev);
 
 /* Core code interface */
 
-struct platform_device *omap_device_build(const char *pdev_name, int pdev_id,
-					  struct omap_hwmod *oh, void *pdata,
-					  int pdata_len);
-
 struct omap_device *omap_device_alloc(struct platform_device *pdev,
 				      struct omap_hwmod **ohs, int oh_cnt);
 void omap_device_delete(struct omap_device *od);
-int omap_device_register(struct platform_device *pdev);
 
 struct device *omap_device_get_by_hwmod_name(const char *oh_name);
 

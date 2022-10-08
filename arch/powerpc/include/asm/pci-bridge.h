@@ -66,7 +66,7 @@ struct pci_controller {
 
 	void __iomem *io_base_virt;
 #ifdef CONFIG_PPC64
-	void *io_base_alloc;
+	void __iomem *io_base_alloc;
 #endif
 	resource_size_t io_base_phys;
 	resource_size_t pci_io_size;
@@ -126,7 +126,11 @@ struct pci_controller {
 #endif	/* CONFIG_PPC64 */
 
 	void *private_data;
-	struct npu *npu;
+
+	/* IRQ domain hierarchy */
+	struct irq_domain	*dev_domain;
+	struct irq_domain	*msi_domain;
+	struct fwnode_handle	*fwnode;
 };
 
 /* These are used for config access before all the PCI probing
@@ -166,11 +170,15 @@ static inline struct pci_controller *pci_bus_to_host(const struct pci_bus *bus)
 	return bus->sysdata;
 }
 
-#ifndef CONFIG_PPC64
-
+#ifdef CONFIG_PPC_PMAC
 extern int pci_device_from_OF_node(struct device_node *node,
 				   u8 *bus, u8 *devfn);
+#endif
+#ifndef CONFIG_PPC64
+
+#ifdef CONFIG_PPC_CHRP
 extern void pci_create_OF_bus_map(void);
+#endif
 
 #else	/* CONFIG_PPC64 */
 
@@ -183,6 +191,7 @@ struct iommu_table;
 struct pci_dn {
 	int     flags;
 #define PCI_DN_FLAG_IOV_VF	0x01
+#define PCI_DN_FLAG_DEAD	0x02    /* Device has been hot-removed */
 
 	int	busno;			/* pci bus number */
 	int	devfn;			/* pci device and function number */
@@ -201,7 +210,6 @@ struct pci_dn {
 #define IODA_INVALID_PE		0xFFFFFFFF
 	unsigned int pe_number;
 #ifdef CONFIG_PCI_IOV
-	int     vf_index;		/* VF index in the PF */
 	u16     vfs_expanded;		/* number of VFs IOV BAR expanded */
 	u16     num_vfs;		/* number of VFs enabled*/
 	unsigned int *pe_num_map;	/* PE# for the first VF PE or array */
@@ -222,21 +230,14 @@ struct pci_dn {
 extern struct pci_dn *pci_get_pdn_by_devfn(struct pci_bus *bus,
 					   int devfn);
 extern struct pci_dn *pci_get_pdn(struct pci_dev *pdev);
-extern struct pci_dn *add_dev_pci_data(struct pci_dev *pdev);
-extern void remove_dev_pci_data(struct pci_dev *pdev);
 extern struct pci_dn *pci_add_device_node_info(struct pci_controller *hose,
 					       struct device_node *dn);
 extern void pci_remove_device_node_info(struct device_node *dn);
 
-static inline int pci_device_from_OF_node(struct device_node *np,
-					  u8 *bus, u8 *devfn)
-{
-	if (!PCI_DN(np))
-		return -ENODEV;
-	*bus = PCI_DN(np)->busno;
-	*devfn = PCI_DN(np)->devfn;
-	return 0;
-}
+#ifdef CONFIG_PCI_IOV
+struct pci_dn *add_sriov_vf_pdns(struct pci_dev *pdev);
+void remove_sriov_vf_pdns(struct pci_dev *pdev);
+#endif
 
 #if defined(CONFIG_EEH)
 static inline struct eeh_dev *pdn_to_eeh_dev(struct pci_dn *pdn)

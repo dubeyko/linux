@@ -181,7 +181,8 @@ static void ssip_skb_to_msg(struct sk_buff *skb, struct hsi_msg *msg)
 		sg = sg_next(sg);
 		BUG_ON(!sg);
 		frag = &skb_shinfo(skb)->frags[i];
-		sg_set_page(sg, frag->page.p, frag->size, frag->page_offset);
+		sg_set_page(sg, skb_frag_page(frag), skb_frag_size(frag),
+				skb_frag_off(frag));
 	}
 }
 
@@ -290,7 +291,7 @@ static void ssip_set_rxstate(struct ssi_protocol *ssi, unsigned int state)
 		/* CMT speech workaround */
 		if (atomic_read(&ssi->tx_usecnt))
 			break;
-		/* Otherwise fall through */
+		fallthrough;
 	case RECEIVING:
 		mod_timer(&ssi->keep_alive, jiffies +
 						msecs_to_jiffies(SSIP_KATOUT));
@@ -465,9 +466,10 @@ static void ssip_keep_alive(struct timer_list *t)
 		case SEND_READY:
 			if (atomic_read(&ssi->tx_usecnt) == 0)
 				break;
+			fallthrough;
 			/*
-			 * Fall through. Workaround for cmt-speech
-			 * in that case we relay on audio timers.
+			 * Workaround for cmt-speech in that case
+			 * we relay on audio timers.
 			 */
 		case SEND_IDLE:
 			spin_unlock(&ssi->lock);
@@ -666,7 +668,7 @@ static void ssip_rx_bootinforeq(struct hsi_client *cl, u32 cmd)
 	case ACTIVE:
 		dev_err(&cl->device, "Boot info req on active state\n");
 		ssip_error(cl);
-		/* Fall through */
+		fallthrough;
 	case INIT:
 	case HANDSHAKE:
 		spin_lock_bh(&ssi->lock);
@@ -794,7 +796,6 @@ static void ssip_rx_strans(struct hsi_client *cl, u32 cmd)
 		dev_err(&cl->device, "No memory for rx skb\n");
 		goto out1;
 	}
-	skb->dev = ssi->netdev;
 	skb_put(skb, len * 4);
 	msg = ssip_alloc_data(ssi, skb, GFP_ATOMIC);
 	if (unlikely(!msg)) {
@@ -929,6 +930,7 @@ static int ssip_pn_open(struct net_device *dev)
 	if (err < 0) {
 		dev_err(&cl->device, "Register HSI port event failed (%d)\n",
 			err);
+		hsi_release_port(cl);
 		return err;
 	}
 	dev_dbg(&cl->device, "Configuring SSI port\n");
@@ -1053,14 +1055,16 @@ static const struct net_device_ops ssip_pn_ops = {
 
 static void ssip_pn_setup(struct net_device *dev)
 {
+	static const u8 addr = PN_MEDIA_SOS;
+
 	dev->features		= 0;
 	dev->netdev_ops		= &ssip_pn_ops;
 	dev->type		= ARPHRD_PHONET;
 	dev->flags		= IFF_POINTOPOINT | IFF_NOARP;
 	dev->mtu		= SSIP_DEFAULT_MTU;
 	dev->hard_header_len	= 1;
-	dev->dev_addr[0]	= PN_MEDIA_SOS;
 	dev->addr_len		= 1;
+	dev_addr_set(dev, &addr);
 	dev->tx_queue_len	= SSIP_TXQUEUE_LEN;
 
 	dev->needs_free_netdev	= true;

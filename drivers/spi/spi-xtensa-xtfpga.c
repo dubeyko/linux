@@ -80,11 +80,10 @@ static void xtfpga_spi_chipselect(struct spi_device *spi, int is_on)
 static int xtfpga_spi_probe(struct platform_device *pdev)
 {
 	struct xtfpga_spi *xspi;
-	struct resource *mem;
 	int ret;
 	struct spi_master *master;
 
-	master = spi_alloc_master(&pdev->dev, sizeof(struct xtfpga_spi));
+	master = devm_spi_alloc_master(&pdev->dev, sizeof(struct xtfpga_spi));
 	if (!master)
 		return -ENOMEM;
 
@@ -97,38 +96,25 @@ static int xtfpga_spi_probe(struct platform_device *pdev)
 	xspi->bitbang.master = master;
 	xspi->bitbang.chipselect = xtfpga_spi_chipselect;
 	xspi->bitbang.txrx_word[SPI_MODE_0] = xtfpga_spi_txrx_word;
-
-	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	if (!mem) {
-		dev_err(&pdev->dev, "No memory resource\n");
-		ret = -ENODEV;
-		goto err;
-	}
-	xspi->regs = devm_ioremap_resource(&pdev->dev, mem);
-	if (IS_ERR(xspi->regs)) {
-		ret = PTR_ERR(xspi->regs);
-		goto err;
-	}
+	xspi->regs = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(xspi->regs))
+		return PTR_ERR(xspi->regs);
 
 	xtfpga_spi_write32(xspi, XTFPGA_SPI_START, 0);
 	usleep_range(1000, 2000);
 	if (xtfpga_spi_read32(xspi, XTFPGA_SPI_BUSY)) {
 		dev_err(&pdev->dev, "Device stuck in busy state\n");
-		ret = -EBUSY;
-		goto err;
+		return -EBUSY;
 	}
 
 	ret = spi_bitbang_start(&xspi->bitbang);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "spi_bitbang_start failed\n");
-		goto err;
+		return ret;
 	}
 
 	platform_set_drvdata(pdev, master);
 	return 0;
-err:
-	spi_master_put(master);
-	return ret;
 }
 
 static int xtfpga_spi_remove(struct platform_device *pdev)

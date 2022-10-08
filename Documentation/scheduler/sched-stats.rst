@@ -28,7 +28,7 @@ of these will need to start with a baseline observation and then calculate
 the change in the counters at each subsequent observation.  A perl script
 which does this for many of the fields is available at
 
-    http://eaglet.rain.com/rick/linux/schedstat/
+    http://eaglet.pdxhosts.com/rick/linux/schedstat/
 
 Note that any such script will necessarily be version-specific, as the main
 reason to change versions is changes in the output format.  For those wishing
@@ -56,9 +56,9 @@ Next two are try_to_wake_up() statistics:
 
 Next three are statistics describing scheduling latency:
 
-     7) sum of all time spent running by tasks on this processor (in jiffies)
+     7) sum of all time spent running by tasks on this processor (in nanoseconds)
      8) sum of all time spent waiting to run by tasks on this processor (in
-        jiffies)
+        nanoseconds)
      9) # of timeslices run on this cpu
 
 
@@ -155,8 +155,8 @@ schedstats also adds a new /proc/<pid>/schedstat file to include some of
 the same information on a per-process level.  There are three fields in
 this file correlating for that process to:
 
-     1) time spent on the cpu
-     2) time spent waiting on a runqueue
+     1) time spent on the cpu (in nanoseconds)
+     2) time spent waiting on a runqueue (in nanoseconds)
      3) # of timeslices run on this cpu
 
 A program could be easily written to make use of these extra fields to
@@ -164,4 +164,4 @@ report on how well a particular process or set of processes is faring
 under the scheduler's policies.  A simple version of such a program is
 available at
 
-    http://eaglet.rain.com/rick/linux/schedstat/v12/latency.c
+    http://eaglet.pdxhosts.com/rick/linux/schedstat/v12/latency.c

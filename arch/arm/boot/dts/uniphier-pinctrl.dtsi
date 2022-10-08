@@ -106,6 +106,16 @@
 		function = "i2c4";
 	};
 
+	pinctrl_i2c5: i2c5 {
+		groups = "i2c5";
+		function = "i2c5";
+	};
+
+	pinctrl_i2c6: i2c6 {
+		groups = "i2c6";
+		function = "i2c6";
+	};
+
 	pinctrl_nand: nand {
 		groups = "nand";
 		function = "nand";
@@ -114,6 +124,11 @@
 	pinctrl_nand2cs: nand2cs {
 		groups = "nand", "nand_cs1";
 		function = "nand";
+	};
+
+	pinctrl_pcie: pcie {
+		groups = "pcie";
+		function = "pcie";
 	};
 
 	pinctrl_sd: sd {
@@ -181,8 +196,18 @@
 		function = "usb0";
 	};
 
+	pinctrl_usb0_device: usb0-device {
+		groups = "usb0_device";
+		function = "usb0";
+	};
+
 	pinctrl_usb1: usb1 {
 		groups = "usb1";
+		function = "usb1";
+	};
+
+	pinctrl_usb1_device: usb1-device {
+		groups = "usb1_device";
 		function = "usb1";
 	};
 

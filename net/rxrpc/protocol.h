@@ -57,7 +57,7 @@ struct rxrpc_wire_header {
 
 	uint8_t		userStatus;	/* app-layer defined status */
 #define RXRPC_USERSTATUS_SERVICE_UPGRADE 0x01	/* AuriStor service upgrade request */
-	
+
 	uint8_t		securityIndex;	/* security protocol ID */
 	union {
 		__be16	_rsvd;		/* reserved */
@@ -88,6 +88,15 @@ struct rxrpc_jumbo_header {
 
 #define RXRPC_JUMBO_DATALEN	1412	/* non-terminal jumbo packet data length */
 #define RXRPC_JUMBO_SUBPKTLEN	(RXRPC_JUMBO_DATALEN + sizeof(struct rxrpc_jumbo_header))
+
+/*
+ * The maximum number of subpackets that can possibly fit in a UDP packet is:
+ *
+ *	((max_IP - IP_hdr - UDP_hdr) / RXRPC_JUMBO_SUBPKTLEN) + 1
+ *	= ((65535 - 28 - 28) / 1416) + 1
+ *	= 46 non-terminal packets and 1 terminal packet.
+ */
+#define RXRPC_MAX_NR_JUMBO	47
 
 /*****************************************************************************/
 /*

@@ -16,7 +16,7 @@
 
 struct i2c_mux_pinctrl {
 	struct pinctrl *pinctrl;
-	struct pinctrl_state **states;
+	struct pinctrl_state *states[];
 };
 
 static int i2c_mux_pinctrl_select(struct i2c_mux_core *muxc, u32 chan)
@@ -93,14 +93,13 @@ static int i2c_mux_pinctrl_probe(struct platform_device *pdev)
 		return PTR_ERR(parent);
 
 	muxc = i2c_mux_alloc(parent, dev, num_names,
-			     sizeof(*mux) + num_names * sizeof(*mux->states),
+			     struct_size(mux, states, num_names),
 			     0, i2c_mux_pinctrl_select, NULL);
 	if (!muxc) {
 		ret = -ENOMEM;
 		goto err_put_parent;
 	}
 	mux = i2c_mux_priv(muxc);
-	mux->states = (struct pinctrl_state **)(mux + 1);
 
 	platform_set_drvdata(pdev, muxc);
 
@@ -186,7 +185,7 @@ MODULE_DEVICE_TABLE(of, i2c_mux_pinctrl_of_match);
 static struct platform_driver i2c_mux_pinctrl_driver = {
 	.driver	= {
 		.name	= "i2c-mux-pinctrl",
-		.of_match_table = of_match_ptr(i2c_mux_pinctrl_of_match),
+		.of_match_table = i2c_mux_pinctrl_of_match,
 	},
 	.probe	= i2c_mux_pinctrl_probe,
 	.remove	= i2c_mux_pinctrl_remove,

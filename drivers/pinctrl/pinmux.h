@@ -15,6 +15,8 @@ int pinmux_check_ops(struct pinctrl_dev *pctldev);
 
 int pinmux_validate_map(const struct pinctrl_map *map, int i);
 
+bool pinmux_can_be_used_for_gpio(struct pinctrl_dev *pctldev, unsigned pin);
+
 int pinmux_request_gpio(struct pinctrl_dev *pctldev,
 			struct pinctrl_gpio_range *range,
 			unsigned pin, unsigned gpio);
@@ -40,6 +42,12 @@ static inline int pinmux_check_ops(struct pinctrl_dev *pctldev)
 static inline int pinmux_validate_map(const struct pinctrl_map *map, int i)
 {
 	return 0;
+}
+
+static inline bool pinmux_can_be_used_for_gpio(struct pinctrl_dev *pctldev,
+					       unsigned pin)
+{
+	return true;
 }
 
 static inline int pinmux_request_gpio(struct pinctrl_dev *pctldev,
@@ -121,7 +129,7 @@ static inline void pinmux_init_device_debugfs(struct dentry *devroot,
  */
 struct function_desc {
 	const char *name;
-	const char **group_names;
+	const char * const *group_names;
 	int num_group_names;
 	void *data;
 };
@@ -142,7 +150,7 @@ struct function_desc *pinmux_generic_get_function(struct pinctrl_dev *pctldev,
 
 int pinmux_generic_add_function(struct pinctrl_dev *pctldev,
 				const char *name,
-				const char **groups,
+				const char * const *groups,
 				unsigned const num_groups,
 				void *data);
 

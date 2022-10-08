@@ -1,5 +1,3 @@
-:orphan:
-
 ==================
 Sparc Architecture
 ==================
@@ -11,3 +9,5 @@ Sparc Architecture
    adi
 
    oradax/oracle-dax
+
+   features

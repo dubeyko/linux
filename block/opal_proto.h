@@ -36,9 +36,15 @@ enum opal_response_token {
 
 #define DTAERROR_NO_METHOD_STATUS 0x89
 #define GENERIC_HOST_SESSION_NUM 0x41
+#define FIRST_TPER_SESSION_NUM	4096
 
 #define TPER_SYNC_SUPPORTED 0x01
+/* FC_LOCKING features */
+#define LOCKING_SUPPORTED_MASK 0x01
+#define LOCKING_ENABLED_MASK 0x02
+#define LOCKED_MASK 0x04
 #define MBR_ENABLED_MASK 0x10
+#define MBR_DONE_MASK 0x20
 
 #define TINY_ATOM_DATA_MASK 0x3F
 #define TINY_ATOM_SIGNED 0x40
@@ -76,7 +82,6 @@ enum opal_response_token {
  * Derived from: TCG_Storage_Architecture_Core_Spec_v2.01_r1.00
  * Section: 6.3 Assigned UIDs
  */
-#define OPAL_UID_LENGTH 8
 #define OPAL_METHOD_LENGTH 8
 #define OPAL_MSID_KEYLEN 15
 #define OPAL_UID_LENGTH_HALF 4
@@ -108,6 +113,7 @@ enum opal_uid {
 	OPAL_C_PIN_TABLE,
 	OPAL_LOCKING_INFO_TABLE,
 	OPAL_ENTERPRISE_LOCKING_INFO_TABLE,
+	OPAL_DATASTORE,
 	/* C_PIN_TABLE object ID's */
 	OPAL_C_PIN_MSID,
 	OPAL_C_PIN_SID,
@@ -118,8 +124,6 @@ enum opal_uid {
 	/* omitted optional parameter */
 	OPAL_UID_HEXFF,
 };
-
-#define OPAL_METHOD_LENGTH 8
 
 /* Enum for indexing the OPALMETHOD array */
 enum opal_method {
@@ -167,7 +171,6 @@ enum opal_token {
 	OPAL_TABLE_LASTID = 0x0A,
 	OPAL_TABLE_MIN = 0x0B,
 	OPAL_TABLE_MAX = 0x0C,
-
 	/* authority table */
 	OPAL_PIN = 0x03,
 	/* locking tokens */
@@ -182,7 +185,7 @@ enum opal_token {
 	OPAL_LIFECYCLE = 0x06,
 	/* locking info table */
 	OPAL_MAXRANGES = 0x04,
-	 /* mbr control */
+	/* mbr control */
 	OPAL_MBRENABLE = 0x01,
 	OPAL_MBRDONE = 0x02,
 	/* properties */
@@ -206,6 +209,10 @@ enum opal_lockingstate {
 	OPAL_LOCKING_READWRITE = 0x01,
 	OPAL_LOCKING_READONLY = 0x02,
 	OPAL_LOCKING_LOCKED = 0x03,
+};
+
+enum opal_parameter {
+	OPAL_SUM_SET_LIST = 0x060000,
 };
 
 /* Packets derived from:

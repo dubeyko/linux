@@ -52,13 +52,14 @@
 #include <asm/mach/time.h>
 #include <asm/mach/irq.h>
 
-#include <mach/tc.h>
-#include <mach/mux.h>
+#include <linux/soc/ti/omap1-io.h>
+#include "tc.h"
 #include <linux/omap-dma.h>
 #include <clocksource/timer-ti-dm.h>
 
-#include <mach/irqs.h>
-
+#include "hardware.h"
+#include "mux.h"
+#include "irqs.h"
 #include "iomap.h"
 #include "clock.h"
 #include "pm.h"
@@ -596,11 +597,6 @@ static irqreturn_t omap_wakeup_interrupt(int irq, void *dev)
 	return IRQ_HANDLED;
 }
 
-static struct irqaction omap_wakeup_irq = {
-	.name		= "peripheral wakeup",
-	.handler	= omap_wakeup_interrupt
-};
-
 
 
 static const struct platform_suspend_ops omap_pm_ops = {
@@ -613,6 +609,7 @@ static const struct platform_suspend_ops omap_pm_ops = {
 static int __init omap_pm_init(void)
 {
 	int error = 0;
+	int irq;
 
 	if (!cpu_class_is_omap1())
 		return -ENODEV;
@@ -656,9 +653,16 @@ static int __init omap_pm_init(void)
 	arm_pm_idle = omap1_pm_idle;
 
 	if (cpu_is_omap7xx())
-		setup_irq(INT_7XX_WAKE_UP_REQ, &omap_wakeup_irq);
+		irq = INT_7XX_WAKE_UP_REQ;
 	else if (cpu_is_omap16xx())
-		setup_irq(INT_1610_WAKE_UP_REQ, &omap_wakeup_irq);
+		irq = INT_1610_WAKE_UP_REQ;
+	else
+		irq = -1;
+
+	if (irq >= 0) {
+		if (request_irq(irq, omap_wakeup_interrupt, 0, "peripheral wakeup", NULL))
+			pr_err("Failed to request irq %d (peripheral wakeup)\n", irq);
+	}
 
 	/* Program new power ramp-up time
 	 * (0 for most boards since we don't lower voltage when in deep sleep)

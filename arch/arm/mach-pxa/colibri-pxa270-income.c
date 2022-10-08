@@ -25,7 +25,6 @@
 #include <asm/irq.h>
 #include <asm/mach-types.h>
 
-#include <mach/hardware.h>
 #include <linux/platform_data/mmc-pxamci.h>
 #include <linux/platform_data/usb-ohci-pxa27x.h>
 #include "pxa27x.h"
@@ -202,7 +201,6 @@ static struct pwm_lookup income_pwm_lookup[] = {
 static struct platform_pwm_backlight_data income_backlight_data = {
 	.max_brightness	= 0x3ff,
 	.dft_brightness	= 0x1ff,
-	.enable_gpio	= -1,
 };
 
 static struct platform_device income_backlight = {

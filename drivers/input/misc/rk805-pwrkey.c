@@ -53,16 +53,12 @@ static int rk805_pwrkey_probe(struct platform_device *pdev)
 	input_set_capability(pwr, EV_KEY, KEY_POWER);
 
 	fall_irq = platform_get_irq(pdev, 0);
-	if (fall_irq < 0) {
-		dev_err(&pdev->dev, "Can't get fall irq: %d\n", fall_irq);
+	if (fall_irq < 0)
 		return fall_irq;
-	}
 
 	rise_irq = platform_get_irq(pdev, 1);
-	if (rise_irq < 0) {
-		dev_err(&pdev->dev, "Can't get rise irq: %d\n", rise_irq);
+	if (rise_irq < 0)
 		return rise_irq;
-	}
 
 	err = devm_request_any_context_irq(&pwr->dev, fall_irq,
 					   pwrkey_fall_irq,
@@ -102,6 +98,7 @@ static struct platform_driver rk805_pwrkey_driver = {
 };
 module_platform_driver(rk805_pwrkey_driver);
 
+MODULE_ALIAS("platform:rk805-pwrkey");
 MODULE_AUTHOR("Joseph Chen <chenjh@rock-chips.com>");
 MODULE_DESCRIPTION("RK805 PMIC Power Key driver");
 MODULE_LICENSE("GPL");

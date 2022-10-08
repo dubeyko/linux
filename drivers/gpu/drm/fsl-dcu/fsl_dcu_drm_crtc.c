@@ -8,19 +8,20 @@
 #include <linux/clk.h>
 #include <linux/regmap.h>
 
-#include <drm/drmP.h>
+#include <video/videomode.h>
+
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_probe_helper.h>
-#include <video/videomode.h>
+#include <drm/drm_vblank.h>
 
 #include "fsl_dcu_drm_crtc.h"
 #include "fsl_dcu_drm_drv.h"
 #include "fsl_dcu_drm_plane.h"
 
 static void fsl_dcu_drm_crtc_atomic_flush(struct drm_crtc *crtc,
-					  struct drm_crtc_state *old_crtc_state)
+					  struct drm_atomic_state *state)
 {
 	struct drm_device *dev = crtc->dev;
 	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;
@@ -42,8 +43,10 @@ static void fsl_dcu_drm_crtc_atomic_flush(struct drm_crtc *crtc,
 }
 
 static void fsl_dcu_drm_crtc_atomic_disable(struct drm_crtc *crtc,
-					struct drm_crtc_state *old_crtc_state)
+					struct drm_atomic_state *state)
 {
+	struct drm_crtc_state *old_crtc_state = drm_atomic_get_old_crtc_state(state,
+									      crtc);
 	struct drm_device *dev = crtc->dev;
 	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;
 
@@ -61,7 +64,7 @@ static void fsl_dcu_drm_crtc_atomic_disable(struct drm_crtc *crtc,
 }
 
 static void fsl_dcu_drm_crtc_atomic_enable(struct drm_crtc *crtc,
-					   struct drm_crtc_state *old_state)
+					   struct drm_atomic_state *state)
 {
 	struct drm_device *dev = crtc->dev;
 	struct fsl_dcu_drm_device *fsl_dev = dev->dev_private;

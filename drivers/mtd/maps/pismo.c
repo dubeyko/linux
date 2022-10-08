@@ -195,7 +195,7 @@ static void pismo_add_one(struct pismo_data *pismo, int i,
 	}
 }
 
-static int pismo_remove(struct i2c_client *client)
+static void pismo_remove(struct i2c_client *client)
 {
 	struct pismo_data *pismo = i2c_get_clientdata(client);
 	int i;
@@ -204,20 +204,17 @@ static int pismo_remove(struct i2c_client *client)
 		platform_device_unregister(pismo->dev[i]);
 
 	kfree(pismo);
-
-	return 0;
 }
 
 static int pismo_probe(struct i2c_client *client,
 		       const struct i2c_device_id *id)
 {
-	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
 	struct pismo_pdata *pdata = client->dev.platform_data;
 	struct pismo_eeprom eeprom;
 	struct pismo_data *pismo;
 	int ret, i;
 
-	if (!i2c_check_functionality(adapter, I2C_FUNC_I2C)) {
+	if (!i2c_check_functionality(client->adapter, I2C_FUNC_I2C)) {
 		dev_err(&client->dev, "functionality mismatch\n");
 		return -EIO;
 	}

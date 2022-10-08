@@ -7,7 +7,7 @@
 
 #include "motu.h"
 
-#define	CALLBACK_TIMEOUT	200
+#define	READY_TIMEOUT_MS	200
 
 #define ISOC_COMM_CONTROL_OFFSET		0x0b00
 #define  ISOC_COMM_CONTROL_MASK			0xffff0000
@@ -88,12 +88,9 @@ static void finish_session(struct snd_motu *motu)
 	u32 data;
 	int err;
 
-	err = motu->spec->protocol->switch_fetching_mode(motu, false);
+	err = snd_motu_protocol_switch_fetching_mode(motu, false);
 	if (err < 0)
 		return;
-
-	amdtp_stream_stop(&motu->tx_stream);
-	amdtp_stream_stop(&motu->rx_stream);
 
 	err = snd_motu_transaction_read(motu, ISOC_COMM_CONTROL_OFFSET, &reg,
 					sizeof(reg));
@@ -109,32 +106,11 @@ static void finish_session(struct snd_motu *motu)
 				   sizeof(reg));
 }
 
-static int start_isoc_ctx(struct snd_motu *motu, struct amdtp_stream *stream)
-{
-	struct fw_iso_resources *resources;
-	int err;
-
-	if (stream == &motu->rx_stream)
-		resources = &motu->rx_resources;
-	else
-		resources = &motu->tx_resources;
-
-	err = amdtp_stream_start(stream, resources->channel,
-				 fw_parent_device(motu->unit)->max_speed);
-	if (err < 0)
-		return err;
-
-	if (!amdtp_stream_wait_callback(stream, CALLBACK_TIMEOUT))
-		return -ETIMEDOUT;
-
-	return 0;
-}
-
 int snd_motu_stream_cache_packet_formats(struct snd_motu *motu)
 {
 	int err;
 
-	err = motu->spec->protocol->cache_packet_formats(motu);
+	err = snd_motu_protocol_cache_packet_formats(motu);
 	if (err < 0)
 		return err;
 
@@ -157,24 +133,30 @@ int snd_motu_stream_cache_packet_formats(struct snd_motu *motu)
 	return 0;
 }
 
-int snd_motu_stream_reserve_duplex(struct snd_motu *motu, unsigned int rate)
+int snd_motu_stream_reserve_duplex(struct snd_motu *motu, unsigned int rate,
+				   unsigned int frames_per_period,
+				   unsigned int frames_per_buffer)
 {
 	unsigned int curr_rate;
 	int err;
 
-	err = motu->spec->protocol->get_clock_rate(motu, &curr_rate);
+	err = snd_motu_protocol_get_clock_rate(motu, &curr_rate);
 	if (err < 0)
 		return err;
 	if (rate == 0)
 		rate = curr_rate;
 
 	if (motu->substreams_counter == 0 || curr_rate != rate) {
+		amdtp_domain_stop(&motu->domain);
 		finish_session(motu);
 
 		fw_iso_resources_free(&motu->tx_resources);
 		fw_iso_resources_free(&motu->rx_resources);
 
-		err = motu->spec->protocol->set_clock_rate(motu, rate);
+		kfree(motu->cache.event_offsets);
+		motu->cache.event_offsets = NULL;
+
+		err = snd_motu_protocol_set_clock_rate(motu, rate);
 		if (err < 0) {
 			dev_err(&motu->unit->device,
 				"fail to set sampling rate: %d\n", err);
@@ -193,6 +175,23 @@ int snd_motu_stream_reserve_duplex(struct snd_motu *motu, unsigned int rate)
 		if (err < 0) {
 			fw_iso_resources_free(&motu->tx_resources);
 			return err;
+		}
+
+		err = amdtp_domain_set_events_per_period(&motu->domain,
+					frames_per_period, frames_per_buffer);
+		if (err < 0) {
+			fw_iso_resources_free(&motu->tx_resources);
+			fw_iso_resources_free(&motu->rx_resources);
+			return err;
+		}
+
+		motu->cache.size = motu->tx_stream.syt_interval * frames_per_buffer;
+		motu->cache.event_offsets = kcalloc(motu->cache.size, sizeof(*motu->cache.event_offsets),
+						  GFP_KERNEL);
+		if (!motu->cache.event_offsets) {
+			fw_iso_resources_free(&motu->tx_resources);
+			fw_iso_resources_free(&motu->rx_resources);
+			return -ENOMEM;
 		}
 	}
 
@@ -214,9 +213,9 @@ static int ensure_packet_formats(struct snd_motu *motu)
 	data &= ~(TX_PACKET_EXCLUDE_DIFFERED_DATA_CHUNKS |
 		  RX_PACKET_EXCLUDE_DIFFERED_DATA_CHUNKS|
 		  TX_PACKET_TRANSMISSION_SPEED_MASK);
-	if (motu->tx_packet_formats.differed_part_pcm_chunks[0] == 0)
+	if (motu->spec->tx_fixed_pcm_chunks[0] == motu->tx_packet_formats.pcm_chunks[0])
 		data |= TX_PACKET_EXCLUDE_DIFFERED_DATA_CHUNKS;
-	if (motu->rx_packet_formats.differed_part_pcm_chunks[0] == 0)
+	if (motu->spec->rx_fixed_pcm_chunks[0] == motu->rx_packet_formats.pcm_chunks[0])
 		data |= RX_PACKET_EXCLUDE_DIFFERED_DATA_CHUNKS;
 	data |= fw_parent_device(motu->unit)->max_speed;
 
@@ -234,8 +233,10 @@ int snd_motu_stream_start_duplex(struct snd_motu *motu)
 		return 0;
 
 	if (amdtp_streaming_error(&motu->rx_stream) ||
-	    amdtp_streaming_error(&motu->tx_stream))
+	    amdtp_streaming_error(&motu->tx_stream)) {
+		amdtp_domain_stop(&motu->domain);
 		finish_session(motu);
+	}
 
 	if (generation != fw_parent_device(motu->unit)->card->generation) {
 		err = fw_iso_resources_update(&motu->rx_resources);
@@ -248,9 +249,21 @@ int snd_motu_stream_start_duplex(struct snd_motu *motu)
 	}
 
 	if (!amdtp_stream_running(&motu->rx_stream)) {
+		int spd = fw_parent_device(motu->unit)->max_speed;
+
 		err = ensure_packet_formats(motu);
 		if (err < 0)
 			return err;
+
+		if (motu->spec->flags & SND_MOTU_SPEC_REGISTER_DSP) {
+			err = snd_motu_register_dsp_message_parser_init(motu);
+			if (err < 0)
+				return err;
+		} else if (motu->spec->flags & SND_MOTU_SPEC_COMMAND_DSP) {
+			err = snd_motu_command_dsp_message_parser_init(motu, motu->tx_stream.sfc);
+			if (err < 0)
+				return err;
+		}
 
 		err = begin_session(motu);
 		if (err < 0) {
@@ -259,14 +272,34 @@ int snd_motu_stream_start_duplex(struct snd_motu *motu)
 			goto stop_streams;
 		}
 
-		err = start_isoc_ctx(motu, &motu->rx_stream);
-		if (err < 0) {
-			dev_err(&motu->unit->device,
-				"fail to start IT context: %d\n", err);
+		err = amdtp_domain_add_stream(&motu->domain, &motu->tx_stream,
+					      motu->tx_resources.channel, spd);
+		if (err < 0)
+			goto stop_streams;
+
+		err = amdtp_domain_add_stream(&motu->domain, &motu->rx_stream,
+					      motu->rx_resources.channel, spd);
+		if (err < 0)
+			goto stop_streams;
+
+		motu->cache.tail = 0;
+		motu->cache.tx_cycle_count = UINT_MAX;
+		motu->cache.head = 0;
+		motu->cache.rx_cycle_count = UINT_MAX;
+
+		// NOTE: The device requires both of replay; the sequence of the number of data
+		// blocks per packet, and the sequence of source packet header per data block as
+		// presentation time.
+		err = amdtp_domain_start(&motu->domain, 0, true, false);
+		if (err < 0)
+			goto stop_streams;
+
+		if (!amdtp_domain_wait_ready(&motu->domain, READY_TIMEOUT_MS)) {
+			err = -ETIMEDOUT;
 			goto stop_streams;
 		}
 
-		err = motu->spec->protocol->switch_fetching_mode(motu, true);
+		err = snd_motu_protocol_switch_fetching_mode(motu, true);
 		if (err < 0) {
 			dev_err(&motu->unit->device,
 				"fail to enable frame fetching: %d\n", err);
@@ -274,18 +307,10 @@ int snd_motu_stream_start_duplex(struct snd_motu *motu)
 		}
 	}
 
-	if (!amdtp_stream_running(&motu->tx_stream)) {
-		err = start_isoc_ctx(motu, &motu->tx_stream);
-		if (err < 0) {
-			dev_err(&motu->unit->device,
-				"fail to start IR context: %d", err);
-			goto stop_streams;
-		}
-	}
-
 	return 0;
 
 stop_streams:
+	amdtp_domain_stop(&motu->domain);
 	finish_session(motu);
 	return err;
 }
@@ -293,81 +318,83 @@ stop_streams:
 void snd_motu_stream_stop_duplex(struct snd_motu *motu)
 {
 	if (motu->substreams_counter == 0) {
+		amdtp_domain_stop(&motu->domain);
 		finish_session(motu);
 
 		fw_iso_resources_free(&motu->tx_resources);
 		fw_iso_resources_free(&motu->rx_resources);
+
+		kfree(motu->cache.event_offsets);
+		motu->cache.event_offsets = NULL;
 	}
 }
 
-static int init_stream(struct snd_motu *motu, enum amdtp_stream_direction dir)
+static int init_stream(struct snd_motu *motu, struct amdtp_stream *s)
 {
-	int err;
-	struct amdtp_stream *stream;
 	struct fw_iso_resources *resources;
+	enum amdtp_stream_direction dir;
+	int err;
 
-	if (dir == AMDTP_IN_STREAM) {
-		stream = &motu->tx_stream;
+	if (s == &motu->tx_stream) {
 		resources = &motu->tx_resources;
+		dir = AMDTP_IN_STREAM;
 	} else {
-		stream = &motu->rx_stream;
 		resources = &motu->rx_resources;
+		dir = AMDTP_OUT_STREAM;
 	}
 
 	err = fw_iso_resources_init(resources, motu->unit);
 	if (err < 0)
 		return err;
 
-	err = amdtp_motu_init(stream, motu->unit, dir, motu->spec->protocol);
-	if (err < 0) {
-		amdtp_stream_destroy(stream);
+	err = amdtp_motu_init(s, motu->unit, dir, motu->spec, &motu->cache);
+	if (err < 0)
 		fw_iso_resources_destroy(resources);
-	}
 
 	return err;
 }
 
-static void destroy_stream(struct snd_motu *motu,
-			   enum amdtp_stream_direction dir)
+static void destroy_stream(struct snd_motu *motu, struct amdtp_stream *s)
 {
-	struct amdtp_stream *stream;
-	struct fw_iso_resources *resources;
+	amdtp_stream_destroy(s);
 
-	if (dir == AMDTP_IN_STREAM) {
-		stream = &motu->tx_stream;
-		resources = &motu->tx_resources;
-	} else {
-		stream = &motu->rx_stream;
-		resources = &motu->rx_resources;
-	}
-
-	amdtp_stream_destroy(stream);
-	fw_iso_resources_destroy(resources);
+	if (s == &motu->tx_stream)
+		fw_iso_resources_destroy(&motu->tx_resources);
+	else
+		fw_iso_resources_destroy(&motu->rx_resources);
 }
 
 int snd_motu_stream_init_duplex(struct snd_motu *motu)
 {
 	int err;
 
-	err = init_stream(motu, AMDTP_IN_STREAM);
+	err = init_stream(motu, &motu->tx_stream);
 	if (err < 0)
 		return err;
 
-	err = init_stream(motu, AMDTP_OUT_STREAM);
-	if (err < 0)
-		destroy_stream(motu, AMDTP_IN_STREAM);
+	err = init_stream(motu, &motu->rx_stream);
+	if (err < 0) {
+		destroy_stream(motu, &motu->tx_stream);
+		return err;
+	}
+
+	err = amdtp_domain_init(&motu->domain);
+	if (err < 0) {
+		destroy_stream(motu, &motu->tx_stream);
+		destroy_stream(motu, &motu->rx_stream);
+	}
 
 	return err;
 }
 
-/*
- * This function should be called before starting streams or after stopping
- * streams.
- */
+// This function should be called before starting streams or after stopping
+// streams.
 void snd_motu_stream_destroy_duplex(struct snd_motu *motu)
 {
-	destroy_stream(motu, AMDTP_IN_STREAM);
-	destroy_stream(motu, AMDTP_OUT_STREAM);
+	amdtp_domain_destroy(&motu->domain);
+
+	destroy_stream(motu, &motu->rx_stream);
+	destroy_stream(motu, &motu->tx_stream);
 
 	motu->substreams_counter = 0;
 }

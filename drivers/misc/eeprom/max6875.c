@@ -150,9 +150,9 @@ static int max6875_probe(struct i2c_client *client,
 		return -ENOMEM;
 
 	/* A fake client is created on the odd address */
-	data->fake_client = i2c_new_dummy(client->adapter, client->addr + 1);
-	if (!data->fake_client) {
-		err = -ENOMEM;
+	data->fake_client = i2c_new_dummy_device(client->adapter, client->addr + 1);
+	if (IS_ERR(data->fake_client)) {
+		err = PTR_ERR(data->fake_client);
 		goto exit_kfree;
 	}
 
@@ -173,7 +173,7 @@ exit_kfree:
 	return err;
 }
 
-static int max6875_remove(struct i2c_client *client)
+static void max6875_remove(struct i2c_client *client)
 {
 	struct max6875_data *data = i2c_get_clientdata(client);
 
@@ -181,8 +181,6 @@ static int max6875_remove(struct i2c_client *client)
 
 	sysfs_remove_bin_file(&client->dev.kobj, &user_eeprom_attr);
 	kfree(data);
-
-	return 0;
 }
 
 static const struct i2c_device_id max6875_id[] = {

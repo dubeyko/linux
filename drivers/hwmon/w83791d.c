@@ -270,11 +270,8 @@ struct w83791d_data {
 	struct device *hwmon_dev;
 	struct mutex update_lock;
 
-	char valid;			/* !=0 if following fields are valid */
+	bool valid;			/* true if following fields are valid */
 	unsigned long last_updated;	/* In jiffies */
-
-	/* array of 2 pointers to subclients */
-	struct i2c_client *lm75[2];
 
 	/* volts */
 	u8 in[NUMBER_OF_VIN];		/* Register value */
@@ -315,11 +312,10 @@ struct w83791d_data {
 	u8 vrm;			/* hwmon-vid */
 };
 
-static int w83791d_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id);
+static int w83791d_probe(struct i2c_client *client);
 static int w83791d_detect(struct i2c_client *client,
 			  struct i2c_board_info *info);
-static int w83791d_remove(struct i2c_client *client);
+static void w83791d_remove(struct i2c_client *client);
 
 static int w83791d_read(struct i2c_client *client, u8 reg);
 static int w83791d_write(struct i2c_client *client, u8 reg, u8 value);
@@ -342,7 +338,7 @@ static struct i2c_driver w83791d_driver = {
 	.driver = {
 		.name = "w83791d",
 	},
-	.probe		= w83791d_probe,
+	.probe_new	= w83791d_probe,
 	.remove		= w83791d_remove,
 	.id_table	= w83791d_id,
 	.detect		= w83791d_detect,
@@ -1258,9 +1254,8 @@ static const struct attribute_group w83791d_group_fanpwm45 = {
 static int w83791d_detect_subclients(struct i2c_client *client)
 {
 	struct i2c_adapter *adapter = client->adapter;
-	struct w83791d_data *data = i2c_get_clientdata(client);
 	int address = client->addr;
-	int i, id, err;
+	int i, id;
 	u8 val;
 
 	id = i2c_adapter_id(adapter);
@@ -1272,8 +1267,7 @@ static int w83791d_detect_subclients(struct i2c_client *client)
 					"invalid subclient "
 					"address %d; must be 0x48-0x4f\n",
 					force_subclients[i]);
-				err = -ENODEV;
-				goto error_sc_0;
+				return -ENODEV;
 			}
 		}
 		w83791d_write(client, W83791D_REG_I2C_SUBADDR,
@@ -1282,30 +1276,20 @@ static int w83791d_detect_subclients(struct i2c_client *client)
 	}
 
 	val = w83791d_read(client, W83791D_REG_I2C_SUBADDR);
-	if (!(val & 0x08))
-		data->lm75[0] = i2c_new_dummy(adapter, 0x48 + (val & 0x7));
-	if (!(val & 0x80)) {
-		if ((data->lm75[0] != NULL) &&
-				((val & 0x7) == ((val >> 4) & 0x7))) {
-			dev_err(&client->dev,
-				"duplicate addresses 0x%x, "
-				"use force_subclient\n",
-				data->lm75[0]->addr);
-			err = -ENODEV;
-			goto error_sc_1;
-		}
-		data->lm75[1] = i2c_new_dummy(adapter,
-					      0x48 + ((val >> 4) & 0x7));
+
+	if (!(val & 0x88) && (val & 0x7) == ((val >> 4) & 0x7)) {
+		dev_err(&client->dev,
+			"duplicate addresses 0x%x, use force_subclient\n", 0x48 + (val & 0x7));
+		return -ENODEV;
 	}
 
+	if (!(val & 0x08))
+		devm_i2c_new_dummy_device(&client->dev, adapter, 0x48 + (val & 0x7));
+
+	if (!(val & 0x80))
+		devm_i2c_new_dummy_device(&client->dev, adapter, 0x48 + ((val >> 4) & 0x7));
+
 	return 0;
-
-/* Undo inits in case of errors */
-
-error_sc_1:
-	i2c_unregister_device(data->lm75[0]);
-error_sc_0:
-	return err;
 }
 
 
@@ -1349,13 +1333,12 @@ static int w83791d_detect(struct i2c_client *client,
 	if (val1 != 0x71 || val2 != 0x5c)
 		return -ENODEV;
 
-	strlcpy(info->type, "w83791d", I2C_NAME_SIZE);
+	strscpy(info->type, "w83791d", I2C_NAME_SIZE);
 
 	return 0;
 }
 
-static int w83791d_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int w83791d_probe(struct i2c_client *client)
 {
 	struct w83791d_data *data;
 	struct device *dev = &client->dev;
@@ -1394,7 +1377,7 @@ static int w83791d_probe(struct i2c_client *client,
 	/* Register sysfs hooks */
 	err = sysfs_create_group(&client->dev.kobj, &w83791d_group);
 	if (err)
-		goto error3;
+		return err;
 
 	/* Check if pins of fan/pwm 4-5 are in use as GPIO */
 	has_fanpwm45 = w83791d_read(client, W83791D_REG_GPIO) & 0x10;
@@ -1419,23 +1402,15 @@ error5:
 		sysfs_remove_group(&client->dev.kobj, &w83791d_group_fanpwm45);
 error4:
 	sysfs_remove_group(&client->dev.kobj, &w83791d_group);
-error3:
-	i2c_unregister_device(data->lm75[0]);
-	i2c_unregister_device(data->lm75[1]);
 	return err;
 }
 
-static int w83791d_remove(struct i2c_client *client)
+static void w83791d_remove(struct i2c_client *client)
 {
 	struct w83791d_data *data = i2c_get_clientdata(client);
 
 	hwmon_device_unregister(data->hwmon_dev);
 	sysfs_remove_group(&client->dev.kobj, &w83791d_group);
-
-	i2c_unregister_device(data->lm75[0]);
-	i2c_unregister_device(data->lm75[1]);
-
-	return 0;
 }
 
 static void w83791d_init_client(struct i2c_client *client)
@@ -1619,7 +1594,7 @@ static struct w83791d_data *w83791d_update_device(struct device *dev)
 				<< 4;
 
 		data->last_updated = jiffies;
-		data->valid = 1;
+		data->valid = true;
 	}
 
 	mutex_unlock(&data->update_lock);

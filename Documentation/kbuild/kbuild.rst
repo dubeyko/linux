@@ -18,7 +18,7 @@ This file lists all modules that are built into the kernel. This is used
 by modprobe to not fail when trying to load something builtin.
 
 modules.builtin.modinfo
---------------------------------------------------
+-----------------------
 This file contains modinfo from all modules that are built into the kernel.
 Unlike modinfo of a separate module, all fields are prefixed with module name.
 
@@ -38,16 +38,19 @@ Additional options to the assembler (for built-in and modules).
 
 AFLAGS_MODULE
 -------------
-Additional module specific options to use for $(AS).
+Additional assembler options for modules.
 
 AFLAGS_KERNEL
 -------------
-Additional options for $(AS) when used for assembler
-code for code that is compiled as built-in.
+Additional assembler options for built-in.
 
 KCFLAGS
 -------
 Additional options to the C compiler (for built-in and modules).
+
+KRUSTFLAGS
+----------
+Additional options to the Rust compiler (for built-in and modules).
 
 CFLAGS_KERNEL
 -------------
@@ -57,6 +60,15 @@ code that is compiled as built-in.
 CFLAGS_MODULE
 -------------
 Additional module specific options to use for $(CC).
+
+RUSTFLAGS_KERNEL
+----------------
+Additional options for $(RUSTC) when used to compile
+code that is compiled as built-in.
+
+RUSTFLAGS_MODULE
+----------------
+Additional module specific options to use for $(RUSTC).
 
 LDFLAGS_MODULE
 --------------
@@ -70,6 +82,10 @@ HOSTCXXFLAGS
 ------------
 Additional flags to be passed to $(HOSTCXX) when building host programs.
 
+HOSTRUSTFLAGS
+-------------
+Additional flags to be passed to $(HOSTRUSTC) when building host programs.
+
 HOSTLDFLAGS
 -----------
 Additional flags to be passed when linking host programs.
@@ -77,6 +93,17 @@ Additional flags to be passed when linking host programs.
 HOSTLDLIBS
 ----------
 Additional libraries to link against when building host programs.
+
+.. _userkbuildflags:
+
+USERCFLAGS
+----------
+Additional options used for $(CC) when compiling userprogs.
+
+USERLDFLAGS
+-----------
+Additional options used for $(LD) when linking userprogs. userprogs are linked
+with CC, so $(USERLDFLAGS) should include "-Wl," prefix as applicable.
 
 KBUILD_KCONFIG
 --------------
@@ -105,6 +132,15 @@ Specify the output directory when building the kernel.
 The output directory can also be specified using "O=...".
 
 Setting "O=..." takes precedence over KBUILD_OUTPUT.
+
+KBUILD_EXTRA_WARN
+-----------------
+Specify the extra build checks. The same value can be assigned by passing
+W=... from the command line.
+
+See `make help` for the list of the supported values.
+
+Setting "W=..." takes precedence over KBUILD_EXTRA_WARN.
 
 KBUILD_DEBARCH
 --------------
@@ -153,6 +189,7 @@ Install script called when using "make install".
 The default name is "installkernel".
 
 The script will be called with the following arguments:
+
    - $1 - kernel version
    - $2 - kernel image file
    - $3 - kernel map file
@@ -228,7 +265,7 @@ This is solely useful to speed up test compiles.
 KBUILD_EXTRA_SYMBOLS
 --------------------
 For modules that use symbols from other modules.
-See more details in modules.txt.
+See more details in modules.rst.
 
 ALLSOURCE_ARCHS
 ---------------
@@ -240,11 +277,6 @@ to be included in the databases, separated by blank space. E.g.::
 To get all available archs you can also specify all. E.g.::
 
     $ make ALLSOURCE_ARCHS=all tags
-
-KBUILD_ENABLE_EXTRA_GCC_CHECKS
-------------------------------
-If enabled over the make command line with "W=1", it turns on additional
-gcc -W... options for more extensive build-time checking.
 
 KBUILD_BUILD_TIMESTAMP
 ----------------------
@@ -259,16 +291,7 @@ These two variables allow to override the user@host string displayed during
 boot and in /proc/version. The default value is the output of the commands
 whoami and host, respectively.
 
-KBUILD_LDS
-----------
-The linker script with full path. Assigned by the top-level Makefile.
-
-KBUILD_VMLINUX_OBJS
--------------------
-All object files for vmlinux. They are linked to vmlinux in the same
-order as listed in KBUILD_VMLINUX_OBJS.
-
-KBUILD_VMLINUX_LIBS
--------------------
-All .a "lib" files for vmlinux. KBUILD_VMLINUX_OBJS and KBUILD_VMLINUX_LIBS
-together specify all the object files used to link vmlinux.
+LLVM
+----
+If this variable is set to 1, Kbuild will use Clang and LLVM utilities instead
+of GCC and GNU binutils to build the kernel.

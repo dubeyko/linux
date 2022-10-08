@@ -21,6 +21,18 @@
 #include <linux/workqueue.h>
 #include "atmel-i2c.h"
 
+static const struct {
+	u8 value;
+	const char *error_text;
+} error_list[] = {
+	{ 0x01, "CheckMac or Verify miscompare" },
+	{ 0x03, "Parse Error" },
+	{ 0x05, "ECC Fault" },
+	{ 0x0F, "Execution Error" },
+	{ 0xEE, "Watchdog about to expire" },
+	{ 0xFF, "CRC or other communication error" },
+};
+
 /**
  * atmel_i2c_checksum() - Generate 16-bit CRC as required by ATMEL ECC.
  * CRC16 verification of the count, opcode, param1, param2 and data bytes.
@@ -164,7 +176,8 @@ static int atmel_i2c_wakeup(struct i2c_client *client)
 	 * device is idle, asleep or during waking up. Don't check for error
 	 * when waking up the device.
 	 */
-	i2c_master_send(client, i2c_priv->wake_token, i2c_priv->wake_token_sz);
+	i2c_transfer_buffer_flags(client, i2c_priv->wake_token,
+				i2c_priv->wake_token_sz, I2C_M_IGNORE_NAK);
 
 	/*
 	 * Wait to wake the device. Typical execution times for ecdh and genkey
@@ -250,6 +263,8 @@ static void atmel_i2c_work_handler(struct work_struct *work)
 	work_data->cbk(work_data, work_data->areq, status);
 }
 
+static struct workqueue_struct *atmel_wq;
+
 void atmel_i2c_enqueue(struct atmel_i2c_work_data *work_data,
 		       void (*cbk)(struct atmel_i2c_work_data *work_data,
 				   void *areq, int status),
@@ -259,9 +274,15 @@ void atmel_i2c_enqueue(struct atmel_i2c_work_data *work_data,
 	work_data->areq = areq;
 
 	INIT_WORK(&work_data->work, atmel_i2c_work_handler);
-	schedule_work(&work_data->work);
+	queue_work(atmel_wq, &work_data->work);
 }
 EXPORT_SYMBOL(atmel_i2c_enqueue);
+
+void atmel_i2c_flush_queue(void)
+{
+	flush_workqueue(atmel_wq);
+}
+EXPORT_SYMBOL(atmel_i2c_flush_queue);
 
 static inline size_t atmel_i2c_wake_token_sz(u32 bus_clk_rate)
 {
@@ -326,7 +347,7 @@ int atmel_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
 	}
 
 	if (bus_clk_rate > 1000000L) {
-		dev_err(dev, "%d exceeds maximum supported clock frequency (1MHz)\n",
+		dev_err(dev, "%u exceeds maximum supported clock frequency (1MHz)\n",
 			bus_clk_rate);
 		return -EINVAL;
 	}
@@ -351,13 +372,23 @@ int atmel_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	i2c_set_clientdata(client, i2c_priv);
 
-	ret = device_sanity_check(client);
-	if (ret)
-		return ret;
-
-	return 0;
+	return device_sanity_check(client);
 }
 EXPORT_SYMBOL(atmel_i2c_probe);
+
+static int __init atmel_i2c_init(void)
+{
+	atmel_wq = alloc_workqueue("atmel_wq", 0, 0);
+	return atmel_wq ? 0 : -ENOMEM;
+}
+
+static void __exit atmel_i2c_exit(void)
+{
+	destroy_workqueue(atmel_wq);
+}
+
+module_init(atmel_i2c_init);
+module_exit(atmel_i2c_exit);
 
 MODULE_AUTHOR("Tudor Ambarus <tudor.ambarus@microchip.com>");
 MODULE_DESCRIPTION("Microchip / Atmel ECC (I2C) driver");

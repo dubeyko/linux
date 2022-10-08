@@ -41,7 +41,7 @@ MODULE_PARM_DESC(mask, "GPIO channel mask.");
 
 /*
  * FIXME: convert this singleton driver to use the state container
- * design pattern, see Documentation/driver-model/design-patterns.rst
+ * design pattern, see Documentation/driver-api/driver-model/design-patterns.rst
  */
 static struct cs5535_gpio_chip {
 	struct gpio_chip chip;
@@ -345,12 +345,8 @@ static int cs5535_gpio_probe(struct platform_device *pdev)
 				mask_orig, mask);
 
 	/* finally, register with the generic GPIO API */
-	err = devm_gpiochip_add_data(&pdev->dev, &cs5535_gpio_chip.chip,
-				     &cs5535_gpio_chip);
-	if (err)
-		return err;
-
-	return 0;
+	return devm_gpiochip_add_data(&pdev->dev, &cs5535_gpio_chip.chip,
+				      &cs5535_gpio_chip);
 }
 
 static struct platform_driver cs5535_gpio_driver = {

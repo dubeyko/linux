@@ -16,8 +16,6 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 
-#include <mach/hardware.h>
-
 #include "rtc-sa1100.h"
 
 #define RTC_DEF_DIVIDER		(32768 - 1)
@@ -324,15 +322,15 @@ static int __init pxa_rtc_probe(struct platform_device *pdev)
 	}
 
 	sa1100_rtc->irq_1hz = platform_get_irq(pdev, 0);
-	if (sa1100_rtc->irq_1hz < 0) {
-		dev_err(dev, "No 1Hz IRQ resource defined\n");
+	if (sa1100_rtc->irq_1hz < 0)
 		return -ENXIO;
-	}
 	sa1100_rtc->irq_alarm = platform_get_irq(pdev, 1);
-	if (sa1100_rtc->irq_alarm < 0) {
-		dev_err(dev, "No alarm IRQ resource defined\n");
+	if (sa1100_rtc->irq_alarm < 0)
 		return -ENXIO;
-	}
+
+	sa1100_rtc->rtc = devm_rtc_allocate_device(&pdev->dev);
+	if (IS_ERR(sa1100_rtc->rtc))
+		return PTR_ERR(sa1100_rtc->rtc);
 
 	pxa_rtc->base = devm_ioremap(dev, pxa_rtc->ress->start,
 				resource_size(pxa_rtc->ress));

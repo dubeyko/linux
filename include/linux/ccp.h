@@ -15,7 +15,8 @@
 #include <linux/workqueue.h>
 #include <linux/list.h>
 #include <crypto/aes.h>
-#include <crypto/sha.h>
+#include <crypto/sha1.h>
+#include <crypto/sha2.h>
 
 struct ccp_device;
 struct ccp_cmd;
@@ -169,6 +170,8 @@ struct ccp_aes_engine {
 	enum ccp_aes_type type;
 	enum ccp_aes_mode mode;
 	enum ccp_aes_action action;
+
+	u32 authsize;
 
 	struct scatterlist *key;
 	u32 key_len;		/* In bytes */

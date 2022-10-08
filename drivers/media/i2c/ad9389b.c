@@ -1148,10 +1148,10 @@ static int ad9389b_probe(struct i2c_client *client, const struct i2c_device_id *
 	v4l2_dbg(1, debug, sd, "reg 0x41 0x%x, chip version (reg 0x00) 0x%x\n",
 		 ad9389b_rd(sd, 0x41), state->chip_revision);
 
-	state->edid_i2c_client = i2c_new_dummy(client->adapter, (0x7e>>1));
-	if (state->edid_i2c_client == NULL) {
+	state->edid_i2c_client = i2c_new_dummy_device(client->adapter, (0x7e >> 1));
+	if (IS_ERR(state->edid_i2c_client)) {
 		v4l2_err(sd, "failed to register edid i2c client\n");
-		err = -ENOMEM;
+		err = PTR_ERR(state->edid_i2c_client);
 		goto err_entity;
 	}
 
@@ -1174,7 +1174,7 @@ err_hdl:
 
 /* ----------------------------------------------------------------------- */
 
-static int ad9389b_remove(struct i2c_client *client)
+static void ad9389b_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ad9389b_state *state = get_ad9389b_state(sd);
@@ -1192,7 +1192,6 @@ static int ad9389b_remove(struct i2c_client *client)
 	v4l2_device_unregister_subdev(sd);
 	media_entity_cleanup(&sd->entity);
 	v4l2_ctrl_handler_free(sd->ctrl_handler);
-	return 0;
 }
 
 /* ----------------------------------------------------------------------- */

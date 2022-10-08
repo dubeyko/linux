@@ -32,15 +32,41 @@ static int imx_media_subdev_bound(struct v4l2_async_notifier *notifier,
 			return ret;
 	}
 
-	v4l2_info(&imxmd->v4l2_dev, "subdev %s bound\n", sd->name);
+	dev_dbg(imxmd->md.dev, "subdev %s bound\n", sd->name);
 
 	return 0;
 }
 
 /* async subdev complete notifier */
+static int imx6_media_probe_complete(struct v4l2_async_notifier *notifier)
+{
+	struct imx_media_dev *imxmd = notifier2dev(notifier);
+	int ret;
+
+	/* call the imx5/6/7 common probe completion handler */
+	ret = imx_media_probe_complete(notifier);
+	if (ret)
+		return ret;
+
+	mutex_lock(&imxmd->mutex);
+
+	imxmd->m2m_vdev = imx_media_csc_scaler_device_init(imxmd);
+	if (IS_ERR(imxmd->m2m_vdev)) {
+		ret = PTR_ERR(imxmd->m2m_vdev);
+		imxmd->m2m_vdev = NULL;
+		goto unlock;
+	}
+
+	ret = imx_media_csc_scaler_device_register(imxmd->m2m_vdev);
+unlock:
+	mutex_unlock(&imxmd->mutex);
+	return ret;
+}
+
+/* async subdev complete notifier */
 static const struct v4l2_async_notifier_operations imx_media_notifier_ops = {
 	.bound = imx_media_subdev_bound,
-	.complete = imx_media_probe_complete,
+	.complete = imx6_media_probe_complete,
 };
 
 static int imx_media_probe(struct platform_device *pdev)
@@ -68,7 +94,7 @@ static int imx_media_probe(struct platform_device *pdev)
 	return 0;
 
 cleanup:
-	v4l2_async_notifier_cleanup(&imxmd->notifier);
+	v4l2_async_nf_cleanup(&imxmd->notifier);
 	v4l2_device_unregister(&imxmd->v4l2_dev);
 	media_device_cleanup(&imxmd->md);
 
@@ -82,9 +108,14 @@ static int imx_media_remove(struct platform_device *pdev)
 
 	v4l2_info(&imxmd->v4l2_dev, "Removing imx-media\n");
 
-	v4l2_async_notifier_unregister(&imxmd->notifier);
+	if (imxmd->m2m_vdev) {
+		imx_media_csc_scaler_device_unregister(imxmd->m2m_vdev);
+		imxmd->m2m_vdev = NULL;
+	}
+
+	v4l2_async_nf_unregister(&imxmd->notifier);
 	imx_media_unregister_ipu_internal_subdevs(imxmd);
-	v4l2_async_notifier_cleanup(&imxmd->notifier);
+	v4l2_async_nf_cleanup(&imxmd->notifier);
 	media_device_unregister(&imxmd->md);
 	v4l2_device_unregister(&imxmd->v4l2_dev);
 	media_device_cleanup(&imxmd->md);

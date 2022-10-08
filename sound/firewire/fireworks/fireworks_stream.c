@@ -6,10 +6,9 @@
  */
 #include "./fireworks.h"
 
-#define CALLBACK_TIMEOUT	100
+#define READY_TIMEOUT_MS	1000
 
-static int
-init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
+static int init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 {
 	struct cmp_connection *conn;
 	enum cmp_direction c_dir;
@@ -28,26 +27,39 @@ init_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 
 	err = cmp_connection_init(conn, efw->unit, c_dir, 0);
 	if (err < 0)
-		goto end;
+		return err;
 
-	err = amdtp_am824_init(stream, efw->unit, s_dir, CIP_BLOCKING);
+	err = amdtp_am824_init(stream, efw->unit, s_dir, CIP_BLOCKING | CIP_UNAWARE_SYT);
 	if (err < 0) {
 		amdtp_stream_destroy(stream);
 		cmp_connection_destroy(conn);
+		return err;
 	}
-end:
+
+	if (stream == &efw->tx_stream) {
+		// Fireworks transmits NODATA packets with TAG0.
+		efw->tx_stream.flags |= CIP_EMPTY_WITH_TAG0;
+		// Fireworks has its own meaning for dbc.
+		efw->tx_stream.flags |= CIP_DBC_IS_END_EVENT;
+		// Fireworks reset dbc at bus reset.
+		efw->tx_stream.flags |= CIP_SKIP_DBC_ZERO_CHECK;
+		// But Recent firmwares starts packets with non-zero dbc.
+		// Driver version 5.7.6 installs firmware version 5.7.3.
+		if (efw->is_fireworks3 &&
+		    (efw->firmware_version == 0x5070000 ||
+		     efw->firmware_version == 0x5070300 ||
+		     efw->firmware_version == 0x5080000))
+			efw->tx_stream.flags |= CIP_UNALIGHED_DBC;
+		// AudioFire9 always reports wrong dbs. Onyx 1200F with the latest firmware (v4.6.0)
+		// also report wrong dbs at 88.2 kHz or greater.
+		if (efw->is_af9 || efw->firmware_version == 0x4060000)
+			efw->tx_stream.flags |= CIP_WRONG_DBS;
+		// Firmware version 5.5 reports fixed interval for dbc.
+		if (efw->firmware_version == 0x5050000)
+			efw->tx_stream.ctx_data.tx.dbc_interval = 8;
+	}
+
 	return err;
-}
-
-static void
-stop_stream(struct snd_efw *efw, struct amdtp_stream *stream)
-{
-	amdtp_stream_stop(stream);
-
-	if (stream == &efw->tx_stream)
-		cmp_connection_break(&efw->out_conn);
-	else
-		cmp_connection_break(&efw->in_conn);
 }
 
 static int start_stream(struct snd_efw *efw, struct amdtp_stream *stream,
@@ -67,38 +79,26 @@ static int start_stream(struct snd_efw *efw, struct amdtp_stream *stream,
 		return err;
 
 	// Start amdtp stream.
-	err = amdtp_stream_start(stream, conn->resources.channel, conn->speed);
+	err = amdtp_domain_add_stream(&efw->domain, stream,
+				      conn->resources.channel, conn->speed);
 	if (err < 0) {
 		cmp_connection_break(conn);
 		return err;
 	}
 
-	// Wait first callback.
-	if (!amdtp_stream_wait_callback(stream, CALLBACK_TIMEOUT)) {
-		amdtp_stream_stop(stream);
-		cmp_connection_break(conn);
-		return -ETIMEDOUT;
-	}
-
 	return 0;
 }
 
-/*
- * This function should be called before starting the stream or after stopping
- * the streams.
- */
-static void
-destroy_stream(struct snd_efw *efw, struct amdtp_stream *stream)
+// This function should be called before starting the stream or after stopping
+// the streams.
+static void destroy_stream(struct snd_efw *efw, struct amdtp_stream *stream)
 {
-	struct cmp_connection *conn;
+	amdtp_stream_destroy(stream);
 
 	if (stream == &efw->tx_stream)
-		conn = &efw->out_conn;
+		cmp_connection_destroy(&efw->out_conn);
 	else
-		conn = &efw->in_conn;
-
-	amdtp_stream_destroy(stream);
-	cmp_connection_destroy(conn);
+		cmp_connection_destroy(&efw->in_conn);
 }
 
 static int
@@ -131,42 +131,28 @@ int snd_efw_stream_init_duplex(struct snd_efw *efw)
 
 	err = init_stream(efw, &efw->tx_stream);
 	if (err < 0)
-		goto end;
-	/* Fireworks transmits NODATA packets with TAG0. */
-	efw->tx_stream.flags |= CIP_EMPTY_WITH_TAG0;
-	/* Fireworks has its own meaning for dbc. */
-	efw->tx_stream.flags |= CIP_DBC_IS_END_EVENT;
-	/* Fireworks reset dbc at bus reset. */
-	efw->tx_stream.flags |= CIP_SKIP_DBC_ZERO_CHECK;
-	/*
-	 * But Recent firmwares starts packets with non-zero dbc.
-	 * Driver version 5.7.6 installs firmware version 5.7.3.
-	 */
-	if (efw->is_fireworks3 &&
-	    (efw->firmware_version == 0x5070000 ||
-	     efw->firmware_version == 0x5070300 ||
-	     efw->firmware_version == 0x5080000))
-		efw->tx_stream.ctx_data.tx.first_dbc = 0x02;
-	/* AudioFire9 always reports wrong dbs. */
-	if (efw->is_af9)
-		efw->tx_stream.flags |= CIP_WRONG_DBS;
-	/* Firmware version 5.5 reports fixed interval for dbc. */
-	if (efw->firmware_version == 0x5050000)
-		efw->tx_stream.ctx_data.tx.dbc_interval = 8;
+		return err;
 
 	err = init_stream(efw, &efw->rx_stream);
 	if (err < 0) {
 		destroy_stream(efw, &efw->tx_stream);
-		goto end;
+		return err;
 	}
 
-	/* set IEC61883 compliant mode (actually not fully compliant...) */
+	err = amdtp_domain_init(&efw->domain);
+	if (err < 0) {
+		destroy_stream(efw, &efw->tx_stream);
+		destroy_stream(efw, &efw->rx_stream);
+		return err;
+	}
+
+	// set IEC61883 compliant mode (actually not fully compliant...).
 	err = snd_efw_command_set_tx_mode(efw, SND_EFW_TRANSPORT_MODE_IEC61883);
 	if (err < 0) {
 		destroy_stream(efw, &efw->tx_stream);
 		destroy_stream(efw, &efw->rx_stream);
 	}
-end:
+
 	return err;
 }
 
@@ -196,7 +182,9 @@ static int keep_resources(struct snd_efw *efw, struct amdtp_stream *stream,
 	return cmp_connection_reserve(conn, amdtp_stream_get_max_payload(stream));
 }
 
-int snd_efw_stream_reserve_duplex(struct snd_efw *efw, unsigned int rate)
+int snd_efw_stream_reserve_duplex(struct snd_efw *efw, unsigned int rate,
+				  unsigned int frames_per_period,
+				  unsigned int frames_per_buffer)
 {
 	unsigned int curr_rate;
 	int err;
@@ -214,8 +202,10 @@ int snd_efw_stream_reserve_duplex(struct snd_efw *efw, unsigned int rate)
 	if (rate == 0)
 		rate = curr_rate;
 	if (rate != curr_rate) {
-		stop_stream(efw, &efw->tx_stream);
-		stop_stream(efw, &efw->rx_stream);
+		amdtp_domain_stop(&efw->domain);
+
+		cmp_connection_break(&efw->out_conn);
+		cmp_connection_break(&efw->in_conn);
 
 		cmp_connection_release(&efw->out_conn);
 		cmp_connection_release(&efw->in_conn);
@@ -241,6 +231,14 @@ int snd_efw_stream_reserve_duplex(struct snd_efw *efw, unsigned int rate)
 			cmp_connection_release(&efw->in_conn);
 			return err;
 		}
+
+		err = amdtp_domain_set_events_per_period(&efw->domain,
+					frames_per_period, frames_per_buffer);
+		if (err < 0) {
+			cmp_connection_release(&efw->in_conn);
+			cmp_connection_release(&efw->out_conn);
+			return err;
+		}
 	}
 
 	return 0;
@@ -255,47 +253,65 @@ int snd_efw_stream_start_duplex(struct snd_efw *efw)
 	if (efw->substreams_counter == 0)
 		return -EIO;
 
+	if (amdtp_streaming_error(&efw->rx_stream) ||
+	    amdtp_streaming_error(&efw->tx_stream)) {
+		amdtp_domain_stop(&efw->domain);
+		cmp_connection_break(&efw->out_conn);
+		cmp_connection_break(&efw->in_conn);
+	}
+
 	err = snd_efw_command_get_sampling_rate(efw, &rate);
 	if (err < 0)
 		return err;
 
-	if (amdtp_streaming_error(&efw->rx_stream) ||
-	    amdtp_streaming_error(&efw->tx_stream)) {
-		stop_stream(efw, &efw->rx_stream);
-		stop_stream(efw, &efw->tx_stream);
-	}
-
-	/* master should be always running */
 	if (!amdtp_stream_running(&efw->rx_stream)) {
-		err = start_stream(efw, &efw->rx_stream, rate);
-		if (err < 0) {
-			dev_err(&efw->unit->device,
-				"fail to start AMDTP master stream:%d\n", err);
-			goto error;
-		}
-	}
+		unsigned int tx_init_skip_cycles;
 
-	if (!amdtp_stream_running(&efw->tx_stream)) {
+		// Audiofire 2/4 skip an isochronous cycle several thousands after starting
+		// packet transmission.
+		if (efw->is_fireworks3 && !efw->is_af9)
+			tx_init_skip_cycles = 6000;
+		else
+			tx_init_skip_cycles = 0;
+
+		err = start_stream(efw, &efw->rx_stream, rate);
+		if (err < 0)
+			goto error;
+
 		err = start_stream(efw, &efw->tx_stream, rate);
-		if (err < 0) {
-			dev_err(&efw->unit->device,
-				"fail to start AMDTP slave stream:%d\n", err);
+		if (err < 0)
+			goto error;
+
+		// NOTE: The device ignores presentation time expressed by the value of syt field
+		// of CIP header in received packets. The sequence of the number of data blocks per
+		// packet is important for media clock recovery.
+		err = amdtp_domain_start(&efw->domain, tx_init_skip_cycles, true, false);
+		if (err < 0)
+			goto error;
+
+		if (!amdtp_domain_wait_ready(&efw->domain, READY_TIMEOUT_MS)) {
+			err = -ETIMEDOUT;
 			goto error;
 		}
 	}
 
 	return 0;
 error:
-	stop_stream(efw, &efw->rx_stream);
-	stop_stream(efw, &efw->tx_stream);
+	amdtp_domain_stop(&efw->domain);
+
+	cmp_connection_break(&efw->out_conn);
+	cmp_connection_break(&efw->in_conn);
+
 	return err;
 }
 
 void snd_efw_stream_stop_duplex(struct snd_efw *efw)
 {
 	if (efw->substreams_counter == 0) {
-		stop_stream(efw, &efw->tx_stream);
-		stop_stream(efw, &efw->rx_stream);
+		amdtp_domain_stop(&efw->domain);
+
+		cmp_connection_break(&efw->out_conn);
+		cmp_connection_break(&efw->in_conn);
 
 		cmp_connection_release(&efw->out_conn);
 		cmp_connection_release(&efw->in_conn);
@@ -304,18 +320,19 @@ void snd_efw_stream_stop_duplex(struct snd_efw *efw)
 
 void snd_efw_stream_update_duplex(struct snd_efw *efw)
 {
-	if (cmp_connection_update(&efw->out_conn) < 0 ||
-	    cmp_connection_update(&efw->in_conn) < 0) {
-		stop_stream(efw, &efw->rx_stream);
-		stop_stream(efw, &efw->tx_stream);
-	} else {
-		amdtp_stream_update(&efw->rx_stream);
-		amdtp_stream_update(&efw->tx_stream);
-	}
+	amdtp_domain_stop(&efw->domain);
+
+	cmp_connection_break(&efw->out_conn);
+	cmp_connection_break(&efw->in_conn);
+
+	amdtp_stream_pcm_abort(&efw->rx_stream);
+	amdtp_stream_pcm_abort(&efw->tx_stream);
 }
 
 void snd_efw_stream_destroy_duplex(struct snd_efw *efw)
 {
+	amdtp_domain_destroy(&efw->domain);
+
 	destroy_stream(efw, &efw->rx_stream);
 	destroy_stream(efw, &efw->tx_stream);
 }

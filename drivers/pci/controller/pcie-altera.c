@@ -10,6 +10,7 @@
 #include <linux/interrupt.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_irq.h>
@@ -43,6 +44,8 @@
 #define S10_RP_RXCPL_STATUS		0x200C
 #define S10_RP_CFG_ADDR(pcie, reg)	\
 	(((pcie)->hip_base) + (reg) + (1 << 20))
+#define S10_RP_SECONDARY(pcie)		\
+	readb(S10_RP_CFG_ADDR(pcie, PCI_SECONDARY_BUS))
 
 /* TLP configuration type 0 and 1 */
 #define TLP_FMTTYPE_CFGRD0		0x04	/* Configuration Read Type 0 */
@@ -54,14 +57,9 @@
 #define TLP_WRITE_TAG			0x10
 #define RP_DEVFN			0
 #define TLP_REQ_ID(bus, devfn)		(((bus) << 8) | (devfn))
-#define TLP_CFGRD_DW0(pcie, bus)					\
-	((((bus == pcie->root_bus_nr) ? pcie->pcie_data->cfgrd0		\
-				: pcie->pcie_data->cfgrd1) << 24) |	\
-				TLP_PAYLOAD_SIZE)
-#define TLP_CFGWR_DW0(pcie, bus)					\
-	((((bus == pcie->root_bus_nr) ? pcie->pcie_data->cfgwr0		\
-				: pcie->pcie_data->cfgwr1) << 24) |	\
-				TLP_PAYLOAD_SIZE)
+#define TLP_CFG_DW0(pcie, cfg)		\
+		(((cfg) << 24) |	\
+		  TLP_PAYLOAD_SIZE)
 #define TLP_CFG_DW1(pcie, tag, be)	\
 	(((TLP_REQ_ID(pcie->root_bus_nr,  RP_DEVFN)) << 16) | (tag << 8) | (be))
 #define TLP_CFG_DW2(bus, devfn, offset)	\
@@ -94,7 +92,6 @@ struct altera_pcie {
 	u8			root_bus_nr;
 	struct irq_domain	*irq_domain;
 	struct resource		bus_range;
-	struct list_head	resources;
 	const struct altera_pcie_data	*pcie_data;
 };
 
@@ -196,7 +193,7 @@ static bool altera_pcie_valid_device(struct altera_pcie *pcie,
 	if (bus->number == pcie->root_bus_nr && dev > 0)
 		return false;
 
-	 return true;
+	return true;
 }
 
 static int tlp_read_packet(struct altera_pcie *pcie, u32 *value)
@@ -321,14 +318,31 @@ static void s10_tlp_write_packet(struct altera_pcie *pcie, u32 *headers,
 	s10_tlp_write_tx(pcie, data, RP_TX_EOP);
 }
 
+static void get_tlp_header(struct altera_pcie *pcie, u8 bus, u32 devfn,
+			   int where, u8 byte_en, bool read, u32 *headers)
+{
+	u8 cfg;
+	u8 cfg0 = read ? pcie->pcie_data->cfgrd0 : pcie->pcie_data->cfgwr0;
+	u8 cfg1 = read ? pcie->pcie_data->cfgrd1 : pcie->pcie_data->cfgwr1;
+	u8 tag = read ? TLP_READ_TAG : TLP_WRITE_TAG;
+
+	if (pcie->pcie_data->version == ALTERA_PCIE_V1)
+		cfg = (bus == pcie->root_bus_nr) ? cfg0 : cfg1;
+	else
+		cfg = (bus > S10_RP_SECONDARY(pcie)) ? cfg0 : cfg1;
+
+	headers[0] = TLP_CFG_DW0(pcie, cfg);
+	headers[1] = TLP_CFG_DW1(pcie, tag, byte_en);
+	headers[2] = TLP_CFG_DW2(bus, devfn, where);
+}
+
 static int tlp_cfg_dword_read(struct altera_pcie *pcie, u8 bus, u32 devfn,
 			      int where, u8 byte_en, u32 *value)
 {
 	u32 headers[TLP_HDR_SIZE];
 
-	headers[0] = TLP_CFGRD_DW0(pcie, bus);
-	headers[1] = TLP_CFG_DW1(pcie, TLP_READ_TAG, byte_en);
-	headers[2] = TLP_CFG_DW2(bus, devfn, where);
+	get_tlp_header(pcie, bus, devfn, where, byte_en, true,
+		       headers);
 
 	pcie->pcie_data->ops->tlp_write_pkt(pcie, headers, 0, false);
 
@@ -341,9 +355,8 @@ static int tlp_cfg_dword_write(struct altera_pcie *pcie, u8 bus, u32 devfn,
 	u32 headers[TLP_HDR_SIZE];
 	int ret;
 
-	headers[0] = TLP_CFGWR_DW0(pcie, bus);
-	headers[1] = TLP_CFG_DW1(pcie, TLP_WRITE_TAG, byte_en);
-	headers[2] = TLP_CFG_DW2(bus, devfn, where);
+	get_tlp_header(pcie, bus, devfn, where, byte_en, false,
+		       headers);
 
 	/* check alignment to Qword */
 	if ((where & 0x7) == 0)
@@ -497,10 +510,8 @@ static int altera_pcie_cfg_read(struct pci_bus *bus, unsigned int devfn,
 	if (altera_pcie_hide_rc_bar(bus, devfn, where))
 		return PCIBIOS_BAD_REGISTER_NUMBER;
 
-	if (!altera_pcie_valid_device(pcie, bus, PCI_SLOT(devfn))) {
-		*value = 0xffffffff;
+	if (!altera_pcie_valid_device(pcie, bus, PCI_SLOT(devfn)))
 		return PCIBIOS_DEVICE_NOT_FOUND;
-	}
 
 	return _altera_pcie_cfg_read(pcie, bus->number, devfn, where, size,
 				     value);
@@ -633,7 +644,7 @@ static void altera_pcie_isr(struct irq_desc *desc)
 	struct device *dev;
 	unsigned long status;
 	u32 bit;
-	u32 virq;
+	int ret;
 
 	chained_irq_enter(chip, desc);
 	pcie = irq_desc_get_handler_data(desc);
@@ -645,48 +656,13 @@ static void altera_pcie_isr(struct irq_desc *desc)
 			/* clear interrupts */
 			cra_writel(pcie, 1 << bit, P2A_INT_STATUS);
 
-			virq = irq_find_mapping(pcie->irq_domain, bit);
-			if (virq)
-				generic_handle_irq(virq);
-			else
-				dev_err(dev, "unexpected IRQ, INT%d\n", bit);
+			ret = generic_handle_domain_irq(pcie->irq_domain, bit);
+			if (ret)
+				dev_err_ratelimited(dev, "unexpected IRQ, INT%d\n", bit);
 		}
 	}
 
 	chained_irq_exit(chip, desc);
-}
-
-static int altera_pcie_parse_request_of_pci_ranges(struct altera_pcie *pcie)
-{
-	int err, res_valid = 0;
-	struct device *dev = &pcie->pdev->dev;
-	struct resource_entry *win;
-
-	err = devm_of_pci_get_host_bridge_resources(dev, 0, 0xff,
-						    &pcie->resources, NULL);
-	if (err)
-		return err;
-
-	err = devm_request_pci_bus_resources(dev, &pcie->resources);
-	if (err)
-		goto out_release_res;
-
-	resource_list_for_each_entry(win, &pcie->resources) {
-		struct resource *res = win->res;
-
-		if (resource_type(res) == IORESOURCE_MEM)
-			res_valid |= !(res->flags & IORESOURCE_PREFETCH);
-	}
-
-	if (res_valid)
-		return 0;
-
-	dev_err(dev, "non-prefetchable memory resource required\n");
-	err = -EINVAL;
-
-out_release_res:
-	pci_free_resource_list(&pcie->resources);
-	return err;
 }
 
 static int altera_pcie_init_irq_domain(struct altera_pcie *pcie)
@@ -705,31 +681,32 @@ static int altera_pcie_init_irq_domain(struct altera_pcie *pcie)
 	return 0;
 }
 
+static void altera_pcie_irq_teardown(struct altera_pcie *pcie)
+{
+	irq_set_chained_handler_and_data(pcie->irq, NULL, NULL);
+	irq_domain_remove(pcie->irq_domain);
+	irq_dispose_mapping(pcie->irq);
+}
+
 static int altera_pcie_parse_dt(struct altera_pcie *pcie)
 {
-	struct device *dev = &pcie->pdev->dev;
 	struct platform_device *pdev = pcie->pdev;
-	struct resource *cra;
-	struct resource *hip;
 
-	cra = platform_get_resource_byname(pdev, IORESOURCE_MEM, "Cra");
-	pcie->cra_base = devm_ioremap_resource(dev, cra);
+	pcie->cra_base = devm_platform_ioremap_resource_byname(pdev, "Cra");
 	if (IS_ERR(pcie->cra_base))
 		return PTR_ERR(pcie->cra_base);
 
 	if (pcie->pcie_data->version == ALTERA_PCIE_V2) {
-		hip = platform_get_resource_byname(pdev, IORESOURCE_MEM, "Hip");
-		pcie->hip_base = devm_ioremap_resource(&pdev->dev, hip);
+		pcie->hip_base =
+			devm_platform_ioremap_resource_byname(pdev, "Hip");
 		if (IS_ERR(pcie->hip_base))
 			return PTR_ERR(pcie->hip_base);
 	}
 
 	/* setup IRQ */
 	pcie->irq = platform_get_irq(pdev, 0);
-	if (pcie->irq < 0) {
-		dev_err(dev, "failed to get IRQ: %d\n", pcie->irq);
+	if (pcie->irq < 0)
 		return pcie->irq;
-	}
 
 	irq_set_chained_handler_and_data(pcie->irq, altera_pcie_isr, pcie);
 	return 0;
@@ -786,11 +763,9 @@ static int altera_pcie_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct altera_pcie *pcie;
-	struct pci_bus *bus;
-	struct pci_bus *child;
 	struct pci_host_bridge *bridge;
 	int ret;
-	const struct of_device_id *match;
+	const struct altera_pcie_data *data;
 
 	bridge = devm_pci_alloc_host_bridge(dev, sizeof(*pcie));
 	if (!bridge)
@@ -798,24 +773,17 @@ static int altera_pcie_probe(struct platform_device *pdev)
 
 	pcie = pci_host_bridge_priv(bridge);
 	pcie->pdev = pdev;
+	platform_set_drvdata(pdev, pcie);
 
-	match = of_match_device(altera_pcie_of_match, &pdev->dev);
-	if (!match)
+	data = of_device_get_match_data(&pdev->dev);
+	if (!data)
 		return -ENODEV;
 
-	pcie->pcie_data = match->data;
+	pcie->pcie_data = data;
 
 	ret = altera_pcie_parse_dt(pcie);
 	if (ret) {
 		dev_err(dev, "Parsing DT failed\n");
-		return ret;
-	}
-
-	INIT_LIST_HEAD(&pcie->resources);
-
-	ret = altera_pcie_parse_request_of_pci_ranges(pcie);
-	if (ret) {
-		dev_err(dev, "Failed add resources\n");
 		return ret;
 	}
 
@@ -831,37 +799,34 @@ static int altera_pcie_probe(struct platform_device *pdev)
 	cra_writel(pcie, P2A_INT_ENA_ALL, P2A_INT_ENABLE);
 	altera_pcie_host_init(pcie);
 
-	list_splice_init(&pcie->resources, &bridge->windows);
-	bridge->dev.parent = dev;
 	bridge->sysdata = pcie;
 	bridge->busnr = pcie->root_bus_nr;
 	bridge->ops = &altera_pcie_ops;
-	bridge->map_irq = of_irq_parse_and_map_pci;
-	bridge->swizzle_irq = pci_common_swizzle;
 
-	ret = pci_scan_root_bus_bridge(bridge);
-	if (ret < 0)
-		return ret;
+	return pci_host_probe(bridge);
+}
 
-	bus = bridge->bus;
+static int altera_pcie_remove(struct platform_device *pdev)
+{
+	struct altera_pcie *pcie = platform_get_drvdata(pdev);
+	struct pci_host_bridge *bridge = pci_host_bridge_from_priv(pcie);
 
-	pci_assign_unassigned_bus_resources(bus);
+	pci_stop_root_bus(bridge->bus);
+	pci_remove_root_bus(bridge->bus);
+	altera_pcie_irq_teardown(pcie);
 
-	/* Configure PCI Express setting. */
-	list_for_each_entry(child, &bus->children, node)
-		pcie_bus_configure_settings(child);
-
-	pci_bus_add_devices(bus);
-	return ret;
+	return 0;
 }
 
 static struct platform_driver altera_pcie_driver = {
 	.probe		= altera_pcie_probe,
+	.remove		= altera_pcie_remove,
 	.driver = {
 		.name	= "altera-pcie",
 		.of_match_table = altera_pcie_of_match,
-		.suppress_bind_attrs = true,
 	},
 };
 
-builtin_platform_driver(altera_pcie_driver);
+MODULE_DEVICE_TABLE(of, altera_pcie_of_match);
+module_platform_driver(altera_pcie_driver);
+MODULE_LICENSE("GPL v2");

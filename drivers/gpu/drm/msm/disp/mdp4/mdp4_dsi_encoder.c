@@ -11,6 +11,8 @@
 
 #include "mdp4_kms.h"
 
+#ifdef CONFIG_DRM_MSM_DSI
+
 struct mdp4_dsi_encoder {
 	struct drm_encoder base;
 	struct drm_panel *panel;
@@ -121,7 +123,7 @@ static void mdp4_dsi_encoder_enable(struct drm_encoder *encoder)
 	if (mdp4_dsi_encoder->enabled)
 		return;
 
-	 mdp4_crtc_set_config(encoder->crtc,
+	mdp4_crtc_set_config(encoder->crtc,
 			MDP4_DMA_CONFIG_PACK_ALIGN_MSB |
 			MDP4_DMA_CONFIG_DEFLKR_EN |
 			MDP4_DMA_CONFIG_DITHER_EN |
@@ -170,3 +172,4 @@ fail:
 
 	return ERR_PTR(ret);
 }
+#endif /* CONFIG_DRM_MSM_DSI */

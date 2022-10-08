@@ -216,6 +216,7 @@ static struct rtl_hal_ops rtl8192de_hal_ops = {
 	.led_control = rtl92de_led_control,
 	.set_desc = rtl92de_set_desc,
 	.get_desc = rtl92de_get_desc,
+	.is_tx_desc_closed = rtl92de_is_tx_desc_closed,
 	.tx_polling = rtl92de_tx_polling,
 	.enable_hw_sec = rtl92de_enable_hw_security_config,
 	.set_key = rtl92de_set_key,
@@ -371,17 +372,13 @@ static struct pci_driver rtl92de_driver = {
 
 /* add global spin lock to solve the problem that
  * Dul mac register operation on the same time */
-spinlock_t globalmutex_power;
-spinlock_t globalmutex_for_fwdownload;
-spinlock_t globalmutex_for_power_and_efuse;
+DEFINE_SPINLOCK(globalmutex_power);
+DEFINE_SPINLOCK(globalmutex_for_fwdownload);
+DEFINE_SPINLOCK(globalmutex_for_power_and_efuse);
 
 static int __init rtl92de_module_init(void)
 {
 	int ret = 0;
-
-	spin_lock_init(&globalmutex_power);
-	spin_lock_init(&globalmutex_for_fwdownload);
-	spin_lock_init(&globalmutex_for_power_and_efuse);
 
 	ret = pci_register_driver(&rtl92de_driver);
 	if (ret)

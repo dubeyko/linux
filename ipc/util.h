@@ -145,6 +145,9 @@ int ipcperms(struct ipc_namespace *ns, struct kern_ipc_perm *ipcp, short flg);
  * ipc_get_maxidx - get the highest assigned index
  * @ids: ipc identifier set
  *
+ * The function returns the highest assigned index for @ids. The function
+ * doesn't scan the idr tree, it uses a cached value.
+ *
  * Called with ipc_ids.rwsem held for reading.
  */
 static inline int ipc_get_maxidx(struct ipc_ids *ids)
@@ -276,29 +279,7 @@ static inline int compat_ipc_parse_version(int *cmd)
 	*cmd &= ~IPC_64;
 	return version;
 }
-#endif
 
-/* for __ARCH_WANT_SYS_IPC */
-long ksys_semtimedop(int semid, struct sembuf __user *tsops,
-		     unsigned int nsops,
-		     const struct __kernel_timespec __user *timeout);
-long ksys_semget(key_t key, int nsems, int semflg);
-long ksys_old_semctl(int semid, int semnum, int cmd, unsigned long arg);
-long ksys_msgget(key_t key, int msgflg);
-long ksys_old_msgctl(int msqid, int cmd, struct msqid_ds __user *buf);
-long ksys_msgrcv(int msqid, struct msgbuf __user *msgp, size_t msgsz,
-		 long msgtyp, int msgflg);
-long ksys_msgsnd(int msqid, struct msgbuf __user *msgp, size_t msgsz,
-		 int msgflg);
-long ksys_shmget(key_t key, size_t size, int shmflg);
-long ksys_shmdt(char __user *shmaddr);
-long ksys_old_shmctl(int shmid, int cmd, struct shmid_ds __user *buf);
-
-/* for CONFIG_ARCH_WANT_OLD_COMPAT_IPC */
-long compat_ksys_semtimedop(int semid, struct sembuf __user *tsems,
-			    unsigned int nsops,
-			    const struct old_timespec32 __user *timeout);
-#ifdef CONFIG_COMPAT
 long compat_ksys_old_semctl(int semid, int semnum, int cmd, int arg);
 long compat_ksys_old_msgctl(int msqid, int cmd, void __user *uptr);
 long compat_ksys_msgrcv(int msqid, compat_uptr_t msgp, compat_ssize_t msgsz,
@@ -306,6 +287,7 @@ long compat_ksys_msgrcv(int msqid, compat_uptr_t msgp, compat_ssize_t msgsz,
 long compat_ksys_msgsnd(int msqid, compat_uptr_t msgp,
 		       compat_ssize_t msgsz, int msgflg);
 long compat_ksys_old_shmctl(int shmid, int cmd, void __user *uptr);
-#endif /* CONFIG_COMPAT */
+
+#endif
 
 #endif

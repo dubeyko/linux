@@ -27,7 +27,37 @@ static const char *nvmet_trace_admin_get_features(struct trace_seq *p,
 	u8 sel = cdw10[1] & 0x7;
 	u32 cdw11 = get_unaligned_le32(cdw10 + 4);
 
-	trace_seq_printf(p, "fid=0x%x sel=0x%x cdw11=0x%x", fid, sel, cdw11);
+	trace_seq_printf(p, "fid=0x%x, sel=0x%x, cdw11=0x%x", fid, sel, cdw11);
+	trace_seq_putc(p, 0);
+
+	return ret;
+}
+
+static const char *nvmet_trace_get_lba_status(struct trace_seq *p,
+					     u8 *cdw10)
+{
+	const char *ret = trace_seq_buffer_ptr(p);
+	u64 slba = get_unaligned_le64(cdw10);
+	u32 mndw = get_unaligned_le32(cdw10 + 8);
+	u16 rl = get_unaligned_le16(cdw10 + 12);
+	u8 atype = cdw10[15];
+
+	trace_seq_printf(p, "slba=0x%llx, mndw=0x%x, rl=0x%x, atype=%u",
+			slba, mndw, rl, atype);
+	trace_seq_putc(p, 0);
+
+	return ret;
+}
+
+static const char *nvmet_trace_admin_set_features(struct trace_seq *p,
+						 u8 *cdw10)
+{
+	const char *ret = trace_seq_buffer_ptr(p);
+	u8 fid = cdw10[0];
+	u8 sv = cdw10[3] & 0x8;
+	u32 cdw11 = get_unaligned_le32(cdw10 + 4);
+
+	trace_seq_printf(p, "fid=0x%x, sv=0x%x, cdw11=0x%x", fid, sv, cdw11);
 	trace_seq_putc(p, 0);
 
 	return ret;
@@ -78,8 +108,12 @@ const char *nvmet_trace_parse_admin_cmd(struct trace_seq *p,
 	switch (opcode) {
 	case nvme_admin_identify:
 		return nvmet_trace_admin_identify(p, cdw10);
+	case nvme_admin_set_features:
+		return nvmet_trace_admin_set_features(p, cdw10);
 	case nvme_admin_get_features:
 		return nvmet_trace_admin_get_features(p, cdw10);
+	case nvme_admin_get_lba_status:
+		return nvmet_trace_get_lba_status(p, cdw10);
 	default:
 		return nvmet_trace_common(p, cdw10);
 	}
@@ -146,7 +180,7 @@ static const char *nvmet_trace_fabrics_common(struct trace_seq *p, u8 *spc)
 {
 	const char *ret = trace_seq_buffer_ptr(p);
 
-	trace_seq_printf(p, "spcecific=%*ph", 24, spc);
+	trace_seq_printf(p, "specific=%*ph", 24, spc);
 	trace_seq_putc(p, 0);
 	return ret;
 }

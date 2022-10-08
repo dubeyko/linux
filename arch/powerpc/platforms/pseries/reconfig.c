@@ -13,7 +13,6 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 
-#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <linux/uaccess.h>
 #include <asm/mmu.h>
@@ -391,9 +390,9 @@ out:
 	return rv ? rv : count;
 }
 
-static const struct file_operations ofdt_fops = {
-	.write = ofdt_write,
-	.llseek = noop_llseek,
+static const struct proc_ops ofdt_proc_ops = {
+	.proc_write	= ofdt_write,
+	.proc_lseek	= noop_llseek,
 };
 
 /* create /proc/powerpc/ofdt write-only by root */
@@ -401,7 +400,7 @@ static int proc_ppc64_create_ofdt(void)
 {
 	struct proc_dir_entry *ent;
 
-	ent = proc_create("powerpc/ofdt", 0200, NULL, &ofdt_fops);
+	ent = proc_create("powerpc/ofdt", 0200, NULL, &ofdt_proc_ops);
 	if (ent)
 		proc_set_size(ent, 0);
 

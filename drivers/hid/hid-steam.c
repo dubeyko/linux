@@ -134,6 +134,11 @@ static int steam_recv_report(struct steam_device *steam,
 	int ret;
 
 	r = steam->hdev->report_enum[HID_FEATURE_REPORT].report_id_hash[0];
+	if (!r) {
+		hid_err(steam->hdev, "No HID_FEATURE_REPORT submitted -  nothing to read\n");
+		return -EINVAL;
+	}
+
 	if (hid_report_len(r) < 64)
 		return -EINVAL;
 
@@ -165,6 +170,11 @@ static int steam_send_report(struct steam_device *steam,
 	int ret;
 
 	r = steam->hdev->report_enum[HID_FEATURE_REPORT].report_id_hash[0];
+	if (!r) {
+		hid_err(steam->hdev, "No HID_FEATURE_REPORT submitted -  nothing to read\n");
+		return -EINVAL;
+	}
+
 	if (hid_report_len(r) < 64)
 		return -EINVAL;
 
@@ -246,7 +256,7 @@ static int steam_get_serial(struct steam_device *steam)
 	if (reply[0] != 0xae || reply[1] != 0x15 || reply[2] != 0x01)
 		return -EIO;
 	reply[3 + STEAM_SERIAL_LEN] = 0;
-	strlcpy(steam->serial_no, reply + 3, sizeof(steam->serial_no));
+	strscpy(steam->serial_no, reply + 3, sizeof(steam->serial_no));
 	return 0;
 }
 
@@ -514,7 +524,7 @@ static int steam_register(struct steam_device *steam)
 		 */
 		mutex_lock(&steam->mutex);
 		if (steam_get_serial(steam) < 0)
-			strlcpy(steam->serial_no, "XXXXXXXXXX",
+			strscpy(steam->serial_no, "XXXXXXXXXX",
 					sizeof(steam->serial_no));
 		mutex_unlock(&steam->mutex);
 
@@ -526,7 +536,8 @@ static int steam_register(struct steam_device *steam)
 			steam_battery_register(steam);
 
 		mutex_lock(&steam_devices_lock);
-		list_add(&steam->list, &steam_devices);
+		if (list_empty(&steam->list))
+			list_add(&steam->list, &steam_devices);
 		mutex_unlock(&steam_devices_lock);
 	}
 
@@ -552,7 +563,7 @@ static void steam_unregister(struct steam_device *steam)
 		hid_info(steam->hdev, "Steam Controller '%s' disconnected",
 				steam->serial_no);
 		mutex_lock(&steam_devices_lock);
-		list_del(&steam->list);
+		list_del_init(&steam->list);
 		mutex_unlock(&steam_devices_lock);
 		steam->serial_no[0] = 0;
 	}
@@ -688,9 +699,9 @@ static struct hid_device *steam_create_client_hid(struct hid_device *hdev)
 	client_hdev->version = hdev->version;
 	client_hdev->type = hdev->type;
 	client_hdev->country = hdev->country;
-	strlcpy(client_hdev->name, hdev->name,
+	strscpy(client_hdev->name, hdev->name,
 			sizeof(client_hdev->name));
-	strlcpy(client_hdev->phys, hdev->phys,
+	strscpy(client_hdev->phys, hdev->phys,
 			sizeof(client_hdev->phys));
 	/*
 	 * Since we use the same device info than the real interface to
@@ -738,6 +749,7 @@ static int steam_probe(struct hid_device *hdev,
 	mutex_init(&steam->mutex);
 	steam->quirks = id->driver_data;
 	INIT_WORK(&steam->work_connect, steam_work_connect_cb);
+	INIT_LIST_HEAD(&steam->list);
 
 	steam->client_hdev = steam_create_client_hid(hdev);
 	if (IS_ERR(steam->client_hdev)) {
@@ -768,8 +780,12 @@ static int steam_probe(struct hid_device *hdev,
 
 	if (steam->quirks & STEAM_QUIRK_WIRELESS) {
 		hid_info(hdev, "Steam wireless receiver connected");
+		/* If using a wireless adaptor ask for connection status */
+		steam->connected = false;
 		steam_request_conn_status(steam);
 	} else {
+		/* A wired connection is always present */
+		steam->connected = true;
 		ret = steam_register(steam);
 		if (ret) {
 			hid_err(hdev,

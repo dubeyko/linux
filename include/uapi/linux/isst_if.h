@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Intel Speed Select Interface: OS to hardware Interface
  * Copyright (c) 2019, Intel Corporation.
@@ -69,7 +69,7 @@ struct isst_if_cpu_maps {
  * @logical_cpu:	Logical CPU number to get target PCI device.
  * @reg:		PUNIT register offset
  * @value:		For write operation value to write and for
- *			for read placeholder read value
+ *			read placeholder read value
  *
  * Structure to specify read/write data to PUNIT registers.
  */

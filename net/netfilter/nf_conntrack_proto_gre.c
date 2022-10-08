@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * ip_conntrack_proto_gre.c - Version 3.0
- *
  * Connection tracking protocol helper module for GRE.
  *
  * GRE is a generic encapsulation protocol, which is generally not very
@@ -55,19 +53,6 @@ static DEFINE_SPINLOCK(keymap_lock);
 static inline struct nf_gre_net *gre_pernet(struct net *net)
 {
 	return &net->ct.nf_ct_proto.gre;
-}
-
-void nf_ct_gre_keymap_flush(struct net *net)
-{
-	struct nf_gre_net *net_gre = gre_pernet(net);
-	struct nf_ct_gre_keymap *km, *tmp;
-
-	spin_lock_bh(&keymap_lock);
-	list_for_each_entry_safe(km, tmp, &net_gre->keymap_list, list) {
-		list_del_rcu(&km->list);
-		kfree_rcu(km, rcu);
-	}
-	spin_unlock_bh(&keymap_lock);
 }
 
 static inline int gre_key_cmpfn(const struct nf_ct_gre_keymap *km,
@@ -220,9 +205,6 @@ int nf_conntrack_gre_packet(struct nf_conn *ct,
 			    enum ip_conntrack_info ctinfo,
 			    const struct nf_hook_state *state)
 {
-	if (state->pf != NFPROTO_IPV4)
-		return -NF_ACCEPT;
-
 	if (!nf_ct_is_confirmed(ct)) {
 		unsigned int *timeouts = nf_ct_timeout_lookup(ct);
 

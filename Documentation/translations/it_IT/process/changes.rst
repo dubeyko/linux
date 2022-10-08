@@ -11,8 +11,8 @@ Requisiti minimi per compilare il kernel
 Introduzione
 ============
 
-Questo documento fornisce una lista dei software necessari per eseguire i
-kernel 4.x.
+Questo documento fornisce una lista dei software necessari per eseguire questa
+versione del kernel.
 
 Questo documento è basato sul file "Changes" del kernel 2.0.x e quindi le
 persone che lo scrissero meritano credito (Jared Mauch, Axel Boldt,
@@ -26,18 +26,19 @@ Prima di pensare d'avere trovato un baco, aggiornate i seguenti programmi
 usando, il comando indicato dovrebbe dirvelo.
 
 Questa lista presume che abbiate già un kernel Linux funzionante.  In aggiunta,
-non tutti gli strumenti sono necessari ovunque; ovviamente, se non avete un
-modem ISDN, per esempio, probabilmente non dovreste preoccuparvi di
-isdn4k-utils.
+non tutti gli strumenti sono necessari ovunque; ovviamente, se non avete una
+PC Card, per esempio, probabilmente non dovreste preoccuparvi di pcmciautils.
 
 ====================== =================  ========================================
         Programma       Versione minima       Comando per verificare la versione
 ====================== =================  ========================================
-GNU C                  4.6                gcc --version
+GNU C                  5.1                gcc --version
+Clang/LLVM (optional)  11.0.0             clang --version
 GNU make               3.81               make --version
-binutils               2.20               ld -v
+binutils               2.23               ld -v
 flex                   2.5.35             flex --version
 bison                  2.0                bison --version
+pahole                 1.16               pahole --version
 util-linux             2.10o              fdformat --version
 kmod                   13                 depmod -V
 e2fsprogs              1.41.4             e2fsck -V
@@ -49,17 +50,16 @@ btrfs-progs            0.18               btrfsck
 pcmciautils            004                pccardctl -V
 quota-tools            3.09               quota -V
 PPP                    2.4.0              pppd --version
-isdn4k-utils           3.1pre1            isdnctrl 2>&1|grep version
 nfs-utils              1.0.5              showmount --version
 procps                 3.2.0              ps --version
-oprofile               0.9                oprofiled --version
 udev                   081                udevd --version
 grub                   0.93               grub --version || grub-install --version
 mcelog                 0.6                mcelog --version
 iptables               1.4.2              iptables -V
 openssl & libcrypto    1.0.0              openssl version
 bc                     1.06.95            bc --version
-Sphinx\ [#f1]_         1.3                sphinx-build --version
+Sphinx\ [#f1]_         1.7                sphinx-build --version
+cpio                   any                cpio --version
 ====================== =================  ========================================
 
 .. [#f1] Sphinx è necessario solo per produrre la documentazione del Kernel
@@ -73,6 +73,16 @@ GCC
 La versione necessaria di gcc potrebbe variare a seconda del tipo di CPU nel
 vostro calcolatore.
 
+Clang/LLVM (opzionale)
+----------------------
+
+L'ultima versione di clang e *LLVM utils* (secondo `releases.llvm.org
+<https://releases.llvm.org>`_) sono supportati per la generazione del
+kernel. Non garantiamo che anche i rilasci più vecchi funzionino, inoltre
+potremmo rimuovere gli espedienti che abbiamo implementato per farli
+funzionare. Per maggiori informazioni
+:ref:`Building Linux with Clang/LLVM <kbuild_llvm>`.
+
 Make
 ----
 
@@ -81,10 +91,7 @@ Per compilare il kernel vi servirà GNU make 3.81 o successivo.
 Binutils
 --------
 
-Il sistema di compilazione, dalla versione 4.13,  per la produzione dei passi
-intermedi, si è convertito all'uso di *thin archive* (`ar T`) piuttosto che
-all'uso del *linking* incrementale (`ld -r`). Questo richiede binutils 2.20 o
-successivo.
+Per generare il kernel è necessario avere Binutils 2.23 o superiore.
 
 pkg-config
 ----------
@@ -105,6 +112,16 @@ Bison
 
 Dalla versione 4.16, il sistema di compilazione, durante l'esecuzione, genera
 un parsificatore.  Questo richiede bison 2.0 o successivo.
+
+pahole
+------
+
+Dalla versione 5.2, quando viene impostato CONFIG_DEBUG_INFO_BTF, il sistema di
+compilazione genera BTF (BPF Type Format) a partire da DWARF per vmlinux. Più
+tardi anche per i moduli. Questo richiede pahole v1.16 o successivo.
+
+A seconda della distribuzione, lo si può trovare nei pacchetti 'dwarves' o
+'pahole'. Oppure lo si può trovare qui: https://fedorapeople.org/~acme/dwarves/.
 
 Perl
 ----
@@ -286,11 +303,6 @@ col seguente comando::
 
   mknod /dev/ppp c 108 0
 
-Isdn4k-utils
-------------
-
-Per via della modifica del campo per il numero di telefono, il pacchetto
-isdn4k-utils dev'essere ricompilato o (preferibilmente) aggiornato.
 
 NFS-utils
 ---------
@@ -348,6 +360,11 @@ gcc
 
 - <ftp://ftp.gnu.org/gnu/gcc/>
 
+Clang/LLVM
+----------
+
+- :ref:`Getting LLVM <getting_llvm>`.
+
 Make
 ----
 
@@ -400,7 +417,8 @@ Mkinitrd
 E2fsprogs
 ---------
 
-- <http://prdownloads.sourceforge.net/e2fsprogs/e2fsprogs-1.29.tar.gz>
+- <https://www.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/>
+- <https://git.kernel.org/pub/scm/fs/ext2/e2fsprogs.git/>
 
 JFSutils
 --------
@@ -410,12 +428,13 @@ JFSutils
 Reiserfsprogs
 -------------
 
-- <http://www.kernel.org/pub/linux/utils/fs/reiserfs/>
+- <https://git.kernel.org/pub/scm/linux/kernel/git/jeffm/reiserfsprogs.git/>
 
 Xfsprogs
 --------
 
-- <ftp://oss.sgi.com/projects/xfs/>
+- <https://git.kernel.org/pub/scm/fs/xfs/xfsprogs-dev.git>
+- <https://www.kernel.org/pub/linux/utils/fs/xfs/xfsprogs/>
 
 Pcmciautils
 -----------
@@ -448,18 +467,21 @@ mcelog
 
 - <http://www.mcelog.org/>
 
+cpio
+----
+
+- <https://www.gnu.org/software/cpio/>
+
 Rete
 ****
 
 PPP
 ---
 
-- <ftp://ftp.samba.org/pub/ppp/>
+- <https://download.samba.org/pub/ppp/>
+- <https://git.ozlabs.org/?p=ppp.git>
+- <https://github.com/paulusmack/ppp/>
 
-Isdn4k-utils
-------------
-
-- <ftp://ftp.isdn4linux.de/pub/isdn4linux/utils/>
 
 NFS-utils
 ---------
@@ -469,7 +491,7 @@ NFS-utils
 Iptables
 --------
 
-- <http://www.iptables.org/downloads.html>
+- <https://netfilter.org/projects/iptables/index.html>
 
 Ip-route2
 ---------

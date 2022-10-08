@@ -11,12 +11,13 @@
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
+#include <linux/of_address.h>
+#include <linux/of_irq.h>
 #include <linux/of_gpio.h>
 #include <linux/slab.h>
 #include <linux/export.h>
 
 #include <asm/machdep.h>
-#include <asm/prom.h>
 #include <asm/udbg.h>
 #include <asm/time.h>
 #include <asm/uic.h>
@@ -42,9 +43,6 @@ static int __init warp_probe(void)
 {
 	if (!of_machine_is_compatible("pika,warp"))
 		return 0;
-
-	/* For arch_dma_alloc */
-	ISA_DMA_THRESHOLD = ~0L;
 
 	return 1;
 }

@@ -15,9 +15,9 @@
 #define LIMA_VM_NUM_PT_PER_BT (1 << LIMA_VM_NUM_PT_PER_BT_SHIFT)
 #define LIMA_VM_NUM_BT (LIMA_PAGE_ENT_NUM >> LIMA_VM_NUM_PT_PER_BT_SHIFT)
 
-#define LIMA_VA_RESERVE_START  0xFFF00000
+#define LIMA_VA_RESERVE_START  0x0FFF00000ULL
 #define LIMA_VA_RESERVE_DLBU   LIMA_VA_RESERVE_START
-#define LIMA_VA_RESERVE_END    0x100000000
+#define LIMA_VA_RESERVE_END    0x100000000ULL
 
 struct lima_device;
 
@@ -54,9 +54,11 @@ static inline struct lima_vm *lima_vm_get(struct lima_vm *vm)
 
 static inline void lima_vm_put(struct lima_vm *vm)
 {
-	kref_put(&vm->refcount, lima_vm_release);
+	if (vm)
+		kref_put(&vm->refcount, lima_vm_release);
 }
 
 void lima_vm_print(struct lima_vm *vm);
+int lima_vm_map_bo(struct lima_vm *vm, struct lima_bo *bo, int pageoff);
 
 #endif

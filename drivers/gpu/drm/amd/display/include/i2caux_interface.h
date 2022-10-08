@@ -41,8 +41,10 @@ struct aux_payload {
 	 * reset it to read data */
 	bool write;
 	bool mot;
+	bool write_status_update;
+
 	uint32_t address;
-	uint8_t length;
+	uint32_t length;
 	uint8_t *data;
 	/*
 	 * used to return the reply type of the transaction
@@ -53,6 +55,7 @@ struct aux_payload {
 	 * zero means "use default value"
 	 */
 	uint32_t defer_delay;
+
 };
 
 struct aux_command {

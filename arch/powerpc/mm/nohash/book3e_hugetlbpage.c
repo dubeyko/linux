@@ -103,27 +103,17 @@ static inline int book3e_tlb_exists(unsigned long ea, unsigned long pid)
 	int found = 0;
 
 	mtspr(SPRN_MAS6, pid << 16);
-	if (mmu_has_feature(MMU_FTR_USE_TLBRSRV)) {
-		asm volatile(
-			"li	%0,0\n"
-			"tlbsx.	0,%1\n"
-			"bne	1f\n"
-			"li	%0,1\n"
-			"1:\n"
-			: "=&r"(found) : "r"(ea));
-	} else {
-		asm volatile(
-			"tlbsx	0,%1\n"
-			"mfspr	%0,0x271\n"
-			"srwi	%0,%0,31\n"
-			: "=&r"(found) : "r"(ea));
-	}
+	asm volatile(
+		"tlbsx	0,%1\n"
+		"mfspr	%0,0x271\n"
+		"srwi	%0,%0,31\n"
+		: "=&r"(found) : "r"(ea));
 
 	return found;
 }
 
-void book3e_hugetlb_preload(struct vm_area_struct *vma, unsigned long ea,
-			    pte_t pte)
+static void
+book3e_hugetlb_preload(struct vm_area_struct *vma, unsigned long ea, pte_t pte)
 {
 	unsigned long mas1, mas2;
 	u64 mas7_3;
@@ -142,7 +132,7 @@ void book3e_hugetlb_preload(struct vm_area_struct *vma, unsigned long ea,
 	tsize = shift - 10;
 	/*
 	 * We can't be interrupted while we're setting up the MAS
-	 * regusters or after we've confirmed that no tlb exists.
+	 * registers or after we've confirmed that no tlb exists.
 	 */
 	local_irq_save(flags);
 
@@ -169,18 +159,26 @@ void book3e_hugetlb_preload(struct vm_area_struct *vma, unsigned long ea,
 	mtspr(SPRN_MAS1, mas1);
 	mtspr(SPRN_MAS2, mas2);
 
-	if (mmu_has_feature(MMU_FTR_USE_PAIRED_MAS)) {
-		mtspr(SPRN_MAS7_MAS3, mas7_3);
-	} else {
-		if (mmu_has_feature(MMU_FTR_BIG_PHYS))
-			mtspr(SPRN_MAS7, upper_32_bits(mas7_3));
-		mtspr(SPRN_MAS3, lower_32_bits(mas7_3));
-	}
+	if (mmu_has_feature(MMU_FTR_BIG_PHYS))
+		mtspr(SPRN_MAS7, upper_32_bits(mas7_3));
+	mtspr(SPRN_MAS3, lower_32_bits(mas7_3));
 
 	asm volatile ("tlbwe");
 
 	book3e_tlb_unlock();
 	local_irq_restore(flags);
+}
+
+/*
+ * This is called at the end of handling a user page fault, when the
+ * fault has been handled by updating a PTE in the linux page tables.
+ *
+ * This must always be called with the pte lock held.
+ */
+void update_mmu_cache(struct vm_area_struct *vma, unsigned long address, pte_t *ptep)
+{
+	if (is_vm_hugetlb_page(vma))
+		book3e_hugetlb_preload(vma, address, *ptep);
 }
 
 void flush_hugetlb_page(struct vm_area_struct *vma, unsigned long vmaddr)

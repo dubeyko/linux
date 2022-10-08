@@ -6,7 +6,6 @@
 #ifndef TEGRA_HUB_H
 #define TEGRA_HUB_H 1
 
-#include <drm/drmP.h>
 #include <drm/drm_plane.h>
 
 #include "plane.h"
@@ -18,7 +17,7 @@ struct tegra_windowgroup {
 	struct mutex lock;
 
 	unsigned int index;
-	struct device *parent;
+	struct host1x_client *parent;
 	struct reset_control *rst;
 };
 
@@ -73,7 +72,6 @@ to_tegra_display_hub_state(struct drm_private_state *priv)
 	return container_of(priv, struct tegra_display_hub_state, base);
 }
 
-struct tegra_dc;
 struct tegra_plane;
 
 int tegra_display_hub_prepare(struct tegra_display_hub *hub);

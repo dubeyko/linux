@@ -5,6 +5,7 @@
 
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include "clk.h"
 
@@ -69,13 +70,14 @@ static const struct clk_ops clk_cpu_ops = {
 	.set_rate	= clk_cpu_set_rate,
 };
 
-struct clk *imx_clk_cpu(const char *name, const char *parent_name,
+struct clk_hw *imx_clk_hw_cpu(const char *name, const char *parent_name,
 		struct clk *div, struct clk *mux, struct clk *pll,
 		struct clk *step)
 {
 	struct clk_cpu *cpu;
-	struct clk *clk;
+	struct clk_hw *hw;
 	struct clk_init_data init;
+	int ret;
 
 	cpu = kzalloc(sizeof(*cpu), GFP_KERNEL);
 	if (!cpu)
@@ -93,10 +95,14 @@ struct clk *imx_clk_cpu(const char *name, const char *parent_name,
 	init.num_parents = 1;
 
 	cpu->hw.init = &init;
+	hw = &cpu->hw;
 
-	clk = clk_register(NULL, &cpu->hw);
-	if (IS_ERR(clk))
+	ret = clk_hw_register(NULL, hw);
+	if (ret) {
 		kfree(cpu);
+		return ERR_PTR(ret);
+	}
 
-	return clk;
+	return hw;
 }
+EXPORT_SYMBOL_GPL(imx_clk_hw_cpu);

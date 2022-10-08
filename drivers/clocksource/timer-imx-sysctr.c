@@ -4,8 +4,6 @@
 
 #include <linux/interrupt.h>
 #include <linux/clockchips.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
 
 #include "timer-of.h"
 
@@ -20,8 +18,10 @@
 #define SYS_CTR_EN		0x1
 #define SYS_CTR_IRQ_MASK	0x2
 
-static void __iomem *sys_ctr_base;
-static u32 cmpcr;
+#define SYS_CTR_CLK_DIV		0x3
+
+static void __iomem *sys_ctr_base __ro_after_init;
+static u32 cmpcr __ro_after_init;
 
 static void sysctr_timer_enable(bool enable)
 {
@@ -110,7 +110,7 @@ static struct timer_of to_sysctr = {
 	},
 	.of_irq = {
 		.handler		= sysctr_timer_interrupt,
-		.flags			= IRQF_TIMER | IRQF_IRQPOLL,
+		.flags			= IRQF_TIMER,
 	},
 	.of_clk = {
 		.name = "per",
@@ -119,7 +119,7 @@ static struct timer_of to_sysctr = {
 
 static void __init sysctr_clockevent_init(void)
 {
-	to_sysctr.clkevt.cpumask = cpumask_of(0);
+	to_sysctr.clkevt.cpumask = cpu_possible_mask;
 
 	clockevents_config_and_register(&to_sysctr.clkevt,
 					timer_of_rate(&to_sysctr),
@@ -133,6 +133,9 @@ static int __init sysctr_timer_init(struct device_node *np)
 	ret = timer_of_init(np, &to_sysctr);
 	if (ret)
 		return ret;
+
+	/* system counter clock is divided by 3 internally */
+	to_sysctr.of_clk.rate /= SYS_CTR_CLK_DIV;
 
 	sys_ctr_base = timer_of_base(&to_sysctr);
 	cmpcr = readl(sys_ctr_base + CMPCR);

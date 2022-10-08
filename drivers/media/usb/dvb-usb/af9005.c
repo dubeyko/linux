@@ -6,7 +6,7 @@
  *
  * Thanks to Afatech who kindly provided information.
  *
- * see Documentation/media/dvb-drivers/dvb-usb.rst for more information
+ * see Documentation/driver-api/media/drivers/dvb-usb.rst for more information
  */
 #include "af9005.h"
 
@@ -554,7 +554,7 @@ static int af9005_boot_packet(struct usb_device *udev, int type, u8 *reply,
 			      u8 *buf, int size)
 {
 	u16 checksum;
-	int act_len, i, ret;
+	int act_len = 0, i, ret;
 
 	memset(buf, 0, size);
 	buf[0] = (u8) (FW_BULKOUT_SIZE & 0xff);
@@ -955,8 +955,8 @@ static int af9005_pid_filter(struct dvb_usb_adapter *adap, int index,
 }
 
 static int af9005_identify_state(struct usb_device *udev,
-				 struct dvb_usb_device_properties *props,
-				 struct dvb_usb_device_description **desc,
+				 const struct dvb_usb_device_properties *props,
+				 const struct dvb_usb_device_description **desc,
 				 int *cold)
 {
 	int ret;
@@ -976,8 +976,9 @@ static int af9005_identify_state(struct usb_device *udev,
 	else if (reply == 0x02)
 		*cold = 0;
 	else
-		return -EIO;
-	deb_info("Identify state cold = %d\n", *cold);
+		ret = -EIO;
+	if (!ret)
+		deb_info("Identify state cold = %d\n", *cold);
 
 err:
 	kfree(buf);
@@ -993,19 +994,16 @@ static int af9005_usb_probe(struct usb_interface *intf,
 				  THIS_MODULE, NULL, adapter_nr);
 }
 
-enum af9005_usb_table_entry {
+enum {
 	AFATECH_AF9005,
-	TERRATEC_AF9005,
-	ANSONIC_AF9005,
+	TERRATEC_CINERGY_T_USB_XE,
+	ANSONIC_DVBT_USB,
 };
 
 static struct usb_device_id af9005_usb_table[] = {
-	[AFATECH_AF9005] = {USB_DEVICE(USB_VID_AFATECH,
-				USB_PID_AFATECH_AF9005)},
-	[TERRATEC_AF9005] = {USB_DEVICE(USB_VID_TERRATEC,
-				USB_PID_TERRATEC_CINERGY_T_USB_XE)},
-	[ANSONIC_AF9005] = {USB_DEVICE(USB_VID_ANSONIC,
-				USB_PID_ANSONIC_DVBT_USB)},
+	DVB_USB_DEV(AFATECH, AFATECH_AF9005),
+	DVB_USB_DEV(TERRATEC, TERRATEC_CINERGY_T_USB_XE),
+	DVB_USB_DEV(ANSONIC, ANSONIC_DVBT_USB),
 	{ }
 };
 
@@ -1070,11 +1068,11 @@ static struct dvb_usb_device_properties af9005_properties = {
 		     .warm_ids = {NULL},
 		     },
 		    {.name = "TerraTec Cinergy T USB XE",
-		     .cold_ids = {&af9005_usb_table[TERRATEC_AF9005], NULL},
+		     .cold_ids = {&af9005_usb_table[TERRATEC_CINERGY_T_USB_XE], NULL},
 		     .warm_ids = {NULL},
 		     },
 		    {.name = "Ansonic DVB-T USB1.1 stick",
-		     .cold_ids = {&af9005_usb_table[ANSONIC_AF9005], NULL},
+		     .cold_ids = {&af9005_usb_table[ANSONIC_DVBT_USB], NULL},
 		     .warm_ids = {NULL},
 		     },
 		    {NULL},

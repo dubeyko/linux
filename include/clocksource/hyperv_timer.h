@@ -20,20 +20,18 @@
 #define HV_MAX_MAX_DELTA_TICKS 0xffffffff
 #define HV_MIN_DELTA_TICKS 1
 
+#ifdef CONFIG_HYPERV_TIMER
+
 /* Routines called by the VMbus driver */
-extern int hv_stimer_alloc(int sint);
-extern void hv_stimer_free(void);
-extern void hv_stimer_init(unsigned int cpu);
-extern void hv_stimer_cleanup(unsigned int cpu);
+extern int hv_stimer_alloc(bool have_percpu_irqs);
+extern int hv_stimer_cleanup(unsigned int cpu);
+extern void hv_stimer_legacy_init(unsigned int cpu, int sint);
+extern void hv_stimer_legacy_cleanup(unsigned int cpu);
 extern void hv_stimer_global_cleanup(void);
 extern void hv_stimer0_isr(void);
 
-#if IS_ENABLED(CONFIG_HYPERV)
-extern struct clocksource *hyperv_cs;
 extern void hv_init_clocksource(void);
-#endif /* CONFIG_HYPERV */
 
-#ifdef CONFIG_HYPERV_TSCPAGE
 extern struct ms_hyperv_tsc_page *hv_get_tsc_page(void);
 
 static inline notrace u64
@@ -91,7 +89,7 @@ hv_read_tsc_page(const struct ms_hyperv_tsc_page *tsc_pg)
 	return hv_read_tsc_page_tsc(tsc_pg, &cur_tsc);
 }
 
-#else /* CONFIG_HYPERV_TSC_PAGE */
+#else /* CONFIG_HYPERV_TIMER */
 static inline struct ms_hyperv_tsc_page *hv_get_tsc_page(void)
 {
 	return NULL;
@@ -102,6 +100,13 @@ static inline u64 hv_read_tsc_page_tsc(const struct ms_hyperv_tsc_page *tsc_pg,
 {
 	return U64_MAX;
 }
-#endif /* CONFIG_HYPERV_TSCPAGE */
+
+static inline int hv_stimer_cleanup(unsigned int cpu) { return 0; }
+static inline void hv_stimer_legacy_init(unsigned int cpu, int sint) {}
+static inline void hv_stimer_legacy_cleanup(unsigned int cpu) {}
+static inline void hv_stimer_global_cleanup(void) {}
+static inline void hv_stimer0_isr(void) {}
+
+#endif /* CONFIG_HYPERV_TIMER */
 
 #endif

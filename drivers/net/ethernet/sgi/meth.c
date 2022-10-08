@@ -90,7 +90,7 @@ struct meth_private {
 	spinlock_t meth_lock;
 };
 
-static void meth_tx_timeout(struct net_device *dev);
+static void meth_tx_timeout(struct net_device *dev, unsigned int txqueue);
 static irqreturn_t meth_interrupt(int irq, void *dev_id);
 
 /* global, initialized in ip32-setup.c */
@@ -247,8 +247,7 @@ static void meth_free_tx_ring(struct meth_private *priv)
 
 	/* Remove any pending skb */
 	for (i = 0; i < TX_RING_ENTRIES; i++) {
-		if (priv->tx_skbs[i])
-			dev_kfree_skb(priv->tx_skbs[i]);
+		dev_kfree_skb(priv->tx_skbs[i]);
 		priv->tx_skbs[i] = NULL;
 	}
 	dma_free_coherent(&priv->pdev->dev, TX_RING_BUFFER_SIZE, priv->tx_ring,
@@ -728,7 +727,7 @@ static netdev_tx_t meth_tx(struct sk_buff *skb, struct net_device *dev)
 /*
  * Deal with a transmit timeout.
  */
-static void meth_tx_timeout(struct net_device *dev)
+static void meth_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
 	struct meth_private *priv = netdev_priv(dev);
 	unsigned long flags;
@@ -813,7 +812,7 @@ static const struct net_device_ops meth_netdev_ops = {
 	.ndo_open		= meth_open,
 	.ndo_stop		= meth_release,
 	.ndo_start_xmit		= meth_tx,
-	.ndo_do_ioctl		= meth_ioctl,
+	.ndo_eth_ioctl		= meth_ioctl,
 	.ndo_tx_timeout		= meth_tx_timeout,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
@@ -837,7 +836,7 @@ static int meth_probe(struct platform_device *pdev)
 	dev->watchdog_timeo	= timeout;
 	dev->irq		= MACE_ETHERNET_IRQ;
 	dev->base_addr		= (unsigned long)&mace->eth;
-	memcpy(dev->dev_addr, o2meth_eaddr, ETH_ALEN);
+	eth_hw_addr_set(dev, o2meth_eaddr);
 
 	priv = netdev_priv(dev);
 	priv->pdev = pdev;

@@ -101,7 +101,10 @@ static int tqmx86_gpio_direction_output(struct gpio_chip *chip,
 static int tqmx86_gpio_get_direction(struct gpio_chip *chip,
 				     unsigned int offset)
 {
-	return !!(TQMX86_DIR_INPUT_MASK & BIT(offset));
+	if (TQMX86_DIR_INPUT_MASK & BIT(offset))
+		return GPIO_LINE_DIRECTION_IN;
+
+	return GPIO_LINE_DIRECTION_OUT;
 }
 
 static void tqmx86_gpio_irq_mask(struct irq_data *data)
@@ -180,7 +183,7 @@ static void tqmx86_gpio_irq_handler(struct irq_desc *desc)
 	struct tqmx86_gpio_data *gpio = gpiochip_get_data(chip);
 	struct irq_chip *irq_chip = irq_desc_get_chip(desc);
 	unsigned long irq_bits;
-	int i = 0, child_irq;
+	int i = 0;
 	u8 irq_status;
 
 	chained_irq_enter(irq_chip, desc);
@@ -189,11 +192,9 @@ static void tqmx86_gpio_irq_handler(struct irq_desc *desc)
 	tqmx86_gpio_write(gpio, irq_status, TQMX86_GPIIS);
 
 	irq_bits = irq_status;
-	for_each_set_bit(i, &irq_bits, TQMX86_NGPI) {
-		child_irq = irq_find_mapping(gpio->chip.irq.domain,
-					     i + TQMX86_NGPO);
-		generic_handle_irq(child_irq);
-	}
+	for_each_set_bit(i, &irq_bits, TQMX86_NGPI)
+		generic_handle_domain_irq(gpio->chip.irq.domain,
+					  i + TQMX86_NGPO);
 
 	chained_irq_exit(irq_chip, desc);
 }
@@ -214,17 +215,29 @@ static const struct dev_pm_ops tqmx86_gpio_dev_pm_ops = {
 			   tqmx86_gpio_runtime_resume, NULL)
 };
 
+static void tqmx86_init_irq_valid_mask(struct gpio_chip *chip,
+				       unsigned long *valid_mask,
+				       unsigned int ngpios)
+{
+	/* Only GPIOs 4-7 are valid for interrupts. Clear the others */
+	clear_bit(0, valid_mask);
+	clear_bit(1, valid_mask);
+	clear_bit(2, valid_mask);
+	clear_bit(3, valid_mask);
+}
+
 static int tqmx86_gpio_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct tqmx86_gpio_data *gpio;
 	struct gpio_chip *chip;
+	struct gpio_irq_chip *girq;
 	void __iomem *io_base;
 	struct resource *res;
 	int ret, irq;
 
-	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	irq = platform_get_irq_optional(pdev, 0);
+	if (irq < 0 && irq != -ENXIO)
 		return irq;
 
 	res = platform_get_resource(pdev, IORESOURCE_IO, 0);
@@ -259,23 +272,15 @@ static int tqmx86_gpio_probe(struct platform_device *pdev)
 	chip->get = tqmx86_gpio_get;
 	chip->set = tqmx86_gpio_set;
 	chip->ngpio = TQMX86_NGPIO;
-	chip->irq.need_valid_mask = true;
 	chip->parent = pdev->dev.parent;
 
 	pm_runtime_enable(&pdev->dev);
 
-	ret = devm_gpiochip_add_data(dev, chip, gpio);
-	if (ret) {
-		dev_err(dev, "Could not register GPIO chip\n");
-		goto out_pm_dis;
-	}
-
-	if (irq) {
+	if (irq > 0) {
 		struct irq_chip *irq_chip = &gpio->irq_chip;
 		u8 irq_status;
 
 		irq_chip->name = chip->label;
-		irq_chip->parent_device = &pdev->dev;
 		irq_chip->irq_mask = tqmx86_gpio_irq_mask;
 		irq_chip->irq_unmask = tqmx86_gpio_irq_unmask;
 		irq_chip->irq_set_type = tqmx86_gpio_irq_set_type;
@@ -287,23 +292,30 @@ static int tqmx86_gpio_probe(struct platform_device *pdev)
 		irq_status = tqmx86_gpio_read(gpio, TQMX86_GPIIS);
 		tqmx86_gpio_write(gpio, irq_status, TQMX86_GPIIS);
 
-		ret = gpiochip_irqchip_add(chip, irq_chip,
-					   0, handle_simple_irq,
-					   IRQ_TYPE_EDGE_BOTH);
-		if (ret) {
-			dev_err(dev, "Could not add irq chip\n");
+		girq = &chip->irq;
+		girq->chip = irq_chip;
+		girq->parent_handler = tqmx86_gpio_irq_handler;
+		girq->num_parents = 1;
+		girq->parents = devm_kcalloc(&pdev->dev, 1,
+					     sizeof(*girq->parents),
+					     GFP_KERNEL);
+		if (!girq->parents) {
+			ret = -ENOMEM;
 			goto out_pm_dis;
 		}
+		girq->parents[0] = irq;
+		girq->default_type = IRQ_TYPE_NONE;
+		girq->handler = handle_simple_irq;
+		girq->init_valid_mask = tqmx86_init_irq_valid_mask;
 
-		gpiochip_set_chained_irqchip(chip, irq_chip,
-					     irq, tqmx86_gpio_irq_handler);
+		irq_domain_set_pm_device(girq->domain, dev);
 	}
 
-	/* Only GPIOs 4-7 are valid for interrupts. Clear the others */
-	clear_bit(0, chip->irq.valid_mask);
-	clear_bit(1, chip->irq.valid_mask);
-	clear_bit(2, chip->irq.valid_mask);
-	clear_bit(3, chip->irq.valid_mask);
+	ret = devm_gpiochip_add_data(dev, chip, gpio);
+	if (ret) {
+		dev_err(dev, "Could not register GPIO chip\n");
+		goto out_pm_dis;
+	}
 
 	dev_info(dev, "GPIO functionality initialized with %d pins\n",
 		 chip->ngpio);

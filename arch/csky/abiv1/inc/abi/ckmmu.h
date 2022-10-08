@@ -1,5 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-// Copyright (C) 2018 Hangzhou C-SKY Microsystems co.,ltd.
 
 #ifndef __ASM_CSKY_CKMMUV1_H
 #define __ASM_CSKY_CKMMUV1_H
@@ -78,18 +77,25 @@ static inline void tlb_invalid_all(void)
 	cpwcr("cpcr8", 0x04000000);
 }
 
+
+static inline void local_tlb_invalid_all(void)
+{
+	tlb_invalid_all();
+}
+
 static inline void tlb_invalid_indexed(void)
 {
 	cpwcr("cpcr8", 0x02000000);
 }
 
-static inline void setup_pgd(unsigned long pgd, bool kernel)
+static inline void setup_pgd(pgd_t *pgd, int asid)
 {
-	cpwcr("cpcr29", pgd | BIT(0));
+	cpwcr("cpcr29", __pa(pgd) | BIT(0));
+	write_mmu_entryhi(asid);
 }
 
-static inline unsigned long get_pgd(void)
+static inline pgd_t *get_pgd(void)
 {
-	return cprcr("cpcr29") & ~BIT(0);
+	return __va(cprcr("cpcr29") & ~BIT(0));
 }
 #endif /* __ASM_CSKY_CKMMUV1_H */

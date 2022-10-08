@@ -6,12 +6,17 @@
 #ifndef __XFS_IWALK_H__
 #define __XFS_IWALK_H__
 
+/*
+ * Return codes for the inode/inobt walk function are 0 to continue iterating,
+ * and non-zero to stop iterating.  Any non-zero value will be passed up to the
+ * iwalk or inobt_walk caller.  The special value -ECANCELED can be used to
+ * stop iteration, as neither iwalk nor inobt_walk will ever generate that
+ * error code on their own.
+ */
+
 /* Walk all inodes in the filesystem starting from @startino. */
 typedef int (*xfs_iwalk_fn)(struct xfs_mount *mp, struct xfs_trans *tp,
 			    xfs_ino_t ino, void *data);
-/* Return values for xfs_iwalk_fn. */
-#define XFS_IWALK_CONTINUE	(XFS_ITER_CONTINUE)
-#define XFS_IWALK_ABORT		(XFS_ITER_ABORT)
 
 int xfs_iwalk(struct xfs_mount *mp, struct xfs_trans *tp, xfs_ino_t startino,
 		unsigned int flags, xfs_iwalk_fn iwalk_fn,
@@ -21,7 +26,7 @@ int xfs_iwalk_threaded(struct xfs_mount *mp, xfs_ino_t startino,
 		unsigned int inode_records, bool poll, void *data);
 
 /* Only iterate inodes within the same AG as @startino. */
-#define XFS_IWALK_SAME_AG	(0x1)
+#define XFS_IWALK_SAME_AG	(1U << 0)
 
 #define XFS_IWALK_FLAGS_ALL	(XFS_IWALK_SAME_AG)
 
@@ -30,8 +35,6 @@ typedef int (*xfs_inobt_walk_fn)(struct xfs_mount *mp, struct xfs_trans *tp,
 				 xfs_agnumber_t agno,
 				 const struct xfs_inobt_rec_incore *irec,
 				 void *data);
-/* Return value (for xfs_inobt_walk_fn) that aborts the walk immediately. */
-#define XFS_INOBT_WALK_ABORT	(XFS_IWALK_ABORT)
 
 int xfs_inobt_walk(struct xfs_mount *mp, struct xfs_trans *tp,
 		xfs_ino_t startino, unsigned int flags,

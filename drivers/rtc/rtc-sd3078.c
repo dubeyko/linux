@@ -163,8 +163,7 @@ static const struct regmap_config regmap_config = {
 	.max_register = 0x11,
 };
 
-static int sd3078_probe(struct i2c_client *client,
-			const struct i2c_device_id *id)
+static int sd3078_probe(struct i2c_client *client)
 {
 	int ret;
 	struct sd3078 *sd3078;
@@ -192,11 +191,9 @@ static int sd3078_probe(struct i2c_client *client,
 	sd3078->rtc->range_min = RTC_TIMESTAMP_BEGIN_2000;
 	sd3078->rtc->range_max = RTC_TIMESTAMP_END_2099;
 
-	ret = rtc_register_device(sd3078->rtc);
-	if (ret) {
-		dev_err(&client->dev, "failed to register rtc device\n");
+	ret = devm_rtc_register_device(sd3078->rtc);
+	if (ret)
 		return ret;
-	}
 
 	sd3078_enable_reg_write(sd3078);
 
@@ -209,7 +206,7 @@ static const struct i2c_device_id sd3078_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, sd3078_id);
 
-static const struct of_device_id rtc_dt_match[] = {
+static const __maybe_unused struct of_device_id rtc_dt_match[] = {
 	{ .compatible = "whwave,sd3078" },
 	{},
 };
@@ -220,7 +217,7 @@ static struct i2c_driver sd3078_driver = {
 		.name   = "sd3078",
 		.of_match_table = of_match_ptr(rtc_dt_match),
 	},
-	.probe      = sd3078_probe,
+	.probe_new  = sd3078_probe,
 	.id_table   = sd3078_id,
 };
 

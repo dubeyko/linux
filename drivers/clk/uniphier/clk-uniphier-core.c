@@ -64,8 +64,7 @@ static int uniphier_clk_probe(struct platform_device *pdev)
 	for (p = data; p->name; p++)
 		clk_num = max(clk_num, p->idx + 1);
 
-	hw_data = devm_kzalloc(dev,
-			sizeof(*hw_data) + clk_num * sizeof(struct clk_hw *),
+	hw_data = devm_kzalloc(dev, struct_size(hw_data, hws, clk_num),
 			GFP_KERNEL);
 	if (!hw_data)
 		return -ENOMEM;
@@ -133,6 +132,10 @@ static const struct of_device_id uniphier_clk_match[] = {
 		.compatible = "socionext,uniphier-pxs3-clock",
 		.data = uniphier_pxs3_sys_clk_data,
 	},
+	{
+		.compatible = "socionext,uniphier-nx1-clock",
+		.data = uniphier_nx1_sys_clk_data,
+	},
 	/* Media I/O clock, SD clock */
 	{
 		.compatible = "socionext,uniphier-ld4-mio-clock",
@@ -164,6 +167,10 @@ static const struct of_device_id uniphier_clk_match[] = {
 	},
 	{
 		.compatible = "socionext,uniphier-pxs3-sd-clock",
+		.data = uniphier_pro5_sd_clk_data,
+	},
+	{
+		.compatible = "socionext,uniphier-nx1-sd-clock",
 		.data = uniphier_pro5_sd_clk_data,
 	},
 	/* Peripheral clock */
@@ -198,6 +205,15 @@ static const struct of_device_id uniphier_clk_match[] = {
 	{
 		.compatible = "socionext,uniphier-pxs3-peri-clock",
 		.data = uniphier_pro4_peri_clk_data,
+	},
+	{
+		.compatible = "socionext,uniphier-nx1-peri-clock",
+		.data = uniphier_pro4_peri_clk_data,
+	},
+	/* SoC-glue clock */
+	{
+		.compatible = "socionext,uniphier-pro4-sg-clock",
+		.data = uniphier_pro4_sg_clk_data,
 	},
 	{ /* sentinel */ }
 };

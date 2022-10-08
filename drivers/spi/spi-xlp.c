@@ -9,7 +9,6 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
-#include <linux/of.h>
 #include <linux/interrupt.h>
 
 /* SPI Configuration Register */
@@ -370,7 +369,6 @@ static int xlp_spi_probe(struct platform_device *pdev)
 {
 	struct spi_master *master;
 	struct xlp_spi_priv *xspi;
-	struct resource *res;
 	struct clk *clk;
 	int irq, err;
 
@@ -378,16 +376,13 @@ static int xlp_spi_probe(struct platform_device *pdev)
 	if (!xspi)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	xspi->base = devm_ioremap_resource(&pdev->dev, res);
+	xspi->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(xspi->base))
 		return PTR_ERR(xspi->base);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "no IRQ resource found: %d\n", irq);
+	if (irq < 0)
 		return irq;
-	}
 	err = devm_request_irq(&pdev->dev, irq, xlp_spi_interrupt, 0,
 			pdev->name, xspi);
 	if (err) {
@@ -440,17 +435,10 @@ static const struct acpi_device_id xlp_spi_acpi_match[] = {
 MODULE_DEVICE_TABLE(acpi, xlp_spi_acpi_match);
 #endif
 
-static const struct of_device_id xlp_spi_dt_id[] = {
-	{ .compatible = "netlogic,xlp832-spi" },
-	{ },
-};
-MODULE_DEVICE_TABLE(of, xlp_spi_dt_id);
-
 static struct platform_driver xlp_spi_driver = {
 	.probe	= xlp_spi_probe,
 	.driver = {
 		.name	= "xlp-spi",
-		.of_match_table = xlp_spi_dt_id,
 		.acpi_match_table = ACPI_PTR(xlp_spi_acpi_match),
 	},
 };

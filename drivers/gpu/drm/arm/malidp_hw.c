@@ -9,11 +9,16 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/types.h>
 #include <linux/io.h>
-#include <drm/drmP.h>
+
 #include <video/videomode.h>
 #include <video/display_timing.h>
+
+#include <drm/drm_fourcc.h>
+#include <drm/drm_vblank.h>
+#include <drm/drm_print.h>
 
 #include "malidp_drv.h"
 #include "malidp_hw.h"
@@ -374,16 +379,27 @@ static void malidp500_modeset(struct malidp_hw_device *hwdev, struct videomode *
 		malidp_hw_setbits(hwdev, MALIDP_DISP_FUNC_ILACED, MALIDP_DE_DISPLAY_FUNC);
 	else
 		malidp_hw_clearbits(hwdev, MALIDP_DISP_FUNC_ILACED, MALIDP_DE_DISPLAY_FUNC);
+
+	/*
+	 * Program the RQoS register to avoid high resolutions flicker
+	 * issue on the LS1028A.
+	 */
+	if (hwdev->arqos_value) {
+		val = hwdev->arqos_value;
+		malidp_hw_setbits(hwdev, val, MALIDP500_RQOS_QUALITY);
+	}
 }
 
 int malidp_format_get_bpp(u32 fmt)
 {
-	int bpp = drm_format_plane_cpp(fmt, 0) * 8;
+	const struct drm_format_info *info = drm_format_info(fmt);
+	int bpp = info->cpp[0] * 8;
 
 	if (bpp == 0) {
 		switch (fmt) {
 		case DRM_FORMAT_VUY101010:
 			bpp = 30;
+			break;
 		case DRM_FORMAT_YUV420_10BIT:
 			bpp = 15;
 			break;
@@ -516,7 +532,7 @@ static int malidp500_enable_memwrite(struct malidp_hw_device *hwdev,
 		malidp_hw_write(hwdev, lower_32_bits(addrs[1]), base + MALIDP_MW_P2_PTR_LOW);
 		malidp_hw_write(hwdev, upper_32_bits(addrs[1]), base + MALIDP_MW_P2_PTR_HIGH);
 		malidp_hw_write(hwdev, pitches[1], base + MALIDP_MW_P2_STRIDE);
-		/* fall through */
+		fallthrough;
 	case 1:
 		malidp_hw_write(hwdev, lower_32_bits(addrs[0]), base + MALIDP_MW_P1_PTR_LOW);
 		malidp_hw_write(hwdev, upper_32_bits(addrs[0]), base + MALIDP_MW_P1_PTR_HIGH);
@@ -853,7 +869,7 @@ static int malidp550_enable_memwrite(struct malidp_hw_device *hwdev,
 		malidp_hw_write(hwdev, lower_32_bits(addrs[1]), base + MALIDP_MW_P2_PTR_LOW);
 		malidp_hw_write(hwdev, upper_32_bits(addrs[1]), base + MALIDP_MW_P2_PTR_HIGH);
 		malidp_hw_write(hwdev, pitches[1], base + MALIDP_MW_P2_STRIDE);
-		/* fall through */
+		fallthrough;
 	case 1:
 		malidp_hw_write(hwdev, lower_32_bits(addrs[0]), base + MALIDP_MW_P1_PTR_LOW);
 		malidp_hw_write(hwdev, upper_32_bits(addrs[0]), base + MALIDP_MW_P1_PTR_HIGH);
@@ -1308,7 +1324,7 @@ static irqreturn_t malidp_se_irq(int irq, void *arg)
 			break;
 		case MW_RESTART:
 			drm_writeback_signal_completion(&malidp->mw_connector, 0);
-			/* fall through to a new start */
+			fallthrough;	/* to a new start */
 		case MW_START:
 			/* writeback started, need to emulate one-shot mode */
 			hw->disable_memwrite(hwdev);

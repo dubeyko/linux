@@ -69,7 +69,7 @@ struct test_data {
 
 static bool test__perf_time__parse_for_ranges(struct test_data *d)
 {
-	struct perf_evlist evlist = {
+	struct evlist evlist = {
 		.first_sample_time = d->first,
 		.last_sample_time = d->last,
 	};
@@ -131,7 +131,7 @@ out:
 	return pass;
 }
 
-int test__time_utils(struct test *t __maybe_unused, int subtest __maybe_unused)
+static int test__time_utils(struct test_suite *t __maybe_unused, int subtest __maybe_unused)
 {
 	bool pass = true;
 
@@ -249,3 +249,5 @@ int test__time_utils(struct test *t __maybe_unused, int subtest __maybe_unused)
 
 	return pass ? 0 : TEST_FAIL;
 }
+
+DEFINE_SUITE("time utils", time_utils);

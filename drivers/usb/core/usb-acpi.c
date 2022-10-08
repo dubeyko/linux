@@ -86,7 +86,7 @@ static enum usb_port_connect_type usb_acpi_get_connect_type(acpi_handle handle,
 {
 	enum usb_port_connect_type connect_type = USB_PORT_CONNECT_TYPE_UNKNOWN;
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
-	union acpi_object *upc;
+	union acpi_object *upc = NULL;
 	acpi_status status;
 
 	/*
@@ -98,11 +98,12 @@ static enum usb_port_connect_type usb_acpi_get_connect_type(acpi_handle handle,
 	 * no connectable, the port would be not used.
 	 */
 	status = acpi_evaluate_object(handle, "_UPC", NULL, &buffer);
-	upc = buffer.pointer;
-	if (!upc || (upc->type != ACPI_TYPE_PACKAGE)
-		|| upc->package.count != 4) {
+	if (ACPI_FAILURE(status))
 		goto out;
-	}
+
+	upc = buffer.pointer;
+	if (!upc || (upc->type != ACPI_TYPE_PACKAGE) || upc->package.count != 4)
+		goto out;
 
 	if (upc->package.elements[0].integer.value)
 		if (pld->user_visible)
@@ -122,22 +123,6 @@ out:
  * port_dev->location is non-zero when it has been set by the firmware.
  */
 #define USB_ACPI_LOCATION_VALID (1 << 31)
-
-static struct acpi_device *usb_acpi_find_port(struct acpi_device *parent,
-					      int raw)
-{
-	struct acpi_device *adev;
-
-	if (!parent)
-		return NULL;
-
-	list_for_each_entry(adev, &parent->children, node) {
-		if (acpi_device_adr(adev) == raw)
-			return adev;
-	}
-
-	return acpi_find_child_device(parent, raw, false);
-}
 
 static struct acpi_device *
 usb_acpi_get_companion_for_port(struct usb_port *port_dev)
@@ -165,11 +150,11 @@ usb_acpi_get_companion_for_port(struct usb_port *port_dev)
 		if (!parent_handle)
 			return NULL;
 
-		acpi_bus_get_device(parent_handle, &adev);
+		adev = acpi_fetch_acpi_dev(parent_handle);
 		port1 = port_dev->portnum;
 	}
 
-	return usb_acpi_find_port(adev, port1);
+	return acpi_find_child_by_adr(adev, port1);
 }
 
 static struct acpi_device *
@@ -186,7 +171,7 @@ usb_acpi_find_companion_for_port(struct usb_port *port_dev)
 
 	handle = adev->handle;
 	status = acpi_get_physical_device_location(handle, &pld);
-	if (!ACPI_FAILURE(status) && pld) {
+	if (ACPI_SUCCESS(status) && pld) {
 		port_dev->location = USB_ACPI_LOCATION_VALID
 			| pld->group_token << 8 | pld->group_position;
 		port_dev->connect_type = usb_acpi_get_connect_type(handle, pld);
@@ -204,8 +189,11 @@ usb_acpi_find_companion_for_device(struct usb_device *udev)
 	struct usb_hub *hub;
 
 	if (!udev->parent) {
-		/* root hub is only child (_ADR=0) under its parent, the HC */
-		adev = ACPI_COMPANION(udev->dev.parent);
+		/*
+		 * root hub is only child (_ADR=0) under its parent, the HC.
+		 * sysdev pointer is the HC as seen from firmware.
+		 */
+		adev = ACPI_COMPANION(udev->bus->sysdev);
 		return acpi_find_child_device(adev, 0, false);
 	}
 

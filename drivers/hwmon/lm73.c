@@ -190,7 +190,7 @@ ATTRIBUTE_GROUPS(lm73);
 /* device probe and removal */
 
 static int
-lm73_probe(struct i2c_client *client, const struct i2c_device_id *id)
+lm73_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -257,17 +257,27 @@ static int lm73_detect(struct i2c_client *new_client,
 	if (id < 0 || id != LM73_ID)
 		return -ENODEV;
 
-	strlcpy(info->type, "lm73", I2C_NAME_SIZE);
+	strscpy(info->type, "lm73", I2C_NAME_SIZE);
 
 	return 0;
 }
+
+static const struct of_device_id lm73_of_match[] = {
+	{
+		.compatible = "ti,lm73",
+	},
+	{ },
+};
+
+MODULE_DEVICE_TABLE(of, lm73_of_match);
 
 static struct i2c_driver lm73_driver = {
 	.class		= I2C_CLASS_HWMON,
 	.driver = {
 		.name	= "lm73",
+		.of_match_table = lm73_of_match,
 	},
-	.probe		= lm73_probe,
+	.probe_new	= lm73_probe,
 	.id_table	= lm73_ids,
 	.detect		= lm73_detect,
 	.address_list	= normal_i2c,

@@ -248,7 +248,10 @@ possano ricevere la vostra nuova sottochiave::
     kernel.
 
     Se per qualche ragione preferite rimanere con sottochiavi RSA, nel comando
-    precedente, sostituite "ed25519" con "rsa2048".
+    precedente, sostituite "ed25519" con "rsa2048". In aggiunta, se avete
+    intenzione di usare un dispositivo hardware che non supporta le chiavi
+    ED25519 ECC, come la Nitrokey Pro o la Yubikey, allora dovreste usare
+    "nistp256" al posto di "ed25519".
 
 Copia di riserva della chiave primaria per gestire il recupero da disastro
 --------------------------------------------------------------------------
@@ -449,23 +452,27 @@ implementi le funzionalità delle smartcard.  Sul mercato ci sono diverse
 soluzioni disponibili:
 
 - `Nitrokey Start`_: è Open hardware e Free Software, è basata sul progetto
-  `GnuK`_ della FSIJ. Ha il supporto per chiavi ECC, ma meno funzionalità di
-  sicurezza (come la resistenza alla manomissione o alcuni attacchi ad un
-  canale laterale).
-- `Nitrokey Pro`_: è simile alla Nitrokey Start, ma è più resistente alla
-  manomissione e offre più funzionalità di sicurezza, ma l'ECC.
-- `Yubikey 4`_: l'hardware e il software sono proprietari, ma è più economica
+  `GnuK`_ della FSIJ. Questo è uno dei pochi dispositivi a supportare le chiavi
+  ECC ED25519, ma offre meno funzionalità di sicurezza (come la resistenza
+  alla manomissione o alcuni attacchi ad un canale laterale).
+- `Nitrokey Pro 2`_: è simile alla Nitrokey Start, ma è più resistente alla
+  manomissione e offre più funzionalità di sicurezza. La Pro 2 supporta la
+  crittografia ECC (NISTP).
+- `Yubikey 5`_: l'hardware e il software sono proprietari, ma è più economica
   della  Nitrokey Pro ed è venduta anche con porta USB-C il che è utile con i
   computer portatili più recenti. In aggiunta, offre altre funzionalità di
-  sicurezza come FIDO, U2F, ma non l'ECC
+  sicurezza come FIDO, U2F, e ora supporta anche le chiavi ECC (NISTP)
 
 `Su LWN c'è una buona recensione`_ dei modelli elencati qui sopra e altri.
+La scelta dipenderà dal costo, dalla disponibilità nella vostra area
+geografica e vostre considerazioni sull'hardware aperto/proprietario.
+
 Se volete usare chiavi ECC, la vostra migliore scelta sul mercato è la
 Nitrokey Start.
 
 .. _`Nitrokey Start`: https://shop.nitrokey.com/shop/product/nitrokey-start-6
-.. _`Nitrokey Pro`: https://shop.nitrokey.com/shop/product/nitrokey-pro-3
-.. _`Yubikey 4`: https://www.yubico.com/product/yubikey-4-series/
+.. _`Nitrokey Pro 2`: https://shop.nitrokey.com/shop/product/nitrokey-pro-2-3
+.. _`Yubikey 5`: https://www.yubico.com/product/yubikey-5-overview/
 .. _Gnuk: http://www.fsij.org/doc-gnuk/
 .. _`Su LWN c'è una buona recensione`: https://lwn.net/Articles/736231/
 
@@ -924,12 +931,11 @@ che avete nel vostro portachiavi::
     uid           [ unknown] Linus Torvalds <torvalds@kernel.org>
     sub   rsa2048 2011-09-20 [E]
 
-Poi, aprite il `PGP pathfinder`_. Nel campo "From", incollate l'impronta
-digitale della chiave di Linus Torvalds che si vede nell'output qui sopra.
-Nel campo "to", incollate il key-id della chiave sconosciuta che avete
-trovato con ``gpg --search``, e poi verificare il risultato:
-
-- `Finding paths to Linus`_
+Poi, cercate un percorso affidabile da Linux Torvalds alla chiave che avete
+trovato con ``gpg --search`` usando la chiave sconosciuta.Per farlo potete usare
+diversi strumenti come https://github.com/mricon/wotmate,
+https://git.kernel.org/pub/scm/docs/kernel/pgpkeys.git/tree/graphs, e
+https://the.earth.li/~noodles/pathfind.html.
 
 Se trovate un paio di percorsi affidabili è un buon segno circa la validità
 della chiave. Ora, potete aggiungerla al vostro portachiavi dal keyserver::
@@ -941,6 +947,3 @@ fiducia nell'amministratore del servizio *PGP Pathfinder* sperando che non
 sia malintenzionato (infatti, questo va contro :ref:`it_devs_not_infra`).
 Tuttavia, se mantenete con cura la vostra rete di fiducia sarà un deciso
 miglioramento rispetto alla cieca fiducia nei keyserver.
-
-.. _`PGP pathfinder`: https://pgp.cs.uu.nl/
-.. _`Finding paths to Linus`: https://pgp.cs.uu.nl/paths/79BE3E4300411886/to/C94035C21B4F2AEB.html

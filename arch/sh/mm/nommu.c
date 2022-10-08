@@ -10,7 +10,6 @@
 #include <linux/init.h>
 #include <linux/string.h>
 #include <linux/mm.h>
-#include <asm/pgtable.h>
 #include <asm/tlbflush.h>
 #include <asm/page.h>
 #include <linux/uaccess.h>
@@ -29,9 +28,9 @@ __kernel_size_t __copy_user(void *to, const void *from, __kernel_size_t n)
 	return 0;
 }
 
-__kernel_size_t __clear_user(void *to, __kernel_size_t n)
+__kernel_size_t __clear_user(void __user *to, __kernel_size_t n)
 {
-	memset(to, 0, n);
+	memset((__force void *)to, 0, n);
 	return 0;
 }
 
@@ -95,9 +94,5 @@ void __init page_table_range_init(unsigned long start, unsigned long end,
 }
 
 void __set_fixmap(enum fixed_addresses idx, unsigned long phys, pgprot_t prot)
-{
-}
-
-void pgtable_cache_init(void)
 {
 }

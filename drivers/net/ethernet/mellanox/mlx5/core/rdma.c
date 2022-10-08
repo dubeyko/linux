@@ -14,9 +14,6 @@ static void mlx5_rdma_disable_roce_steering(struct mlx5_core_dev *dev)
 {
 	struct mlx5_core_roce *roce = &dev->priv.roce;
 
-	if (!roce->ft)
-		return;
-
 	mlx5_del_flow_rules(roce->allow_rule);
 	mlx5_destroy_flow_group(roce->fg);
 	mlx5_destroy_flow_table(roce->ft);
@@ -51,7 +48,7 @@ static int mlx5_rdma_enable_roce_steering(struct mlx5_core_dev *dev)
 		return -ENOMEM;
 	}
 
-	ns = mlx5_get_flow_namespace(dev, MLX5_FLOW_NAMESPACE_RDMA_RX);
+	ns = mlx5_get_flow_namespace(dev, MLX5_FLOW_NAMESPACE_RDMA_RX_KERNEL);
 	if (!ns) {
 		mlx5_core_err(dev, "Failed to get RDMA RX namespace");
 		err = -EOPNOTSUPP;
@@ -119,7 +116,7 @@ free:
 static void mlx5_rdma_del_roce_addr(struct mlx5_core_dev *dev)
 {
 	mlx5_core_roce_gid_set(dev, 0, 0, 0,
-			       NULL, NULL, false, 0, 0);
+			       NULL, NULL, false, 0, 1);
 }
 
 static void mlx5_rdma_make_default_gid(struct mlx5_core_dev *dev, union ib_gid *gid)
@@ -145,6 +142,11 @@ static int mlx5_rdma_add_roce_addr(struct mlx5_core_dev *dev)
 
 void mlx5_rdma_disable_roce(struct mlx5_core_dev *dev)
 {
+	struct mlx5_core_roce *roce = &dev->priv.roce;
+
+	if (!roce->ft)
+		return;
+
 	mlx5_rdma_disable_roce_steering(dev);
 	mlx5_rdma_del_roce_addr(dev);
 	mlx5_nic_vport_disable_roce(dev);
@@ -153,6 +155,9 @@ void mlx5_rdma_disable_roce(struct mlx5_core_dev *dev)
 void mlx5_rdma_enable_roce(struct mlx5_core_dev *dev)
 {
 	int err;
+
+	if (!MLX5_CAP_GEN(dev, roce))
+		return;
 
 	err = mlx5_nic_vport_enable_roce(dev);
 	if (err) {
@@ -178,5 +183,4 @@ del_roce_addr:
 	mlx5_rdma_del_roce_addr(dev);
 disable_roce:
 	mlx5_nic_vport_disable_roce(dev);
-	return;
 }

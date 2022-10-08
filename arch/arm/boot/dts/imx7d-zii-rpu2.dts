@@ -16,7 +16,7 @@
 	compatible = "zii,imx7d-rpu2", "fsl,imx7d";
 
 	chosen {
-		stdout-path = &uart1;
+		stdout-path = &uart2;
 	};
 
 	cs2000_ref: oscillator {
@@ -36,7 +36,7 @@
 		pinctrl-0 = <&pinctrl_leds_debug>;
 		pinctrl-names = "default";
 
-		debug {
+		led-debug {
 			label = "zii:green:debug1";
 			gpios = <&gpio2 8 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "heartbeat";
@@ -182,7 +182,7 @@
 };
 
 &cpu0 {
-	arm-supply = <&sw1a_reg>;
+	cpu-supply = <&sw1a_reg>;
 };
 
 &clks {
@@ -193,7 +193,7 @@
 &ecspi1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_ecspi1>;
-	cs-gpios = <&gpio4 19 GPIO_ACTIVE_HIGH>;
+	cs-gpios = <&gpio4 19 GPIO_ACTIVE_LOW>;
 	status = "okay";
 
 	flash@0 {
@@ -669,10 +669,6 @@
 	status = "disabled";
 };
 
-&snvs_pwrkey {
-	status = "disabled";
-};
-
 &iomuxc {
 	pinctrl_ecspi1: ecspi1grp {
 		fsl,pins = <
@@ -775,24 +771,10 @@
 		>;
 	};
 
-	pinctrl_i2c1_gpio: i2c1gpiogrp {
-		fsl,pins = <
-			MX7D_PAD_I2C1_SDA__GPIO4_IO9		0x4000007f
-			MX7D_PAD_I2C1_SCL__GPIO4_IO8		0x4000007f
-		>;
-	};
-
 	pinctrl_i2c2: i2c2grp {
 		fsl,pins = <
 			MX7D_PAD_I2C2_SDA__I2C2_SDA		0x4000007f
 			MX7D_PAD_I2C2_SCL__I2C2_SCL		0x4000007f
-		>;
-	};
-
-	pinctrl_i2c2_gpio: i2c2gpiogrp {
-		fsl,pins = <
-			MX7D_PAD_I2C2_SDA__GPIO4_IO11		0x4000007f
-			MX7D_PAD_I2C2_SCL__GPIO4_IO10		0x4000007f
 		>;
 	};
 

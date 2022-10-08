@@ -15,6 +15,7 @@
 #include <linux/pkt_cls.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/rhashtable.h>
 #include <net/netlink.h>
 #include <net/pkt_sched.h>
 #include <net/pkt_cls.h>
@@ -24,15 +25,630 @@
 #include <uapi/linux/tc_act/tc_ct.h>
 #include <net/tc_act/tc_ct.h>
 
-#include <linux/netfilter/nf_nat.h>
+#include <net/netfilter/nf_flow_table.h>
 #include <net/netfilter/nf_conntrack.h>
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/netfilter/nf_conntrack_zones.h>
 #include <net/netfilter/nf_conntrack_helper.h>
+#include <net/netfilter/nf_conntrack_acct.h>
 #include <net/netfilter/ipv6/nf_defrag_ipv6.h>
+#include <net/netfilter/nf_conntrack_act_ct.h>
+#include <uapi/linux/netfilter/nf_nat.h>
+
+static struct workqueue_struct *act_ct_wq;
+static struct rhashtable zones_ht;
+static DEFINE_MUTEX(zones_mutex);
+
+struct tcf_ct_flow_table {
+	struct rhash_head node; /* In zones tables */
+
+	struct rcu_work rwork;
+	struct nf_flowtable nf_ft;
+	refcount_t ref;
+	u16 zone;
+
+	bool dying;
+};
+
+static const struct rhashtable_params zones_params = {
+	.head_offset = offsetof(struct tcf_ct_flow_table, node),
+	.key_offset = offsetof(struct tcf_ct_flow_table, zone),
+	.key_len = sizeof_field(struct tcf_ct_flow_table, zone),
+	.automatic_shrinking = true,
+};
+
+static struct flow_action_entry *
+tcf_ct_flow_table_flow_action_get_next(struct flow_action *flow_action)
+{
+	int i = flow_action->num_entries++;
+
+	return &flow_action->entries[i];
+}
+
+static void tcf_ct_add_mangle_action(struct flow_action *action,
+				     enum flow_action_mangle_base htype,
+				     u32 offset,
+				     u32 mask,
+				     u32 val)
+{
+	struct flow_action_entry *entry;
+
+	entry = tcf_ct_flow_table_flow_action_get_next(action);
+	entry->id = FLOW_ACTION_MANGLE;
+	entry->mangle.htype = htype;
+	entry->mangle.mask = ~mask;
+	entry->mangle.offset = offset;
+	entry->mangle.val = val;
+}
+
+/* The following nat helper functions check if the inverted reverse tuple
+ * (target) is different then the current dir tuple - meaning nat for ports
+ * and/or ip is needed, and add the relevant mangle actions.
+ */
+static void
+tcf_ct_flow_table_add_action_nat_ipv4(const struct nf_conntrack_tuple *tuple,
+				      struct nf_conntrack_tuple target,
+				      struct flow_action *action)
+{
+	if (memcmp(&target.src.u3, &tuple->src.u3, sizeof(target.src.u3)))
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_IP4,
+					 offsetof(struct iphdr, saddr),
+					 0xFFFFFFFF,
+					 be32_to_cpu(target.src.u3.ip));
+	if (memcmp(&target.dst.u3, &tuple->dst.u3, sizeof(target.dst.u3)))
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_IP4,
+					 offsetof(struct iphdr, daddr),
+					 0xFFFFFFFF,
+					 be32_to_cpu(target.dst.u3.ip));
+}
+
+static void
+tcf_ct_add_ipv6_addr_mangle_action(struct flow_action *action,
+				   union nf_inet_addr *addr,
+				   u32 offset)
+{
+	int i;
+
+	for (i = 0; i < sizeof(struct in6_addr) / sizeof(u32); i++)
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_IP6,
+					 i * sizeof(u32) + offset,
+					 0xFFFFFFFF, be32_to_cpu(addr->ip6[i]));
+}
+
+static void
+tcf_ct_flow_table_add_action_nat_ipv6(const struct nf_conntrack_tuple *tuple,
+				      struct nf_conntrack_tuple target,
+				      struct flow_action *action)
+{
+	if (memcmp(&target.src.u3, &tuple->src.u3, sizeof(target.src.u3)))
+		tcf_ct_add_ipv6_addr_mangle_action(action, &target.src.u3,
+						   offsetof(struct ipv6hdr,
+							    saddr));
+	if (memcmp(&target.dst.u3, &tuple->dst.u3, sizeof(target.dst.u3)))
+		tcf_ct_add_ipv6_addr_mangle_action(action, &target.dst.u3,
+						   offsetof(struct ipv6hdr,
+							    daddr));
+}
+
+static void
+tcf_ct_flow_table_add_action_nat_tcp(const struct nf_conntrack_tuple *tuple,
+				     struct nf_conntrack_tuple target,
+				     struct flow_action *action)
+{
+	__be16 target_src = target.src.u.tcp.port;
+	__be16 target_dst = target.dst.u.tcp.port;
+
+	if (target_src != tuple->src.u.tcp.port)
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_TCP,
+					 offsetof(struct tcphdr, source),
+					 0xFFFF, be16_to_cpu(target_src));
+	if (target_dst != tuple->dst.u.tcp.port)
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_TCP,
+					 offsetof(struct tcphdr, dest),
+					 0xFFFF, be16_to_cpu(target_dst));
+}
+
+static void
+tcf_ct_flow_table_add_action_nat_udp(const struct nf_conntrack_tuple *tuple,
+				     struct nf_conntrack_tuple target,
+				     struct flow_action *action)
+{
+	__be16 target_src = target.src.u.udp.port;
+	__be16 target_dst = target.dst.u.udp.port;
+
+	if (target_src != tuple->src.u.udp.port)
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_UDP,
+					 offsetof(struct udphdr, source),
+					 0xFFFF, be16_to_cpu(target_src));
+	if (target_dst != tuple->dst.u.udp.port)
+		tcf_ct_add_mangle_action(action, FLOW_ACT_MANGLE_HDR_TYPE_UDP,
+					 offsetof(struct udphdr, dest),
+					 0xFFFF, be16_to_cpu(target_dst));
+}
+
+static void tcf_ct_flow_table_add_action_meta(struct nf_conn *ct,
+					      enum ip_conntrack_dir dir,
+					      struct flow_action *action)
+{
+	struct nf_conn_labels *ct_labels;
+	struct flow_action_entry *entry;
+	enum ip_conntrack_info ctinfo;
+	u32 *act_ct_labels;
+
+	entry = tcf_ct_flow_table_flow_action_get_next(action);
+	entry->id = FLOW_ACTION_CT_METADATA;
+#if IS_ENABLED(CONFIG_NF_CONNTRACK_MARK)
+	entry->ct_metadata.mark = ct->mark;
+#endif
+	ctinfo = dir == IP_CT_DIR_ORIGINAL ? IP_CT_ESTABLISHED :
+					     IP_CT_ESTABLISHED_REPLY;
+	/* aligns with the CT reference on the SKB nf_ct_set */
+	entry->ct_metadata.cookie = (unsigned long)ct | ctinfo;
+	entry->ct_metadata.orig_dir = dir == IP_CT_DIR_ORIGINAL;
+
+	act_ct_labels = entry->ct_metadata.labels;
+	ct_labels = nf_ct_labels_find(ct);
+	if (ct_labels)
+		memcpy(act_ct_labels, ct_labels->bits, NF_CT_LABELS_MAX_SIZE);
+	else
+		memset(act_ct_labels, 0, NF_CT_LABELS_MAX_SIZE);
+}
+
+static int tcf_ct_flow_table_add_action_nat(struct net *net,
+					    struct nf_conn *ct,
+					    enum ip_conntrack_dir dir,
+					    struct flow_action *action)
+{
+	const struct nf_conntrack_tuple *tuple = &ct->tuplehash[dir].tuple;
+	struct nf_conntrack_tuple target;
+
+	if (!(ct->status & IPS_NAT_MASK))
+		return 0;
+
+	nf_ct_invert_tuple(&target, &ct->tuplehash[!dir].tuple);
+
+	switch (tuple->src.l3num) {
+	case NFPROTO_IPV4:
+		tcf_ct_flow_table_add_action_nat_ipv4(tuple, target,
+						      action);
+		break;
+	case NFPROTO_IPV6:
+		tcf_ct_flow_table_add_action_nat_ipv6(tuple, target,
+						      action);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	switch (nf_ct_protonum(ct)) {
+	case IPPROTO_TCP:
+		tcf_ct_flow_table_add_action_nat_tcp(tuple, target, action);
+		break;
+	case IPPROTO_UDP:
+		tcf_ct_flow_table_add_action_nat_udp(tuple, target, action);
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	return 0;
+}
+
+static int tcf_ct_flow_table_fill_actions(struct net *net,
+					  const struct flow_offload *flow,
+					  enum flow_offload_tuple_dir tdir,
+					  struct nf_flow_rule *flow_rule)
+{
+	struct flow_action *action = &flow_rule->rule->action;
+	int num_entries = action->num_entries;
+	struct nf_conn *ct = flow->ct;
+	enum ip_conntrack_dir dir;
+	int i, err;
+
+	switch (tdir) {
+	case FLOW_OFFLOAD_DIR_ORIGINAL:
+		dir = IP_CT_DIR_ORIGINAL;
+		break;
+	case FLOW_OFFLOAD_DIR_REPLY:
+		dir = IP_CT_DIR_REPLY;
+		break;
+	default:
+		return -EOPNOTSUPP;
+	}
+
+	err = tcf_ct_flow_table_add_action_nat(net, ct, dir, action);
+	if (err)
+		goto err_nat;
+
+	tcf_ct_flow_table_add_action_meta(ct, dir, action);
+	return 0;
+
+err_nat:
+	/* Clear filled actions */
+	for (i = num_entries; i < action->num_entries; i++)
+		memset(&action->entries[i], 0, sizeof(action->entries[i]));
+	action->num_entries = num_entries;
+
+	return err;
+}
+
+static struct nf_flowtable_type flowtable_ct = {
+	.action		= tcf_ct_flow_table_fill_actions,
+	.owner		= THIS_MODULE,
+};
+
+static int tcf_ct_flow_table_get(struct net *net, struct tcf_ct_params *params)
+{
+	struct tcf_ct_flow_table *ct_ft;
+	int err = -ENOMEM;
+
+	mutex_lock(&zones_mutex);
+	ct_ft = rhashtable_lookup_fast(&zones_ht, &params->zone, zones_params);
+	if (ct_ft && refcount_inc_not_zero(&ct_ft->ref))
+		goto out_unlock;
+
+	ct_ft = kzalloc(sizeof(*ct_ft), GFP_KERNEL);
+	if (!ct_ft)
+		goto err_alloc;
+	refcount_set(&ct_ft->ref, 1);
+
+	ct_ft->zone = params->zone;
+	err = rhashtable_insert_fast(&zones_ht, &ct_ft->node, zones_params);
+	if (err)
+		goto err_insert;
+
+	ct_ft->nf_ft.type = &flowtable_ct;
+	ct_ft->nf_ft.flags |= NF_FLOWTABLE_HW_OFFLOAD |
+			      NF_FLOWTABLE_COUNTER;
+	err = nf_flow_table_init(&ct_ft->nf_ft);
+	if (err)
+		goto err_init;
+	write_pnet(&ct_ft->nf_ft.net, net);
+
+	__module_get(THIS_MODULE);
+out_unlock:
+	params->ct_ft = ct_ft;
+	params->nf_ft = &ct_ft->nf_ft;
+	mutex_unlock(&zones_mutex);
+
+	return 0;
+
+err_init:
+	rhashtable_remove_fast(&zones_ht, &ct_ft->node, zones_params);
+err_insert:
+	kfree(ct_ft);
+err_alloc:
+	mutex_unlock(&zones_mutex);
+	return err;
+}
+
+static void tcf_ct_flow_table_cleanup_work(struct work_struct *work)
+{
+	struct flow_block_cb *block_cb, *tmp_cb;
+	struct tcf_ct_flow_table *ct_ft;
+	struct flow_block *block;
+
+	ct_ft = container_of(to_rcu_work(work), struct tcf_ct_flow_table,
+			     rwork);
+	nf_flow_table_free(&ct_ft->nf_ft);
+
+	/* Remove any remaining callbacks before cleanup */
+	block = &ct_ft->nf_ft.flow_block;
+	down_write(&ct_ft->nf_ft.flow_block_lock);
+	list_for_each_entry_safe(block_cb, tmp_cb, &block->cb_list, list) {
+		list_del(&block_cb->list);
+		flow_block_cb_free(block_cb);
+	}
+	up_write(&ct_ft->nf_ft.flow_block_lock);
+	kfree(ct_ft);
+
+	module_put(THIS_MODULE);
+}
+
+static void tcf_ct_flow_table_put(struct tcf_ct_params *params)
+{
+	struct tcf_ct_flow_table *ct_ft = params->ct_ft;
+
+	if (refcount_dec_and_test(&params->ct_ft->ref)) {
+		rhashtable_remove_fast(&zones_ht, &ct_ft->node, zones_params);
+		INIT_RCU_WORK(&ct_ft->rwork, tcf_ct_flow_table_cleanup_work);
+		queue_rcu_work(act_ct_wq, &ct_ft->rwork);
+	}
+}
+
+static void tcf_ct_flow_tc_ifidx(struct flow_offload *entry,
+				 struct nf_conn_act_ct_ext *act_ct_ext, u8 dir)
+{
+	entry->tuplehash[dir].tuple.xmit_type = FLOW_OFFLOAD_XMIT_TC;
+	entry->tuplehash[dir].tuple.tc.iifidx = act_ct_ext->ifindex[dir];
+}
+
+static void tcf_ct_flow_table_add(struct tcf_ct_flow_table *ct_ft,
+				  struct nf_conn *ct,
+				  bool tcp)
+{
+	struct nf_conn_act_ct_ext *act_ct_ext;
+	struct flow_offload *entry;
+	int err;
+
+	if (test_and_set_bit(IPS_OFFLOAD_BIT, &ct->status))
+		return;
+
+	entry = flow_offload_alloc(ct);
+	if (!entry) {
+		WARN_ON_ONCE(1);
+		goto err_alloc;
+	}
+
+	if (tcp) {
+		ct->proto.tcp.seen[0].flags |= IP_CT_TCP_FLAG_BE_LIBERAL;
+		ct->proto.tcp.seen[1].flags |= IP_CT_TCP_FLAG_BE_LIBERAL;
+	}
+
+	act_ct_ext = nf_conn_act_ct_ext_find(ct);
+	if (act_ct_ext) {
+		tcf_ct_flow_tc_ifidx(entry, act_ct_ext, FLOW_OFFLOAD_DIR_ORIGINAL);
+		tcf_ct_flow_tc_ifidx(entry, act_ct_ext, FLOW_OFFLOAD_DIR_REPLY);
+	}
+
+	err = flow_offload_add(&ct_ft->nf_ft, entry);
+	if (err)
+		goto err_add;
+
+	return;
+
+err_add:
+	flow_offload_free(entry);
+err_alloc:
+	clear_bit(IPS_OFFLOAD_BIT, &ct->status);
+}
+
+static void tcf_ct_flow_table_process_conn(struct tcf_ct_flow_table *ct_ft,
+					   struct nf_conn *ct,
+					   enum ip_conntrack_info ctinfo)
+{
+	bool tcp = false;
+
+	if ((ctinfo != IP_CT_ESTABLISHED && ctinfo != IP_CT_ESTABLISHED_REPLY) ||
+	    !test_bit(IPS_ASSURED_BIT, &ct->status))
+		return;
+
+	switch (nf_ct_protonum(ct)) {
+	case IPPROTO_TCP:
+		tcp = true;
+		if (ct->proto.tcp.state != TCP_CONNTRACK_ESTABLISHED)
+			return;
+		break;
+	case IPPROTO_UDP:
+		break;
+#ifdef CONFIG_NF_CT_PROTO_GRE
+	case IPPROTO_GRE: {
+		struct nf_conntrack_tuple *tuple;
+
+		if (ct->status & IPS_NAT_MASK)
+			return;
+		tuple = &ct->tuplehash[IP_CT_DIR_ORIGINAL].tuple;
+		/* No support for GRE v1 */
+		if (tuple->src.u.gre.key || tuple->dst.u.gre.key)
+			return;
+		break;
+	}
+#endif
+	default:
+		return;
+	}
+
+	if (nf_ct_ext_exist(ct, NF_CT_EXT_HELPER) ||
+	    ct->status & IPS_SEQ_ADJUST)
+		return;
+
+	tcf_ct_flow_table_add(ct_ft, ct, tcp);
+}
+
+static bool
+tcf_ct_flow_table_fill_tuple_ipv4(struct sk_buff *skb,
+				  struct flow_offload_tuple *tuple,
+				  struct tcphdr **tcph)
+{
+	struct flow_ports *ports;
+	unsigned int thoff;
+	struct iphdr *iph;
+	size_t hdrsize;
+	u8 ipproto;
+
+	if (!pskb_network_may_pull(skb, sizeof(*iph)))
+		return false;
+
+	iph = ip_hdr(skb);
+	thoff = iph->ihl * 4;
+
+	if (ip_is_fragment(iph) ||
+	    unlikely(thoff != sizeof(struct iphdr)))
+		return false;
+
+	ipproto = iph->protocol;
+	switch (ipproto) {
+	case IPPROTO_TCP:
+		hdrsize = sizeof(struct tcphdr);
+		break;
+	case IPPROTO_UDP:
+		hdrsize = sizeof(*ports);
+		break;
+#ifdef CONFIG_NF_CT_PROTO_GRE
+	case IPPROTO_GRE:
+		hdrsize = sizeof(struct gre_base_hdr);
+		break;
+#endif
+	default:
+		return false;
+	}
+
+	if (iph->ttl <= 1)
+		return false;
+
+	if (!pskb_network_may_pull(skb, thoff + hdrsize))
+		return false;
+
+	switch (ipproto) {
+	case IPPROTO_TCP:
+		*tcph = (void *)(skb_network_header(skb) + thoff);
+		fallthrough;
+	case IPPROTO_UDP:
+		ports = (struct flow_ports *)(skb_network_header(skb) + thoff);
+		tuple->src_port = ports->source;
+		tuple->dst_port = ports->dest;
+		break;
+	case IPPROTO_GRE: {
+		struct gre_base_hdr *greh;
+
+		greh = (struct gre_base_hdr *)(skb_network_header(skb) + thoff);
+		if ((greh->flags & GRE_VERSION) != GRE_VERSION_0)
+			return false;
+		break;
+	}
+	}
+
+	iph = ip_hdr(skb);
+
+	tuple->src_v4.s_addr = iph->saddr;
+	tuple->dst_v4.s_addr = iph->daddr;
+	tuple->l3proto = AF_INET;
+	tuple->l4proto = ipproto;
+
+	return true;
+}
+
+static bool
+tcf_ct_flow_table_fill_tuple_ipv6(struct sk_buff *skb,
+				  struct flow_offload_tuple *tuple,
+				  struct tcphdr **tcph)
+{
+	struct flow_ports *ports;
+	struct ipv6hdr *ip6h;
+	unsigned int thoff;
+	size_t hdrsize;
+	u8 nexthdr;
+
+	if (!pskb_network_may_pull(skb, sizeof(*ip6h)))
+		return false;
+
+	ip6h = ipv6_hdr(skb);
+	thoff = sizeof(*ip6h);
+
+	nexthdr = ip6h->nexthdr;
+	switch (nexthdr) {
+	case IPPROTO_TCP:
+		hdrsize = sizeof(struct tcphdr);
+		break;
+	case IPPROTO_UDP:
+		hdrsize = sizeof(*ports);
+		break;
+#ifdef CONFIG_NF_CT_PROTO_GRE
+	case IPPROTO_GRE:
+		hdrsize = sizeof(struct gre_base_hdr);
+		break;
+#endif
+	default:
+		return false;
+	}
+
+	if (ip6h->hop_limit <= 1)
+		return false;
+
+	if (!pskb_network_may_pull(skb, thoff + hdrsize))
+		return false;
+
+	switch (nexthdr) {
+	case IPPROTO_TCP:
+		*tcph = (void *)(skb_network_header(skb) + thoff);
+		fallthrough;
+	case IPPROTO_UDP:
+		ports = (struct flow_ports *)(skb_network_header(skb) + thoff);
+		tuple->src_port = ports->source;
+		tuple->dst_port = ports->dest;
+		break;
+	case IPPROTO_GRE: {
+		struct gre_base_hdr *greh;
+
+		greh = (struct gre_base_hdr *)(skb_network_header(skb) + thoff);
+		if ((greh->flags & GRE_VERSION) != GRE_VERSION_0)
+			return false;
+		break;
+	}
+	}
+
+	ip6h = ipv6_hdr(skb);
+
+	tuple->src_v6 = ip6h->saddr;
+	tuple->dst_v6 = ip6h->daddr;
+	tuple->l3proto = AF_INET6;
+	tuple->l4proto = nexthdr;
+
+	return true;
+}
+
+static bool tcf_ct_flow_table_lookup(struct tcf_ct_params *p,
+				     struct sk_buff *skb,
+				     u8 family)
+{
+	struct nf_flowtable *nf_ft = &p->ct_ft->nf_ft;
+	struct flow_offload_tuple_rhash *tuplehash;
+	struct flow_offload_tuple tuple = {};
+	enum ip_conntrack_info ctinfo;
+	struct tcphdr *tcph = NULL;
+	struct flow_offload *flow;
+	struct nf_conn *ct;
+	u8 dir;
+
+	switch (family) {
+	case NFPROTO_IPV4:
+		if (!tcf_ct_flow_table_fill_tuple_ipv4(skb, &tuple, &tcph))
+			return false;
+		break;
+	case NFPROTO_IPV6:
+		if (!tcf_ct_flow_table_fill_tuple_ipv6(skb, &tuple, &tcph))
+			return false;
+		break;
+	default:
+		return false;
+	}
+
+	tuplehash = flow_offload_lookup(nf_ft, &tuple);
+	if (!tuplehash)
+		return false;
+
+	dir = tuplehash->tuple.dir;
+	flow = container_of(tuplehash, struct flow_offload, tuplehash[dir]);
+	ct = flow->ct;
+
+	if (tcph && (unlikely(tcph->fin || tcph->rst))) {
+		flow_offload_teardown(flow);
+		return false;
+	}
+
+	ctinfo = dir == FLOW_OFFLOAD_DIR_ORIGINAL ? IP_CT_ESTABLISHED :
+						    IP_CT_ESTABLISHED_REPLY;
+
+	flow_offload_refresh(nf_ft, flow);
+	nf_conntrack_get(&ct->ct_general);
+	nf_ct_set(skb, ct, ctinfo);
+	if (nf_ft->flags & NF_FLOWTABLE_COUNTER)
+		nf_ct_acct_update(ct, dir, skb->len);
+
+	return true;
+}
+
+static int tcf_ct_flow_tables_init(void)
+{
+	return rhashtable_init(&zones_ht, &zones_params);
+}
+
+static void tcf_ct_flow_tables_uninit(void)
+{
+	rhashtable_destroy(&zones_ht);
+}
 
 static struct tc_action_ops act_ct_ops;
-static unsigned int ct_net_id;
 
 struct tc_ct_action_net {
 	struct tc_action_net tn; /* Must be first */
@@ -50,22 +666,25 @@ static bool tcf_ct_skb_nfct_cached(struct net *net, struct sk_buff *skb,
 	if (!ct)
 		return false;
 	if (!net_eq(net, read_pnet(&ct->ct_net)))
-		return false;
+		goto drop_ct;
 	if (nf_ct_zone(ct)->id != zone_id)
-		return false;
+		goto drop_ct;
 
 	/* Force conntrack entry direction. */
 	if (force && CTINFO2DIR(ctinfo) != IP_CT_DIR_ORIGINAL) {
 		if (nf_ct_is_confirmed(ct))
 			nf_ct_kill(ct);
 
-		nf_conntrack_put(&ct->ct_general);
-		nf_ct_set(skb, NULL, IP_CT_UNTRACKED);
-
-		return false;
+		goto drop_ct;
 	}
 
 	return true;
+
+drop_ct:
+	nf_ct_put(ct);
+	nf_ct_set(skb, NULL, IP_CT_UNTRACKED);
+
+	return false;
 }
 
 /* Trim the skb to the length specified by the IP/IPv6 header,
@@ -77,7 +696,6 @@ static bool tcf_ct_skb_nfct_cached(struct net *net, struct sk_buff *skb,
 static int tcf_ct_skb_network_trim(struct sk_buff *skb, int family)
 {
 	unsigned int len;
-	int err;
 
 	switch (family) {
 	case NFPROTO_IPV4:
@@ -91,16 +709,14 @@ static int tcf_ct_skb_network_trim(struct sk_buff *skb, int family)
 		len = skb->len;
 	}
 
-	err = pskb_trim_rcsum(skb, len);
-
-	return err;
+	return pskb_trim_rcsum(skb, len);
 }
 
 static u8 tcf_ct_skb_nf_family(struct sk_buff *skb)
 {
 	u8 family = NFPROTO_UNSPEC;
 
-	switch (skb->protocol) {
+	switch (skb_protocol(skb, true)) {
 	case htons(ETH_P_IP):
 		family = NFPROTO_IPV4;
 		break;
@@ -149,12 +765,13 @@ static int tcf_ct_ipv6_is_fragment(struct sk_buff *skb, bool *frag)
 }
 
 static int tcf_ct_handle_fragments(struct net *net, struct sk_buff *skb,
-				   u8 family, u16 zone)
+				   u8 family, u16 zone, bool *defrag)
 {
 	enum ip_conntrack_info ctinfo;
 	struct nf_conn *ct;
 	int err = 0;
 	bool frag;
+	u16 mru;
 
 	/* Previously seen (loopback)? Ignore. */
 	ct = nf_ct_get(skb, &ctinfo);
@@ -169,6 +786,7 @@ static int tcf_ct_handle_fragments(struct net *net, struct sk_buff *skb,
 		return err;
 
 	skb_get(skb);
+	mru = tc_skb_cb(skb)->mru;
 
 	if (family == NFPROTO_IPV4) {
 		enum ip_defrag_users user = IP_DEFRAG_CONNTRACK_IN + zone;
@@ -178,7 +796,12 @@ static int tcf_ct_handle_fragments(struct net *net, struct sk_buff *skb,
 		err = ip_defrag(net, skb, user);
 		local_bh_enable();
 		if (err && err != -EINPROGRESS)
-			goto out_free;
+			return err;
+
+		if (!err) {
+			*defrag = true;
+			mru = IPCB(skb)->frag_max_size;
+		}
 	} else { /* NFPROTO_IPV6 */
 #if IS_ENABLED(CONFIG_NF_DEFRAG_IPV6)
 		enum ip6_defrag_users user = IP6_DEFRAG_CONNTRACK_IN + zone;
@@ -187,12 +810,19 @@ static int tcf_ct_handle_fragments(struct net *net, struct sk_buff *skb,
 		err = nf_ct_frag6_gather(net, skb, user);
 		if (err && err != -EINPROGRESS)
 			goto out_free;
+
+		if (!err) {
+			*defrag = true;
+			mru = IP6CB(skb)->frag_max_size;
+		}
 #else
 		err = -EOPNOTSUPP;
 		goto out_free;
 #endif
 	}
 
+	if (err != -EINPROGRESS)
+		tc_skb_cb(skb)->mru = mru;
 	skb_clear_hash(skb);
 	skb->ignore_df = 1;
 	return err;
@@ -207,8 +837,10 @@ static void tcf_ct_params_free(struct rcu_head *head)
 	struct tcf_ct_params *params = container_of(head,
 						    struct tcf_ct_params, rcu);
 
+	tcf_ct_flow_table_put(params);
+
 	if (params->tmpl)
-		nf_conntrack_put(&params->tmpl->ct_general);
+		nf_ct_put(params->tmpl);
 	kfree(params);
 }
 
@@ -222,6 +854,7 @@ static int ct_nat_execute(struct sk_buff *skb, struct nf_conn *ct,
 			  const struct nf_nat_range2 *range,
 			  enum nf_nat_manip_type maniptype)
 {
+	__be16 proto = skb_protocol(skb, true);
 	int hooknum, err = NF_ACCEPT;
 
 	/* See HOOK2MANIP(). */
@@ -233,14 +866,13 @@ static int ct_nat_execute(struct sk_buff *skb, struct nf_conn *ct,
 	switch (ctinfo) {
 	case IP_CT_RELATED:
 	case IP_CT_RELATED_REPLY:
-		if (skb->protocol == htons(ETH_P_IP) &&
+		if (proto == htons(ETH_P_IP) &&
 		    ip_hdr(skb)->protocol == IPPROTO_ICMP) {
 			if (!nf_nat_icmp_reply_translation(skb, ct, ctinfo,
 							   hooknum))
 				err = NF_DROP;
 			goto out;
-		} else if (IS_ENABLED(CONFIG_IPV6) &&
-			   skb->protocol == htons(ETH_P_IPV6)) {
+		} else if (IS_ENABLED(CONFIG_IPV6) && proto == htons(ETH_P_IPV6)) {
 			__be16 frag_off;
 			u8 nexthdr = ipv6_hdr(skb)->nexthdr;
 			int hdrlen = ipv6_skip_exthdr(skb,
@@ -257,7 +889,7 @@ static int ct_nat_execute(struct sk_buff *skb, struct nf_conn *ct,
 			}
 		}
 		/* Non-ICMP, fall thru to initialize if needed. */
-		/* fall through */
+		fallthrough;
 	case IP_CT_NEW:
 		/* Seen it before?  This can happen for loopback, retrans,
 		 * or local packets.
@@ -285,6 +917,12 @@ static int ct_nat_execute(struct sk_buff *skb, struct nf_conn *ct,
 	}
 
 	err = nf_nat_packet(ct, ctinfo, hooknum, skb);
+	if (err == NF_ACCEPT) {
+		if (maniptype == NF_NAT_MANIP_SRC)
+			tc_skb_cb(skb)->post_ct_snat = 1;
+		if (maniptype == NF_NAT_MANIP_DST)
+			tc_skb_cb(skb)->post_ct_dnat = 1;
+	}
 out:
 	return err;
 }
@@ -312,7 +950,7 @@ static void tcf_ct_act_set_labels(struct nf_conn *ct,
 				  u32 *labels_m)
 {
 #if IS_ENABLED(CONFIG_NF_CONNTRACK_LABELS)
-	size_t labels_sz = FIELD_SIZEOF(struct tcf_ct_params, labels);
+	size_t labels_sz = sizeof_field(struct tcf_ct_params, labels);
 
 	if (!memchr_inv(labels_m, 0, labels_sz))
 		return;
@@ -329,6 +967,7 @@ static int tcf_ct_act_nat(struct sk_buff *skb,
 			  bool commit)
 {
 #if IS_ENABLED(CONFIG_NF_NAT)
+	int err;
 	enum nf_nat_manip_type maniptype;
 
 	if (!(ct_action & TCA_CT_ACT_NAT))
@@ -359,7 +998,22 @@ static int tcf_ct_act_nat(struct sk_buff *skb,
 		return NF_ACCEPT;
 	}
 
-	return ct_nat_execute(skb, ct, ctinfo, range, maniptype);
+	err = ct_nat_execute(skb, ct, ctinfo, range, maniptype);
+	if (err == NF_ACCEPT && ct->status & IPS_DST_NAT) {
+		if (ct->status & IPS_SRC_NAT) {
+			if (maniptype == NF_NAT_MANIP_SRC)
+				maniptype = NF_NAT_MANIP_DST;
+			else
+				maniptype = NF_NAT_MANIP_SRC;
+
+			err = ct_nat_execute(skb, ct, ctinfo, range,
+					     maniptype);
+		} else if (CTINFO2DIR(ctinfo) == IP_CT_DIR_ORIGINAL) {
+			err = ct_nat_execute(skb, ct, ctinfo, NULL,
+					     NF_NAT_MANIP_SRC);
+		}
+	}
+	return err;
 #else
 	return NF_ACCEPT;
 #endif
@@ -376,6 +1030,8 @@ static int tcf_ct_act(struct sk_buff *skb, const struct tc_action *a,
 	struct nf_hook_state state;
 	int nh_ofs, err, retval;
 	struct tcf_ct_params *p;
+	bool skip_add = false;
+	bool defrag = false;
 	struct nf_conn *ct;
 	u8 family;
 
@@ -387,14 +1043,18 @@ static int tcf_ct_act(struct sk_buff *skb, const struct tc_action *a,
 	force = p->ct_action & TCA_CT_ACT_FORCE;
 	tmpl = p->tmpl;
 
+	tcf_lastuse_update(&c->tcf_tm);
+	tcf_action_update_bstats(&c->common, skb);
+
 	if (clear) {
+		tc_skb_cb(skb)->post_ct = false;
 		ct = nf_ct_get(skb, &ctinfo);
 		if (ct) {
-			nf_conntrack_put(&ct->ct_general);
+			nf_ct_put(ct);
 			nf_ct_set(skb, NULL, IP_CT_UNTRACKED);
 		}
 
-		goto out;
+		goto out_clear;
 	}
 
 	family = tcf_ct_skb_nf_family(skb);
@@ -406,10 +1066,10 @@ static int tcf_ct_act(struct sk_buff *skb, const struct tc_action *a,
 	 */
 	nh_ofs = skb_network_offset(skb);
 	skb_pull_rcsum(skb, nh_ofs);
-	err = tcf_ct_handle_fragments(net, skb, family, p->zone);
+	err = tcf_ct_handle_fragments(net, skb, family, p->zone, &defrag);
 	if (err == -EINPROGRESS) {
 		retval = TC_ACT_STOLEN;
-		goto out;
+		goto out_clear;
 	}
 	if (err)
 		goto drop;
@@ -425,11 +1085,14 @@ static int tcf_ct_act(struct sk_buff *skb, const struct tc_action *a,
 	 */
 	cached = tcf_ct_skb_nfct_cached(net, skb, p->zone, force);
 	if (!cached) {
+		if (tcf_ct_flow_table_lookup(p, skb, family)) {
+			skip_add = true;
+			goto do_nat;
+		}
+
 		/* Associate skb with specified zone. */
 		if (tmpl) {
-			ct = nf_ct_get(skb, &ctinfo);
-			if (skb_nfct(skb))
-				nf_conntrack_put(skb_nfct(skb));
+			nf_conntrack_put(skb_nfct(skb));
 			nf_conntrack_get(&tmpl->ct_general);
 			nf_ct_set(skb, tmpl, IP_CT_NEW);
 		}
@@ -442,10 +1105,12 @@ static int tcf_ct_act(struct sk_buff *skb, const struct tc_action *a,
 			goto out_push;
 	}
 
+do_nat:
 	ct = nf_ct_get(skb, &ctinfo);
 	if (!ct)
 		goto out_push;
 	nf_ct_deliver_cached_events(ct);
+	nf_conn_act_ct_ext_fill(skb, ct, ctinfo);
 
 	err = tcf_ct_act_nat(skb, ct, ctinfo, p->ct_action, &p->range, commit);
 	if (err != NF_ACCEPT)
@@ -455,28 +1120,37 @@ static int tcf_ct_act(struct sk_buff *skb, const struct tc_action *a,
 		tcf_ct_act_set_mark(ct, p->mark, p->mark_mask);
 		tcf_ct_act_set_labels(ct, p->labels, p->labels_mask);
 
+		if (!nf_ct_is_confirmed(ct))
+			nf_conn_act_ct_ext_add(ct);
+
 		/* This will take care of sending queued events
 		 * even if the connection is already confirmed.
 		 */
-		nf_conntrack_confirm(skb);
+		if (nf_conntrack_confirm(skb) != NF_ACCEPT)
+			goto drop;
 	}
+
+	if (!skip_add)
+		tcf_ct_flow_table_process_conn(p->ct_ft, ct, ctinfo);
 
 out_push:
 	skb_push_rcsum(skb, nh_ofs);
 
-out:
-	bstats_cpu_update(this_cpu_ptr(a->cpu_bstats), skb);
+	tc_skb_cb(skb)->post_ct = true;
+	tc_skb_cb(skb)->zone = p->zone;
+out_clear:
+	if (defrag)
+		qdisc_skb_cb(skb)->pkt_len = skb->len;
 	return retval;
 
 drop:
-	qstats_drop_inc(this_cpu_ptr(a->cpu_qstats));
+	tcf_action_inc_drop_qstats(&c->common);
 	return TC_ACT_SHOT;
 }
 
 static const struct nla_policy ct_policy[TCA_CT_MAX + 1] = {
-	[TCA_CT_UNSPEC] = { .strict_start_type = TCA_CT_UNSPEC + 1 },
 	[TCA_CT_ACTION] = { .type = NLA_U16 },
-	[TCA_CT_PARMS] = { .type = NLA_EXACT_LEN, .len = sizeof(struct tc_ct) },
+	[TCA_CT_PARMS] = NLA_POLICY_EXACT_LEN(sizeof(struct tc_ct)),
 	[TCA_CT_ZONE] = { .type = NLA_U16 },
 	[TCA_CT_MARK] = { .type = NLA_U32 },
 	[TCA_CT_MARK_MASK] = { .type = NLA_U32 },
@@ -486,10 +1160,8 @@ static const struct nla_policy ct_policy[TCA_CT_MAX + 1] = {
 				 .len = 128 / BITS_PER_BYTE },
 	[TCA_CT_NAT_IPV4_MIN] = { .type = NLA_U32 },
 	[TCA_CT_NAT_IPV4_MAX] = { .type = NLA_U32 },
-	[TCA_CT_NAT_IPV6_MIN] = { .type = NLA_EXACT_LEN,
-				  .len = sizeof(struct in6_addr) },
-	[TCA_CT_NAT_IPV6_MAX] = { .type = NLA_EXACT_LEN,
-				   .len = sizeof(struct in6_addr) },
+	[TCA_CT_NAT_IPV6_MIN] = NLA_POLICY_EXACT_LEN(sizeof(struct in6_addr)),
+	[TCA_CT_NAT_IPV6_MAX] = NLA_POLICY_EXACT_LEN(sizeof(struct in6_addr)),
 	[TCA_CT_NAT_PORT_MIN] = { .type = NLA_U16 },
 	[TCA_CT_NAT_PORT_MAX] = { .type = NLA_U16 },
 };
@@ -579,7 +1251,7 @@ static int tcf_ct_fill_params(struct net *net,
 			      struct nlattr **tb,
 			      struct netlink_ext_ack *extack)
 {
-	struct tc_ct_action_net *tn = net_generic(net, ct_net_id);
+	struct tc_ct_action_net *tn = net_generic(net, act_ct_ops.net_id);
 	struct nf_conntrack_zone zone;
 	struct nf_conn *tmpl;
 	int err;
@@ -637,9 +1309,6 @@ static int tcf_ct_fill_params(struct net *net,
 				   sizeof(p->zone));
 	}
 
-	if (p->zone == NF_CT_DEFAULT_ZONE_ID)
-		return 0;
-
 	nf_ct_zone_init(&zone, p->zone, NF_CT_DEFAULT_ZONE_DIR, 0);
 	tmpl = nf_ct_tmpl_alloc(net, &zone, GFP_KERNEL);
 	if (!tmpl) {
@@ -647,7 +1316,6 @@ static int tcf_ct_fill_params(struct net *net,
 		return -ENOMEM;
 	}
 	__set_bit(IPS_CONFIRMED_BIT, &tmpl->status);
-	nf_conntrack_get(&tmpl->ct_general);
 	p->tmpl = tmpl;
 
 	return 0;
@@ -655,17 +1323,18 @@ static int tcf_ct_fill_params(struct net *net,
 
 static int tcf_ct_init(struct net *net, struct nlattr *nla,
 		       struct nlattr *est, struct tc_action **a,
-		       int replace, int bind, bool rtnl_held,
-		       struct tcf_proto *tp,
+		       struct tcf_proto *tp, u32 flags,
 		       struct netlink_ext_ack *extack)
 {
-	struct tc_action_net *tn = net_generic(net, ct_net_id);
+	struct tc_action_net *tn = net_generic(net, act_ct_ops.net_id);
+	bool bind = flags & TCA_ACT_FLAGS_BIND;
 	struct tcf_ct_params *params = NULL;
 	struct nlattr *tb[TCA_CT_MAX + 1];
 	struct tcf_chain *goto_ch = NULL;
 	struct tc_ct *parm;
 	struct tcf_ct *c;
 	int err, res = 0;
+	u32 index;
 
 	if (!nla) {
 		NL_SET_ERR_MSG_MOD(extack, "Ct requires attributes to be passed");
@@ -681,16 +1350,16 @@ static int tcf_ct_init(struct net *net, struct nlattr *nla,
 		return -EINVAL;
 	}
 	parm = nla_data(tb[TCA_CT_PARMS]);
-
-	err = tcf_idr_check_alloc(tn, &parm->index, a, bind);
+	index = parm->index;
+	err = tcf_idr_check_alloc(tn, &index, a, bind);
 	if (err < 0)
 		return err;
 
 	if (!err) {
-		err = tcf_idr_create(tn, parm->index, est, a,
-				     &act_ct_ops, bind, true);
+		err = tcf_idr_create_from_flags(tn, index, est, a,
+						&act_ct_ops, bind, flags);
 		if (err) {
-			tcf_idr_cleanup(tn, parm->index);
+			tcf_idr_cleanup(tn, index);
 			return err;
 		}
 		res = ACT_P_CREATED;
@@ -698,7 +1367,7 @@ static int tcf_ct_init(struct net *net, struct nlattr *nla,
 		if (bind)
 			return 0;
 
-		if (!replace) {
+		if (!(flags & TCA_ACT_FLAGS_REPLACE)) {
 			tcf_idr_release(*a, bind);
 			return -EEXIST;
 		}
@@ -719,20 +1388,26 @@ static int tcf_ct_init(struct net *net, struct nlattr *nla,
 	if (err)
 		goto cleanup;
 
+	err = tcf_ct_flow_table_get(net, params);
+	if (err)
+		goto cleanup_params;
+
 	spin_lock_bh(&c->tcf_lock);
 	goto_ch = tcf_action_set_ctrlact(*a, parm->action, goto_ch);
-	rcu_swap_protected(c->params, params, lockdep_is_held(&c->tcf_lock));
+	params = rcu_replace_pointer(c->params, params,
+				     lockdep_is_held(&c->tcf_lock));
 	spin_unlock_bh(&c->tcf_lock);
 
 	if (goto_ch)
 		tcf_chain_put_by_act(goto_ch);
 	if (params)
-		kfree_rcu(params, rcu);
-	if (res == ACT_P_CREATED)
-		tcf_idr_insert(tn, *a);
+		call_rcu(&params->rcu, tcf_ct_params_free);
 
 	return res;
 
+cleanup_params:
+	if (params->tmpl)
+		nf_ct_put(params->tmpl);
 cleanup:
 	if (goto_ch)
 		tcf_chain_put_by_act(goto_ch);
@@ -882,34 +1557,34 @@ nla_put_failure:
 	return -1;
 }
 
-static int tcf_ct_walker(struct net *net, struct sk_buff *skb,
-			 struct netlink_callback *cb, int type,
-			 const struct tc_action_ops *ops,
-			 struct netlink_ext_ack *extack)
-{
-	struct tc_action_net *tn = net_generic(net, ct_net_id);
-
-	return tcf_generic_walker(tn, skb, cb, type, ops, extack);
-}
-
-static int tcf_ct_search(struct net *net, struct tc_action **a, u32 index)
-{
-	struct tc_action_net *tn = net_generic(net, ct_net_id);
-
-	return tcf_idr_search(tn, a, index);
-}
-
-static void tcf_stats_update(struct tc_action *a, u64 bytes, u32 packets,
-			     u64 lastuse, bool hw)
+static void tcf_stats_update(struct tc_action *a, u64 bytes, u64 packets,
+			     u64 drops, u64 lastuse, bool hw)
 {
 	struct tcf_ct *c = to_ct(a);
 
-	_bstats_cpu_update(this_cpu_ptr(a->cpu_bstats), bytes, packets);
-
-	if (hw)
-		_bstats_cpu_update(this_cpu_ptr(a->cpu_bstats_hw),
-				   bytes, packets);
+	tcf_action_update_stats(a, bytes, packets, drops, hw);
 	c->tcf_tm.lastuse = max_t(u64, c->tcf_tm.lastuse, lastuse);
+}
+
+static int tcf_ct_offload_act_setup(struct tc_action *act, void *entry_data,
+				    u32 *index_inc, bool bind,
+				    struct netlink_ext_ack *extack)
+{
+	if (bind) {
+		struct flow_action_entry *entry = entry_data;
+
+		entry->id = FLOW_ACTION_CT;
+		entry->ct.action = tcf_ct_action(act);
+		entry->ct.zone = tcf_ct_zone(act);
+		entry->ct.flow_table = tcf_ct_ft(act);
+		*index_inc = 1;
+	} else {
+		struct flow_offload_action *fl_action = entry_data;
+
+		fl_action->id = FLOW_ACTION_CT;
+	}
+
+	return 0;
 }
 
 static struct tc_action_ops act_ct_ops = {
@@ -920,16 +1595,15 @@ static struct tc_action_ops act_ct_ops = {
 	.dump		=	tcf_ct_dump,
 	.init		=	tcf_ct_init,
 	.cleanup	=	tcf_ct_cleanup,
-	.walk		=	tcf_ct_walker,
-	.lookup		=	tcf_ct_search,
 	.stats_update	=	tcf_stats_update,
+	.offload_act_setup =	tcf_ct_offload_act_setup,
 	.size		=	sizeof(struct tcf_ct),
 };
 
 static __net_init int ct_init_net(struct net *net)
 {
-	unsigned int n_bits = FIELD_SIZEOF(struct tcf_ct_params, labels) * 8;
-	struct tc_ct_action_net *tn = net_generic(net, ct_net_id);
+	unsigned int n_bits = sizeof_field(struct tcf_ct_params, labels) * 8;
+	struct tc_ct_action_net *tn = net_generic(net, act_ct_ops.net_id);
 
 	if (nf_connlabels_get(net, n_bits - 1)) {
 		tn->labels = false;
@@ -938,7 +1612,7 @@ static __net_init int ct_init_net(struct net *net)
 		tn->labels = true;
 	}
 
-	return tc_action_net_init(&tn->tn, &act_ct_ops);
+	return tc_action_net_init(net, &tn->tn, &act_ct_ops);
 }
 
 static void __net_exit ct_exit_net(struct list_head *net_list)
@@ -947,31 +1621,56 @@ static void __net_exit ct_exit_net(struct list_head *net_list)
 
 	rtnl_lock();
 	list_for_each_entry(net, net_list, exit_list) {
-		struct tc_ct_action_net *tn = net_generic(net, ct_net_id);
+		struct tc_ct_action_net *tn = net_generic(net, act_ct_ops.net_id);
 
 		if (tn->labels)
 			nf_connlabels_put(net);
 	}
 	rtnl_unlock();
 
-	tc_action_net_exit(net_list, ct_net_id);
+	tc_action_net_exit(net_list, act_ct_ops.net_id);
 }
 
 static struct pernet_operations ct_net_ops = {
 	.init = ct_init_net,
 	.exit_batch = ct_exit_net,
-	.id   = &ct_net_id,
+	.id   = &act_ct_ops.net_id,
 	.size = sizeof(struct tc_ct_action_net),
 };
 
 static int __init ct_init_module(void)
 {
-	return tcf_register_action(&act_ct_ops, &ct_net_ops);
+	int err;
+
+	act_ct_wq = alloc_ordered_workqueue("act_ct_workqueue", 0);
+	if (!act_ct_wq)
+		return -ENOMEM;
+
+	err = tcf_ct_flow_tables_init();
+	if (err)
+		goto err_tbl_init;
+
+	err = tcf_register_action(&act_ct_ops, &ct_net_ops);
+	if (err)
+		goto err_register;
+
+	static_branch_inc(&tcf_frag_xmit_count);
+
+	return 0;
+
+err_register:
+	tcf_ct_flow_tables_uninit();
+err_tbl_init:
+	destroy_workqueue(act_ct_wq);
+	return err;
 }
 
 static void __exit ct_cleanup_module(void)
 {
+	static_branch_dec(&tcf_frag_xmit_count);
 	tcf_unregister_action(&act_ct_ops, &ct_net_ops);
+	tcf_ct_flow_tables_uninit();
+	destroy_workqueue(act_ct_wq);
 }
 
 module_init(ct_init_module);
@@ -981,4 +1680,3 @@ MODULE_AUTHOR("Yossi Kuperman <yossiku@mellanox.com>");
 MODULE_AUTHOR("Marcelo Ricardo Leitner <marcelo.leitner@gmail.com>");
 MODULE_DESCRIPTION("Connection tracking action");
 MODULE_LICENSE("GPL v2");
-

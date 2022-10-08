@@ -6,12 +6,14 @@
  */
 
 #include <linux/i2c.h>
-#include <drm/drmP.h>
+
+#include <drm/drm_edid.h>
+
 #include "psb_intel_drv.h"
 
 /**
  * psb_intel_ddc_probe
- *
+ * @adapter:   Associated I2C adaptor
  */
 bool psb_intel_ddc_probe(struct i2c_adapter *adapter)
 {
@@ -43,6 +45,7 @@ bool psb_intel_ddc_probe(struct i2c_adapter *adapter)
 /**
  * psb_intel_ddc_get_modes - get modelist from monitor
  * @connector: DRM connector device to use
+ * @adapter:   Associated I2C adaptor
  *
  * Fetch the EDID information from @connector using the DDC bus.
  */

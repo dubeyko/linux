@@ -15,6 +15,8 @@
 PAUSE_ON_FAIL=no
 VERBOSE=0
 
+which ping6 > /dev/null 2>&1 && ping6=$(which ping6) || ping6=$(which ping)
+
 ################################################################################
 # helpers
 
@@ -142,7 +144,7 @@ setup()
 
 cleanup()
 {
-	for n in h1 r1 h2 h3 h4
+	for n in h0 r1 h1 h2 h3
 	do
 		ip netns del ${n} 2>/dev/null
 	done
@@ -200,7 +202,7 @@ validate_v6_exception()
 	local rc
 
 	if [ ${ping_sz} != "0" ]; then
-		run_cmd ip netns exec h0 ping6 -s ${ping_sz} -c5 -w5 ${dst}
+		run_cmd ip netns exec h0 ${ping6} -s ${ping_sz} -c5 -w5 ${dst}
 	fi
 
 	if [ "$VERBOSE" = "1" ]; then
@@ -243,7 +245,7 @@ do
 		run_cmd taskset -c ${c} ip netns exec h0 ping -c1 -w1 172.16.10${i}.1
 		[ $? -ne 0 ] && printf "\nERROR: ping to h${i} failed\n" && ret=1
 
-		run_cmd taskset -c ${c} ip netns exec h0 ping6 -c1 -w1 2001:db8:10${i}::1
+		run_cmd taskset -c ${c} ip netns exec h0 ${ping6} -c1 -w1 2001:db8:10${i}::1
 		[ $? -ne 0 ] && printf "\nERROR: ping6 to h${i} failed\n" && ret=1
 
 		[ $ret -ne 0 ] && break

@@ -28,18 +28,6 @@ enum packet_id {
 				PACKET_HEADER_PACKET_ID_SHIFT) + 1
 };
 
-enum goya_dma_direction {
-	DMA_HOST_TO_DRAM,
-	DMA_HOST_TO_SRAM,
-	DMA_DRAM_TO_SRAM,
-	DMA_SRAM_TO_DRAM,
-	DMA_SRAM_TO_HOST,
-	DMA_DRAM_TO_HOST,
-	DMA_DRAM_TO_DRAM,
-	DMA_SRAM_TO_SRAM,
-	DMA_ENUM_MAX
-};
-
 #define GOYA_PKT_CTL_OPCODE_SHIFT	24
 #define GOYA_PKT_CTL_OPCODE_MASK	0x1F000000
 
@@ -51,6 +39,19 @@ enum goya_dma_direction {
 
 #define GOYA_PKT_CTL_MB_SHIFT		31
 #define GOYA_PKT_CTL_MB_MASK		0x80000000
+
+/* All packets have, at least, an 8-byte header, which contains
+ * the packet type. The kernel driver uses the packet header for packet
+ * validation and to perform any necessary required preparation before
+ * sending them off to the hardware.
+ */
+struct goya_packet {
+	__le64 header;
+	/* The rest of the packet data follows. Use the corresponding
+	 * packet_XXX struct to deference the data, based on packet type
+	 */
+	u8 contents[];
+};
 
 struct packet_nop {
 	__le32 reserved;
@@ -73,7 +74,7 @@ struct packet_wreg32 {
 struct packet_wreg_bulk {
 	__le32 size64;
 	__le32 ctl;
-	__le64 values[0]; /* data starts here */
+	__le64 values[]; /* data starts here */
 };
 
 struct packet_msg_long {

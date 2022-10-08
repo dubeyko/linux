@@ -1,7 +1,7 @@
 /*******************************************************************
  * This file is part of the Emulex Linux Device Driver for         *
  * Fibre Channel Host Bus Adapters.                                *
- * Copyright (C) 2017-2019 Broadcom. All Rights Reserved. The term *
+ * Copyright (C) 2017-2022 Broadcom. All Rights Reserved. The term *
  * “Broadcom” refers to Broadcom Inc. and/or its subsidiaries.     *
  * Copyright (C) 2007-2011 Emulex.  All rights reserved.           *
  * EMULEX and SLI are trademarks of Emulex.                        *
@@ -46,12 +46,14 @@
 
 /* nvmestat output buffer size */
 #define LPFC_NVMESTAT_SIZE 8192
-#define LPFC_NVMEKTIME_SIZE 8192
-#define LPFC_CPUCHECK_SIZE 8192
+#define LPFC_IOKTIME_SIZE 8192
 #define LPFC_NVMEIO_TRC_SIZE 8192
 
 /* scsistat output buffer size */
 #define LPFC_SCSISTAT_SIZE 8192
+
+/* Congestion Info Buffer size */
+#define LPFC_CGN_BUF_SIZE 8192
 
 #define LPFC_DEBUG_OUT_LINE_SZ	80
 
@@ -280,6 +282,12 @@ struct lpfc_idiag {
 	void *ptr_private;
 };
 
+#define MAX_DEBUGFS_RX_INFO_SIZE	(128 * LPFC_MAX_RXMONITOR_ENTRY)
+struct lpfc_rx_monitor_debug {
+	char *i_private;
+	char *buffer;
+};
+
 #else
 
 #define lpfc_nvmeio_data(phba, fmt, arg...) \
@@ -291,8 +299,7 @@ struct lpfc_idiag {
 #define LPFC_DUMP_MULTIXRIPOOL_SIZE 8192
 
 enum {
-	DUMP_FCP,
-	DUMP_NVME,
+	DUMP_IO,
 	DUMP_MBX,
 	DUMP_ELS,
 	DUMP_NVMELS,
@@ -330,7 +337,7 @@ enum {
  * This function dumps an entry indexed by @idx from a queue specified by the
  * queue descriptor @q.
  **/
-static inline void
+static void
 lpfc_debug_dump_qe(struct lpfc_queue *q, uint32_t idx)
 {
 	char line_buf[LPFC_LBUF_SZ];
@@ -415,12 +422,9 @@ lpfc_debug_dump_wq(struct lpfc_hba *phba, int qtype, int wqidx)
 	struct lpfc_queue *wq;
 	char *qtypestr;
 
-	if (qtype == DUMP_FCP) {
-		wq = phba->sli4_hba.hdwq[wqidx].fcp_wq;
-		qtypestr = "FCP";
-	} else if (qtype == DUMP_NVME) {
-		wq = phba->sli4_hba.hdwq[wqidx].nvme_wq;
-		qtypestr = "NVME";
+	if (qtype == DUMP_IO) {
+		wq = phba->sli4_hba.hdwq[wqidx].io_wq;
+		qtypestr = "IO";
 	} else if (qtype == DUMP_MBX) {
 		wq = phba->sli4_hba.mbx_wq;
 		qtypestr = "MBX";
@@ -433,7 +437,7 @@ lpfc_debug_dump_wq(struct lpfc_hba *phba, int qtype, int wqidx)
 	} else
 		return;
 
-	if (qtype == DUMP_FCP || qtype == DUMP_NVME)
+	if (qtype == DUMP_IO)
 		pr_err("%s WQ: WQ[Idx:%d|Qid:%d]\n",
 			qtypestr, wqidx, wq->queue_id);
 	else
@@ -459,17 +463,13 @@ lpfc_debug_dump_cq(struct lpfc_hba *phba, int qtype, int wqidx)
 	char *qtypestr;
 	int eqidx;
 
-	/* fcp/nvme wq and cq are 1:1, thus same indexes */
+	/* io wq and cq are 1:1, thus same indexes */
 	eq = NULL;
 
-	if (qtype == DUMP_FCP) {
-		wq = phba->sli4_hba.hdwq[wqidx].fcp_wq;
-		cq = phba->sli4_hba.hdwq[wqidx].fcp_cq;
-		qtypestr = "FCP";
-	} else if (qtype == DUMP_NVME) {
-		wq = phba->sli4_hba.hdwq[wqidx].nvme_wq;
-		cq = phba->sli4_hba.hdwq[wqidx].nvme_cq;
-		qtypestr = "NVME";
+	if (qtype == DUMP_IO) {
+		wq = phba->sli4_hba.hdwq[wqidx].io_wq;
+		cq = phba->sli4_hba.hdwq[wqidx].io_cq;
+		qtypestr = "IO";
 	} else if (qtype == DUMP_MBX) {
 		wq = phba->sli4_hba.mbx_wq;
 		cq = phba->sli4_hba.mbx_cq;
@@ -496,7 +496,7 @@ lpfc_debug_dump_cq(struct lpfc_hba *phba, int qtype, int wqidx)
 		eq = phba->sli4_hba.hdwq[0].hba_eq;
 	}
 
-	if (qtype == DUMP_FCP || qtype == DUMP_NVME)
+	if (qtype == DUMP_IO)
 		pr_err("%s CQ: WQ[Idx:%d|Qid%d]->CQ[Idx%d|Qid%d]"
 			"->EQ[Idx:%d|Qid:%d]:\n",
 			qtypestr, wqidx, wq->queue_id, wqidx, cq->queue_id,
@@ -572,20 +572,11 @@ lpfc_debug_dump_wq_by_id(struct lpfc_hba *phba, int qid)
 	int wq_idx;
 
 	for (wq_idx = 0; wq_idx < phba->cfg_hdw_queue; wq_idx++)
-		if (phba->sli4_hba.hdwq[wq_idx].fcp_wq->queue_id == qid)
+		if (phba->sli4_hba.hdwq[wq_idx].io_wq->queue_id == qid)
 			break;
 	if (wq_idx < phba->cfg_hdw_queue) {
-		pr_err("FCP WQ[Idx:%d|Qid:%d]\n", wq_idx, qid);
-		lpfc_debug_dump_q(phba->sli4_hba.hdwq[wq_idx].fcp_wq);
-		return;
-	}
-
-	for (wq_idx = 0; wq_idx < phba->cfg_hdw_queue; wq_idx++)
-		if (phba->sli4_hba.hdwq[wq_idx].nvme_wq->queue_id == qid)
-			break;
-	if (wq_idx < phba->cfg_hdw_queue) {
-		pr_err("NVME WQ[Idx:%d|Qid:%d]\n", wq_idx, qid);
-		lpfc_debug_dump_q(phba->sli4_hba.hdwq[wq_idx].nvme_wq);
+		pr_err("IO WQ[Idx:%d|Qid:%d]\n", wq_idx, qid);
+		lpfc_debug_dump_q(phba->sli4_hba.hdwq[wq_idx].io_wq);
 		return;
 	}
 
@@ -654,22 +645,12 @@ lpfc_debug_dump_cq_by_id(struct lpfc_hba *phba, int qid)
 	int cq_idx;
 
 	for (cq_idx = 0; cq_idx < phba->cfg_hdw_queue; cq_idx++)
-		if (phba->sli4_hba.hdwq[cq_idx].fcp_cq->queue_id == qid)
+		if (phba->sli4_hba.hdwq[cq_idx].io_cq->queue_id == qid)
 			break;
 
 	if (cq_idx < phba->cfg_hdw_queue) {
-		pr_err("FCP CQ[Idx:%d|Qid:%d]\n", cq_idx, qid);
-		lpfc_debug_dump_q(phba->sli4_hba.hdwq[cq_idx].fcp_cq);
-		return;
-	}
-
-	for (cq_idx = 0; cq_idx < phba->cfg_hdw_queue; cq_idx++)
-		if (phba->sli4_hba.hdwq[cq_idx].nvme_cq->queue_id == qid)
-			break;
-
-	if (cq_idx < phba->cfg_hdw_queue) {
-		pr_err("NVME CQ[Idx:%d|Qid:%d]\n", cq_idx, qid);
-		lpfc_debug_dump_q(phba->sli4_hba.hdwq[cq_idx].nvme_cq);
+		pr_err("IO CQ[Idx:%d|Qid:%d]\n", cq_idx, qid);
+		lpfc_debug_dump_q(phba->sli4_hba.hdwq[cq_idx].io_cq);
 		return;
 	}
 

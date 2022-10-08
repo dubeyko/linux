@@ -46,6 +46,7 @@
 #include <asm/machdep.h>
 #include <asm/hwtest.h>
 #include <asm/io.h>
+#include <asm/config.h>
 
 u_long atari_mch_cookie;
 EXPORT_SYMBOL(atari_mch_cookie);
@@ -77,7 +78,7 @@ static void atari_heartbeat(int on);
 #endif
 
 /* atari specific timer functions (in time.c) */
-extern void atari_sched_init(irq_handler_t);
+extern void atari_sched_init(void);
 extern int atari_mste_hwclk (int, struct rtc_time *);
 extern int atari_tt_hwclk (int, struct rtc_time *);
 
@@ -205,7 +206,6 @@ void __init config_atari(void)
 	mach_get_model	 = atari_get_model;
 	mach_get_hardware_list = atari_get_hardware_list;
 	mach_reset           = atari_reset;
-	mach_max_dma_address = 0xffffff;
 #if IS_ENABLED(CONFIG_INPUT_M68K_BEEP)
 	mach_beep          = atari_mksound;
 #endif
@@ -246,9 +246,9 @@ void __init config_atari(void)
 	} else if (hwreg_present(tt_palette)) {
 		ATARIHW_SET(TT_SHIFTER);
 		pr_cont(" TT_SHIFTER");
-	} else if (hwreg_present(&shifter.bas_hi)) {
-		if (hwreg_present(&shifter.bas_lo) &&
-		    (shifter.bas_lo = 0x0aau, shifter.bas_lo == 0x0aau)) {
+	} else if (hwreg_present(&shifter_st.bas_hi)) {
+		if (hwreg_present(&shifter_st.bas_lo) &&
+		    (shifter_st.bas_lo = 0x0aau, shifter_st.bas_lo == 0x0aau)) {
 			ATARIHW_SET(EXTD_SHIFTER);
 			pr_cont(" EXTD_SHIFTER");
 		} else {
@@ -869,8 +869,20 @@ static const struct resource atari_scsi_tt_rsrc[] __initconst = {
 };
 #endif
 
+/*
+ * Falcon IDE interface
+ */
+
+#define FALCON_IDE_BASE	0xfff00000
+
+static const struct resource atari_falconide_rsrc[] __initconst = {
+	DEFINE_RES_MEM(FALCON_IDE_BASE, 0x38),
+	DEFINE_RES_MEM(FALCON_IDE_BASE + 0x38, 2),
+};
+
 int __init atari_platform_init(void)
 {
+	struct platform_device *pdev;
 	int rv = 0;
 
 	if (!MACH_IS_ATARI)
@@ -911,6 +923,13 @@ int __init atari_platform_init(void)
 		platform_device_register_simple("atari_scsi", -1,
 			atari_scsi_tt_rsrc, ARRAY_SIZE(atari_scsi_tt_rsrc));
 #endif
+
+	if (ATARIHW_PRESENT(IDE)) {
+		pdev = platform_device_register_simple("atari-falcon-ide", -1,
+			atari_falconide_rsrc, ARRAY_SIZE(atari_falconide_rsrc));
+		if (IS_ERR(pdev))
+			rv = PTR_ERR(pdev);
+	}
 
 	return rv;
 }

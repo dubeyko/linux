@@ -1,4 +1,4 @@
-:orphan:
+.. SPDX-License-Identifier: GPL-2.0
 
 =============================
 Human Interface Devices (HID)
@@ -16,3 +16,4 @@ Human Interface Devices (HID)
 
    hid-alps
    intel-ish-hid
+   amd-sfh-hid

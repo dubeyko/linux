@@ -77,7 +77,7 @@ static void rxrpc_send_version_request(struct rxrpc_local *local,
 }
 
 /*
- * Process event packets targetted at a local endpoint.
+ * Process event packets targeted at a local endpoint.
  */
 void rxrpc_process_local_events(struct rxrpc_local *local)
 {
@@ -90,7 +90,7 @@ void rxrpc_process_local_events(struct rxrpc_local *local)
 	if (skb) {
 		struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
 
-		rxrpc_see_skb(skb, rxrpc_skb_rx_seen);
+		rxrpc_see_skb(skb, rxrpc_skb_seen);
 		_debug("{%d},{%u}", local->debug_id, sp->hdr.type);
 
 		switch (sp->hdr.type) {
@@ -108,7 +108,7 @@ void rxrpc_process_local_events(struct rxrpc_local *local)
 			break;
 		}
 
-		rxrpc_free_skb(skb, rxrpc_skb_rx_freed);
+		rxrpc_free_skb(skb, rxrpc_skb_freed);
 	}
 
 	_leave("");

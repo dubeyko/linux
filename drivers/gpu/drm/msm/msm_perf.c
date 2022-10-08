@@ -15,6 +15,9 @@
 #ifdef CONFIG_DEBUG_FS
 
 #include <linux/debugfs.h>
+#include <linux/uaccess.h>
+
+#include <drm/drm_file.h>
 
 #include "msm_drv.h"
 #include "msm_gpu.h"
@@ -152,9 +155,12 @@ static int perf_open(struct inode *inode, struct file *file)
 	struct msm_gpu *gpu = priv->gpu;
 	int ret = 0;
 
-	mutex_lock(&dev->struct_mutex);
+	if (!gpu)
+		return -ENODEV;
 
-	if (perf->open || !gpu) {
+	mutex_lock(&gpu->lock);
+
+	if (perf->open) {
 		ret = -EBUSY;
 		goto out;
 	}
@@ -168,7 +174,7 @@ static int perf_open(struct inode *inode, struct file *file)
 	perf->next_jiffies = jiffies + SAMPLE_TIME;
 
 out:
-	mutex_unlock(&dev->struct_mutex);
+	mutex_unlock(&gpu->lock);
 	return ret;
 }
 
@@ -194,7 +200,6 @@ int msm_perf_debugfs_init(struct drm_minor *minor)
 {
 	struct msm_drm_private *priv = minor->dev->dev_private;
 	struct msm_perf_state *perf;
-	struct dentry *ent;
 
 	/* only create on first minor: */
 	if (priv->perf)
@@ -209,19 +214,9 @@ int msm_perf_debugfs_init(struct drm_minor *minor)
 	mutex_init(&perf->read_lock);
 	priv->perf = perf;
 
-	ent = debugfs_create_file("perf", S_IFREG | S_IRUGO,
-			minor->debugfs_root, perf, &perf_debugfs_fops);
-	if (!ent) {
-		DRM_ERROR("Cannot create /sys/kernel/debug/dri/%pd/perf\n",
-				minor->debugfs_root);
-		goto fail;
-	}
-
+	debugfs_create_file("perf", S_IFREG | S_IRUGO, minor->debugfs_root,
+			    perf, &perf_debugfs_fops);
 	return 0;
-
-fail:
-	msm_perf_debugfs_cleanup(priv);
-	return -1;
 }
 
 void msm_perf_debugfs_cleanup(struct msm_drm_private *priv)

@@ -4,6 +4,8 @@
  * Author: James.Qian.Wang <james.qian.wang@arm.com>
  *
  */
+#include <linux/of.h>
+
 #include <drm/drm_print.h>
 
 #include "komeda_dev.h"
@@ -46,16 +48,17 @@ void komeda_pipeline_destroy(struct komeda_dev *mdev,
 {
 	struct komeda_component *c;
 	int i;
+	unsigned long avail_comps = pipe->avail_comps;
 
-	dp_for_each_set_bit(i, pipe->avail_comps) {
+	for_each_set_bit(i, &avail_comps, 32) {
 		c = komeda_pipeline_get_component(pipe, i);
 		komeda_component_destroy(mdev, c);
 	}
 
 	clk_put(pipe->pxlclk);
-	clk_put(pipe->aclk);
 
-	of_node_put(pipe->of_output_dev);
+	of_node_put(pipe->of_output_links[0]);
+	of_node_put(pipe->of_output_links[1]);
 	of_node_put(pipe->of_output_port);
 	of_node_put(pipe->of_node);
 
@@ -92,6 +95,12 @@ komeda_pipeline_get_component_pos(struct komeda_pipeline *pipe, int id)
 	case KOMEDA_COMPONENT_SCALER1:
 		pos = to_cpos(pipe->scalers[id - KOMEDA_COMPONENT_SCALER0]);
 		break;
+	case KOMEDA_COMPONENT_SPLITTER:
+		pos = to_cpos(pipe->splitter);
+		break;
+	case KOMEDA_COMPONENT_MERGER:
+		pos = to_cpos(pipe->merger);
+		break;
 	case KOMEDA_COMPONENT_IPS0:
 	case KOMEDA_COMPONENT_IPS1:
 		temp = mdev->pipelines[id - KOMEDA_COMPONENT_IPS0];
@@ -124,6 +133,29 @@ komeda_pipeline_get_component(struct komeda_pipeline *pipe, int id)
 		c = *pos;
 
 	return c;
+}
+
+struct komeda_component *
+komeda_pipeline_get_first_component(struct komeda_pipeline *pipe,
+				    u32 comp_mask)
+{
+	struct komeda_component *c = NULL;
+	unsigned long comp_mask_local = (unsigned long)comp_mask;
+	int id;
+
+	id = find_first_bit(&comp_mask_local, 32);
+	if (id < 32)
+		c = komeda_pipeline_get_component(pipe, id);
+
+	return c;
+}
+
+static struct komeda_component *
+komeda_component_pickup_input(struct komeda_component *c, u32 avail_comps)
+{
+	u32 avail_inputs = c->supported_inputs & (avail_comps);
+
+	return komeda_pipeline_get_first_component(c->pipeline, avail_inputs);
 }
 
 /** komeda_component_add - Add a component to &komeda_pipeline */
@@ -218,12 +250,19 @@ static void komeda_pipeline_dump(struct komeda_pipeline *pipe)
 {
 	struct komeda_component *c;
 	int id;
+	unsigned long avail_comps = pipe->avail_comps;
 
-	DRM_INFO("Pipeline-%d: n_layers: %d, n_scalers: %d, output: %s\n",
+	DRM_INFO("Pipeline-%d: n_layers: %d, n_scalers: %d, output: %s.\n",
 		 pipe->id, pipe->n_layers, pipe->n_scalers,
-		 pipe->of_output_dev ? pipe->of_output_dev->full_name : "none");
+		 pipe->dual_link ? "dual-link" : "single-link");
+	DRM_INFO("	output_link[0]: %s.\n",
+		 pipe->of_output_links[0] ?
+		 pipe->of_output_links[0]->full_name : "none");
+	DRM_INFO("	output_link[1]: %s.\n",
+		 pipe->of_output_links[1] ?
+		 pipe->of_output_links[1]->full_name : "none");
 
-	dp_for_each_set_bit(id, pipe->avail_comps) {
+	for_each_set_bit(id, &avail_comps, 32) {
 		c = komeda_pipeline_get_component(pipe, id);
 
 		komeda_component_dump(c);
@@ -235,8 +274,9 @@ static void komeda_component_verify_inputs(struct komeda_component *c)
 	struct komeda_pipeline *pipe = c->pipeline;
 	struct komeda_component *input;
 	int id;
+	unsigned long supported_inputs = c->supported_inputs;
 
-	dp_for_each_set_bit(id, c->supported_inputs) {
+	for_each_set_bit(id, &supported_inputs, 32) {
 		input = komeda_pipeline_get_component(pipe, id);
 		if (!input) {
 			c->supported_inputs &= ~(BIT(id));
@@ -249,16 +289,56 @@ static void komeda_component_verify_inputs(struct komeda_component *c)
 	}
 }
 
+static struct komeda_layer *
+komeda_get_layer_split_right_layer(struct komeda_pipeline *pipe,
+				   struct komeda_layer *left)
+{
+	int index = left->base.id - KOMEDA_COMPONENT_LAYER0;
+	int i;
+
+	for (i = index + 1; i < pipe->n_layers; i++)
+		if (left->layer_type == pipe->layers[i]->layer_type)
+			return pipe->layers[i];
+	return NULL;
+}
+
 static void komeda_pipeline_assemble(struct komeda_pipeline *pipe)
 {
 	struct komeda_component *c;
-	int id;
+	struct komeda_layer *layer;
+	int i, id;
+	unsigned long avail_comps = pipe->avail_comps;
 
-	dp_for_each_set_bit(id, pipe->avail_comps) {
+	for_each_set_bit(id, &avail_comps, 32) {
 		c = komeda_pipeline_get_component(pipe, id);
-
 		komeda_component_verify_inputs(c);
 	}
+	/* calculate right layer for the layer split */
+	for (i = 0; i < pipe->n_layers; i++) {
+		layer = pipe->layers[i];
+
+		layer->right = komeda_get_layer_split_right_layer(pipe, layer);
+	}
+
+	if (pipe->dual_link && !pipe->ctrlr->supports_dual_link) {
+		pipe->dual_link = false;
+		DRM_WARN("PIPE-%d doesn't support dual-link, ignore DT dual-link configuration.\n",
+			 pipe->id);
+	}
+}
+
+/* if pipeline_A accept another pipeline_B's component as input, treat
+ * pipeline_B as slave of pipeline_A.
+ */
+struct komeda_pipeline *
+komeda_pipeline_get_slave(struct komeda_pipeline *master)
+{
+	struct komeda_component *slave;
+
+	slave = komeda_component_pickup_input(&master->compiz->base,
+					      KOMEDA_PIPELINE_COMPIZS);
+
+	return slave ? slave->pipeline : NULL;
 }
 
 int komeda_assemble_pipelines(struct komeda_dev *mdev)
@@ -281,13 +361,15 @@ void komeda_pipeline_dump_register(struct komeda_pipeline *pipe,
 {
 	struct komeda_component *c;
 	u32 id;
+	unsigned long avail_comps;
 
 	seq_printf(sf, "\n======== Pipeline-%d ==========\n", pipe->id);
 
 	if (pipe->funcs && pipe->funcs->dump_register)
 		pipe->funcs->dump_register(pipe, sf);
 
-	dp_for_each_set_bit(id, pipe->avail_comps) {
+	avail_comps = pipe->avail_comps;
+	for_each_set_bit(id, &avail_comps, 32) {
 		c = komeda_pipeline_get_component(pipe, id);
 
 		seq_printf(sf, "\n------%s------\n", c->name);

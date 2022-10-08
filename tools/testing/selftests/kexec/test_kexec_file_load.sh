@@ -37,11 +37,20 @@ is_ima_sig_required()
 	# sequentially.  As a result, a policy rule may be defined, but
 	# might not necessarily be used.  This test assumes if a policy
 	# rule is specified, that is the intent.
+
+	# First check for appended signature (modsig), then xattr
 	if [ $ima_read_policy -eq 1 ]; then
 		check_ima_policy "appraise" "func=KEXEC_KERNEL_CHECK" \
-			"appraise_type=imasig"
+			"appraise_type=imasig|modsig"
 		ret=$?
-		[ $ret -eq 1 ] && log_info "IMA signature required";
+		if [ $ret -eq 1 ]; then
+			log_info "IMA or appended(modsig) signature required"
+		else
+			check_ima_policy "appraise" "func=KEXEC_KERNEL_CHECK" \
+				"appraise_type=imasig"
+			ret=$?
+			[ $ret -eq 1 ] && log_info "IMA signature required";
+		fi
 	fi
 	return $ret
 }
@@ -84,6 +93,23 @@ check_for_imasig()
 	return $ret
 }
 
+# Return 1 for appended signature (modsig) found and 0 for not found.
+check_for_modsig()
+{
+	local module_sig_string="~Module signature appended~"
+	local ret=0
+
+	tail --bytes $((${#module_sig_string} + 1)) $KERNEL_IMAGE | \
+		grep -q "$module_sig_string"
+	if [ $? -eq 0 ]; then
+		ret=1
+		log_info "kexec kernel image modsig signed"
+	else
+		log_info "kexec kernel image not modsig signed"
+	fi
+	return $ret
+}
+
 kexec_file_load_test()
 {
 	local succeed_msg="kexec_file_load succeeded"
@@ -98,7 +124,8 @@ kexec_file_load_test()
 		# In secureboot mode with an architecture  specific
 		# policy, make sure either an IMA or PE signature exists.
 		if [ $secureboot -eq 1 ] && [ $arch_policy -eq 1 ] && \
-			[ $ima_signed -eq 0 ] && [ $pe_signed -eq 0 ]; then
+			[ $ima_signed -eq 0 ] && [ $pe_signed -eq 0 ] \
+			  && [ $ima_modsig -eq 0 ]; then
 			log_fail "$succeed_msg (missing sig)"
 		fi
 
@@ -107,7 +134,8 @@ kexec_file_load_test()
 			log_fail "$succeed_msg (missing PE sig)"
 		fi
 
-		if [ $ima_sig_required -eq 1 ] && [ $ima_signed -eq 0 ]; then
+		if [ $ima_sig_required -eq 1 ] && [ $ima_signed -eq 0 ] \
+		     && [ $ima_modsig -eq 0 ]; then
 			log_fail "$succeed_msg (missing IMA sig)"
 		fi
 
@@ -198,11 +226,18 @@ get_secureboot_mode
 secureboot=$?
 
 # Are there pe and ima signatures
-check_for_pesig
-pe_signed=$?
+if [ "$(get_arch)" == 'ppc64le' ]; then
+	pe_signed=0
+else
+	check_for_pesig
+	pe_signed=$?
+fi
 
 check_for_imasig
 ima_signed=$?
+
+check_for_modsig
+ima_modsig=$?
 
 # Test loading the kernel image via kexec_file_load syscall
 kexec_file_load_test

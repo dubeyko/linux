@@ -41,6 +41,14 @@ KCONFIG_CONFIG
 This environment variable can be used to specify a default kernel config
 file name to override the default name of ".config".
 
+KCONFIG_DEFCONFIG_LIST
+----------------------
+
+This environment variable specifies a list of config files which can be used
+as a base configuration in case the .config does not exist yet. Entries in
+the list are separated with whitespaces to each other, and the first one
+that exists is used.
+
 KCONFIG_OVERWRITECONFIG
 -----------------------
 If you set KCONFIG_OVERWRITECONFIG in the environment, Kconfig will not
@@ -154,11 +162,6 @@ KCONFIG_AUTOCONFIG
 This environment variable can be set to specify the path & name of the
 "auto.conf" file.  Its default value is "include/config/auto.conf".
 
-KCONFIG_TRISTATE
-----------------
-This environment variable can be set to specify the path & name of the
-"tristate.conf" file.  Its default value is "include/config/tristate.conf".
-
 KCONFIG_AUTOHEADER
 ------------------
 This environment variable can be set to specify the path & name of the
@@ -264,6 +267,7 @@ NCONFIG_MODE
 This mode shows all sub-menus in one large tree.
 
 Example::
+
 	make NCONFIG_MODE=single_menu nconfig
 
 ----------------------------------------------------------------------
@@ -277,9 +281,12 @@ Searching in xconfig:
 	names, so you have to know something close to what you are
 	looking for.
 
-	Example:
+	Example::
+
 		Ctrl-F hotplug
-	or
+
+	or::
+
 		Menu: File, Search, hotplug
 
 	lists all config symbol entries that contain "hotplug" in

@@ -549,12 +549,12 @@ static int palmas_i2c_probe(struct i2c_client *i2c,
 			palmas->i2c_clients[i] = i2c;
 		else {
 			palmas->i2c_clients[i] =
-					i2c_new_dummy(i2c->adapter,
+					i2c_new_dummy_device(i2c->adapter,
 							i2c->addr + i);
-			if (!palmas->i2c_clients[i]) {
+			if (IS_ERR(palmas->i2c_clients[i])) {
 				dev_err(palmas->dev,
 					"can't attach client %d\n", i);
-				ret = -ENOMEM;
+				ret = PTR_ERR(palmas->i2c_clients[i]);
 				goto err_i2c;
 			}
 			palmas->i2c_clients[i]->dev.of_node = of_node_get(node);
@@ -700,7 +700,7 @@ err_i2c:
 	return ret;
 }
 
-static int palmas_i2c_remove(struct i2c_client *i2c)
+static void palmas_i2c_remove(struct i2c_client *i2c)
 {
 	struct palmas *palmas = i2c_get_clientdata(i2c);
 	int i;
@@ -716,8 +716,6 @@ static int palmas_i2c_remove(struct i2c_client *i2c)
 		pm_power_off = NULL;
 		palmas_dev = NULL;
 	}
-
-	return 0;
 }
 
 static const struct i2c_device_id palmas_i2c_id[] = {

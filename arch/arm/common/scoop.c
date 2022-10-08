@@ -8,7 +8,7 @@
  */
 
 #include <linux/device.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
@@ -239,9 +239,6 @@ err_ioremap:
 static int scoop_remove(struct platform_device *pdev)
 {
 	struct scoop_dev *sdev = platform_get_drvdata(pdev);
-
-	if (!sdev)
-		return -EINVAL;
 
 	if (sdev->gpio.base != -1)
 		gpiochip_remove(&sdev->gpio);

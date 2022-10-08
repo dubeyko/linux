@@ -26,9 +26,18 @@
 #include "../kselftest.h"
 
 #define TEST_SCANCODES	10
-#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
 #define SYSFS_PATH_MAX 256
 #define DNAME_PATH_MAX 256
+
+/*
+ * Support ancient lirc.h which does not have these values. Can be removed
+ * once RHEL 8 is no longer a relevant testing platform.
+ */
+#if RC_PROTO_MAX < 26
+#define RC_PROTO_RCMM12 24
+#define RC_PROTO_RCMM24 25
+#define RC_PROTO_RCMM32 26
+#endif
 
 static const struct {
 	enum rc_proto proto;
@@ -54,9 +63,9 @@ static const struct {
 	{ RC_PROTO_RC6_MCE, "rc-6-mce", 0x00007fff, "rc-6" },
 	{ RC_PROTO_SHARP, "sharp", 0x1fff, "sharp" },
 	{ RC_PROTO_IMON, "imon", 0x7fffffff, "imon" },
-	{ RC_PROTO_RCMM12, "rcmm-12", 0x00000fff, "rcmm" },
-	{ RC_PROTO_RCMM24, "rcmm-24", 0x00ffffff, "rcmm" },
-	{ RC_PROTO_RCMM32, "rcmm-32", 0xffffffff, "rcmm" },
+	{ RC_PROTO_RCMM12, "rcmm-12", 0x00000fff, "rc-mm" },
+	{ RC_PROTO_RCMM24, "rcmm-24", 0x00ffffff, "rc-mm" },
+	{ RC_PROTO_RCMM32, "rcmm-32", 0xffffffff, "rc-mm" },
 };
 
 int lirc_open(const char *rc)

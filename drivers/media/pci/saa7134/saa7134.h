@@ -98,7 +98,6 @@ struct saa7134_tvaudio {
 };
 
 struct saa7134_format {
-	char           *name;
 	unsigned int   fourcc;
 	unsigned int   depth;
 	unsigned int   pm;
@@ -329,6 +328,7 @@ struct saa7134_card_ir {
 #define SAA7134_BOARD_AVERMEDIA_505         194
 #define SAA7134_BOARD_LEADTEK_WINFAST_TV2100_FM 195
 #define SAA7134_BOARD_SNAZIO_TVPVR_PRO      196
+#define SAA7134_BOARD_LEADTEK_WINFAST_HDTV200_H 197
 
 #define SAA7134_MAXBOARDS 32
 #define SAA7134_INPUT_MAX 8
@@ -510,7 +510,7 @@ struct saa7134_dmasound {
 	void			   *vaddr;
 	struct scatterlist	   *sglist;
 	int                        sglen;
-	int                        nr_pages;
+	unsigned long              nr_pages;
 	unsigned int               dma_blk;
 	unsigned int               read_offset;
 	unsigned int               read_count;

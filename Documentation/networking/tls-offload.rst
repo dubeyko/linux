@@ -424,13 +424,46 @@ Statistics
 Following minimum set of TLS-related statistics should be reported
 by the driver:
 
- * ``rx_tls_decrypted`` - number of successfully decrypted TLS segments
- * ``tx_tls_encrypted`` - number of in-order TLS segments passed to device
-   for encryption
+ * ``rx_tls_decrypted_packets`` - number of successfully decrypted RX packets
+   which were part of a TLS stream.
+ * ``rx_tls_decrypted_bytes`` - number of TLS payload bytes in RX packets
+   which were successfully decrypted.
+ * ``rx_tls_ctx`` - number of TLS RX HW offload contexts added to device for
+   decryption.
+ * ``rx_tls_del`` - number of TLS RX HW offload contexts deleted from device
+   (connection has finished).
+ * ``rx_tls_resync_req_pkt`` - number of received TLS packets with a resync
+    request.
+ * ``rx_tls_resync_req_start`` - number of times the TLS async resync request
+    was started.
+ * ``rx_tls_resync_req_end`` - number of times the TLS async resync request
+    properly ended with providing the HW tracked tcp-seq.
+ * ``rx_tls_resync_req_skip`` - number of times the TLS async resync request
+    procedure was started by not properly ended.
+ * ``rx_tls_resync_res_ok`` - number of times the TLS resync response call to
+    the driver was successfully handled.
+ * ``rx_tls_resync_res_skip`` - number of times the TLS resync response call to
+    the driver was terminated unsuccessfully.
+ * ``rx_tls_err`` - number of RX packets which were part of a TLS stream
+   but were not decrypted due to unexpected error in the state machine.
+ * ``tx_tls_encrypted_packets`` - number of TX packets passed to the device
+   for encryption of their TLS payload.
+ * ``tx_tls_encrypted_bytes`` - number of TLS payload bytes in TX packets
+   passed to the device for encryption.
+ * ``tx_tls_ctx`` - number of TLS TX HW offload contexts added to device for
+   encryption.
  * ``tx_tls_ooo`` - number of TX packets which were part of a TLS stream
-   but did not arrive in the expected order
- * ``tx_tls_drop_no_sync_data`` - number of TX packets dropped because
-   they arrived out of order and associated record could not be found
+   but did not arrive in the expected order.
+ * ``tx_tls_skip_no_sync_data`` - number of TX packets which were part of
+   a TLS stream and arrived out-of-order, but skipped the HW offload routine
+   and went to the regular transmit flow as they were retransmissions of the
+   connection handshake.
+ * ``tx_tls_drop_no_sync_data`` - number of TX packets which were part of
+   a TLS stream dropped, because they arrived out of order and associated
+   record could not be found.
+ * ``tx_tls_drop_bypass_req`` - number of TX packets which were part of a TLS
+   stream dropped, because they contain both data that has been encrypted by
+   software and data that expects hardware crypto offload.
 
 Notable corner cases, exceptions and additional requirements
 ============================================================
@@ -491,25 +524,16 @@ on TCP retransmissions to handle corner cases is not acceptable.
 TLS device features
 -------------------
 
-Drivers should ignore the changes to TLS the device feature flags.
+Drivers should ignore the changes to the TLS device feature flags.
 These flags will be acted upon accordingly by the core ``ktls`` code.
 TLS device feature flags only control adding of new TLS connection
 offloads, old connections will remain active after flags are cleared.
 
-Known bugs
-==========
-
-skb_orphan() leaks clear text
------------------------------
-
-Currently drivers depend on the :c:member:`sk` member of
-:c:type:`struct sk_buff <sk_buff>` to identify segments requiring
-encryption. Any operation which removes or does not preserve the socket
-association such as :c:func:`skb_orphan` or :c:func:`skb_clone`
-will cause the driver to miss the packets and lead to clear text leaks.
-
-Redirects leak clear text
--------------------------
-
-In the RX direction, if segment has already been decrypted by the device
-and it gets redirected or mirrored - clear text will be transmitted out.
+TLS encryption cannot be offloaded to devices without checksum calculation
+offload. Hence, TLS TX device feature flag requires TX csum offload being set.
+Disabling the latter implies clearing the former. Disabling TX checksum offload
+should not affect old connections, and drivers should make sure checksum
+calculation does not break for them.
+Similarly, device-offloaded TLS decryption implies doing RXCSUM. If the user
+does not want to enable RX csum offload, TLS RX device feature is disabled
+as well.

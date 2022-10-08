@@ -18,7 +18,6 @@ ALL_TARGETS := pcitest
 ALL_PROGRAMS := $(patsubst %,$(OUTPUT)%,$(ALL_TARGETS))
 
 SCRIPTS := pcitest.sh
-ALL_SCRIPTS := $(patsubst %,$(OUTPUT)%,$(SCRIPTS))
 
 all: $(ALL_PROGRAMS)
 
@@ -43,14 +42,14 @@ $(OUTPUT)pcitest: $(PCITEST_IN)
 clean:
 	rm -f $(ALL_PROGRAMS)
 	rm -rf $(OUTPUT)include/
-	find $(if $(OUTPUT),$(OUTPUT),.) -name '*.o' -delete -o -name '\.*.d' -delete
+	find $(or $(OUTPUT),.) -name '*.o' -delete -o -name '\.*.d' -delete
 
 install: $(ALL_PROGRAMS)
 	install -d -m 755 $(DESTDIR)$(bindir);		\
-	for program in $(ALL_PROGRAMS) pcitest.sh; do	\
+	for program in $(ALL_PROGRAMS); do		\
 		install $$program $(DESTDIR)$(bindir);	\
 	done;						\
-	for script in $(ALL_SCRIPTS); do		\
+	for script in $(SCRIPTS); do			\
 		install $$script $(DESTDIR)$(bindir);	\
 	done
 

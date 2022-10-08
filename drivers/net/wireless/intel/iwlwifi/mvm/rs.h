@@ -4,12 +4,7 @@
  * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
  * Copyright(c) 2015 Intel Mobile Communications GmbH
  * Copyright(c) 2017 Intel Deutschland GmbH
- * Copyright(c) 2018 Intel Corporation
- *
- * Contact Information:
- *  Intel Linux Wireless <linuxwifi@intel.com>
- * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
- *
+ * Copyright(c) 2018 - 2019 Intel Corporation
  *****************************************************************************/
 
 #ifndef __rs_h__
@@ -35,11 +30,6 @@ struct iwl_rs_rate_info {
 };
 
 #define IWL_RATE_60M_PLCP 3
-
-enum {
-	IWL_RATE_INVM_INDEX = IWL_RATE_COUNT,
-	IWL_RATE_INVALID = IWL_RATE_COUNT,
-};
 
 #define LINK_QUAL_MAX_RETRY_NUM 16
 
@@ -210,13 +200,6 @@ struct rs_rate {
 #define is_ht40(rate)         ((rate)->bw == RATE_MCS_CHAN_WIDTH_40)
 #define is_ht80(rate)         ((rate)->bw == RATE_MCS_CHAN_WIDTH_80)
 #define is_ht160(rate)        ((rate)->bw == RATE_MCS_CHAN_WIDTH_160)
-
-#define IWL_MAX_MCS_DISPLAY_SIZE	12
-
-struct iwl_rate_mcs_info {
-	char	mbps[IWL_MAX_MCS_DISPLAY_SIZE];
-	char	mcs[IWL_MAX_MCS_DISPLAY_SIZE];
-};
 
 /**
  * struct iwl_lq_sta_rs_fw - rate and related statistics for RS in FW
@@ -390,6 +373,7 @@ struct iwl_lq_sta {
 		s8 last_rssi;
 		struct rs_rate_stats tx_stats[RS_COLUMN_COUNT][IWL_RATE_COUNT];
 		struct iwl_mvm *drv;
+		spinlock_t lock; /* for races in reinit/update table */
 	} pers;
 };
 
@@ -444,10 +428,6 @@ int iwl_mvm_tx_protection(struct iwl_mvm *mvm, struct iwl_mvm_sta *mvmsta,
 void iwl_mvm_reset_frame_stats(struct iwl_mvm *mvm);
 #endif
 
-#ifdef CONFIG_MAC80211_DEBUGFS
-void rs_remove_sta_debugfs(void *mvm, void *mvm_sta);
-#endif
-
 void iwl_mvm_rs_add_sta(struct iwl_mvm *mvm, struct iwl_mvm_sta *mvmsta);
 void rs_fw_rate_init(struct iwl_mvm *mvm, struct ieee80211_sta *sta,
 		     enum nl80211_band band, bool update);
@@ -455,4 +435,6 @@ int rs_fw_tx_protection(struct iwl_mvm *mvm, struct iwl_mvm_sta *mvmsta,
 			bool enable);
 void iwl_mvm_tlc_update_notif(struct iwl_mvm *mvm,
 			      struct iwl_rx_cmd_buffer *rxb);
+
+u16 rs_fw_get_max_amsdu_len(struct ieee80211_sta *sta);
 #endif /* __rs__ */

@@ -1,4 +1,4 @@
-:orphan:
+.. SPDX-License-Identifier: GPL-2.0
 
 ===================
 Kernel Livepatching
@@ -12,6 +12,9 @@ Kernel Livepatching
     cumulative-patches
     module-elf-format
     shadow-vars
+    system-state
+    reliable-stacktrace
+    api
 
 .. only::  subproject and html
 

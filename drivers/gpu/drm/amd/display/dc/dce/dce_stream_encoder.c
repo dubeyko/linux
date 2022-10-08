@@ -31,7 +31,6 @@
 #define DC_LOGGER \
 		enc110->base.ctx->logger
 
-
 #define REG(reg)\
 	(enc110->regs->reg)
 
@@ -65,7 +64,6 @@ static void dce110_update_generic_info_packet(
 	uint32_t packet_index,
 	const struct dc_info_packet *info_packet)
 {
-	uint32_t regval;
 	/* TODOFPGA Figure out a proper number for max_retries polling for lock
 	 * use 50 for now.
 	 */
@@ -97,7 +95,7 @@ static void dce110_update_generic_info_packet(
 	}
 	/* choose which generic packet to use */
 	{
-		regval = REG_READ(AFMT_VBI_PACKET_CONTROL);
+		REG_READ(AFMT_VBI_PACKET_CONTROL);
 		REG_UPDATE(AFMT_VBI_PACKET_CONTROL,
 				AFMT_GENERIC_INDEX, packet_index);
 	}
@@ -135,7 +133,7 @@ static void dce110_update_generic_info_packet(
 			AFMT_GENERIC0_UPDATE, (packet_index == 0),
 			AFMT_GENERIC2_UPDATE, (packet_index == 2));
 	}
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
+
 	if (REG(AFMT_VBI_PACKET_CONTROL1)) {
 		switch (packet_index) {
 		case 0:
@@ -174,7 +172,6 @@ static void dce110_update_generic_info_packet(
 			break;
 		}
 	}
-#endif
 }
 
 static void dce110_update_hdmi_info_packet(
@@ -229,7 +226,6 @@ static void dce110_update_hdmi_info_packet(
 				HDMI_GENERIC1_SEND, send,
 				HDMI_GENERIC1_LINE, line);
 		break;
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 	case 4:
 		if (REG(HDMI_GENERIC_PACKET_CONTROL2))
 			REG_UPDATE_3(HDMI_GENERIC_PACKET_CONTROL2,
@@ -258,7 +254,6 @@ static void dce110_update_hdmi_info_packet(
 					HDMI_GENERIC1_SEND, send,
 					HDMI_GENERIC1_LINE, line);
 		break;
-#endif
 	default:
 		/* invalid HW packet index */
 		DC_LOG_WARNING(
@@ -273,9 +268,9 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 	struct stream_encoder *enc,
 	struct dc_crtc_timing *crtc_timing,
 	enum dc_color_space output_color_space,
+	bool use_vsc_sdp_for_colorimetry,
 	uint32_t enable_sdp_splitting)
 {
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 	uint32_t h_active_start;
 	uint32_t v_active_start;
 	uint32_t misc0 = 0;
@@ -286,7 +281,6 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 	uint8_t colorimetry_bpc;
 	uint8_t dynamic_range_rgb = 0; /*full range*/
 	uint8_t dynamic_range_ycbcr = 1; /*bt709*/
-#endif
 
 	struct dce110_stream_encoder *enc110 = DCE110STRENC_FROM_STRENC(enc);
 	struct dc_crtc_timing hw_crtc_timing = *crtc_timing;
@@ -327,10 +321,8 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 		if (enc110->se_mask->DP_VID_M_DOUBLE_VALUE_EN)
 			REG_UPDATE(DP_VID_TIMING, DP_VID_M_DOUBLE_VALUE_EN, 1);
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 		if (enc110->se_mask->DP_VID_N_MUL)
 			REG_UPDATE(DP_VID_TIMING, DP_VID_N_MUL, 1);
-#endif
 		break;
 	default:
 		REG_UPDATE(DP_PIXEL_FORMAT, DP_PIXEL_ENCODING,
@@ -338,10 +330,8 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 		break;
 	}
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 	if (REG(DP_MSA_MISC))
 		misc1 = REG_READ(DP_MSA_MISC);
-#endif
 
 	/* set color depth */
 
@@ -372,7 +362,6 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 	/* set dynamic range and YCbCr range */
 
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 	switch (hw_crtc_timing.display_color_depth) {
 	case COLOR_DEPTH_666:
 		colorimetry_bpc = 0;
@@ -418,6 +407,7 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 			break;
 		case COLOR_SPACE_YCBCR709:
 		case COLOR_SPACE_YCBCR709_LIMITED:
+		case COLOR_SPACE_YCBCR709_BLACK:
 			misc0 = misc0 | 0x18; /* bit3=1, bit4=1 */
 			misc1 = misc1 & ~0x80; /* bit7 = 0*/
 			dynamic_range_ycbcr = 1; /*bt709*/
@@ -451,7 +441,6 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 				DP_DYN_RANGE, dynamic_range_rgb,
 				DP_YCBCR_RANGE, dynamic_range_ycbcr);
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 		if (REG(DP_MSA_COLORIMETRY))
 			REG_SET(DP_MSA_COLORIMETRY, 0, DP_MSA_MISC0, misc0);
 
@@ -465,7 +454,6 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 			REG_SET_2(DP_MSA_TIMING_PARAM1, 0,
 					DP_MSA_HTOTAL, hw_crtc_timing.h_total,
 					DP_MSA_VTOTAL, hw_crtc_timing.v_total);
-#endif
 
 		/* calcuate from vesa timing parameters
 		 * h_active_start related to leading edge of sync
@@ -486,7 +474,6 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 				hw_crtc_timing.v_front_porch;
 
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 		/* start at begining of left border */
 		if (REG(DP_MSA_TIMING_PARAM2))
 			REG_SET_2(DP_MSA_TIMING_PARAM2, 0,
@@ -511,9 +498,7 @@ static void dce110_stream_encoder_dp_set_stream_attribute(
 				hw_crtc_timing.h_addressable + hw_crtc_timing.h_border_right,
 				DP_MSA_VHEIGHT, hw_crtc_timing.v_border_top +
 				hw_crtc_timing.v_addressable + hw_crtc_timing.v_border_bottom);
-#endif
 	}
-#endif
 }
 
 static void dce110_stream_encoder_set_stream_attribute_helper(
@@ -560,6 +545,7 @@ static void dce110_stream_encoder_hdmi_set_stream_attribute(
 	cntl.enable_dp_audio = enable_audio;
 	cntl.pixel_clock = actual_pix_clk_khz;
 	cntl.lanes_number = LANE_COUNT_FOUR;
+	cntl.color_depth = crtc_timing->display_color_depth;
 
 	if (enc110->base.bp->funcs->encoder_control(
 			enc110->base.bp, &cntl) != BP_RESULT_OK)
@@ -646,6 +632,8 @@ static void dce110_stream_encoder_hdmi_set_stream_attribute(
 		HDMI_GC_SEND, 1,
 		HDMI_NULL_SEND, 1);
 
+	REG_UPDATE(HDMI_VBI_PACKET_CONTROL, HDMI_ACP_SEND, 0);
+
 	/* following belongs to audio */
 	REG_UPDATE(HDMI_INFOFRAME_CONTROL0, HDMI_AUDIO_INFO_SEND, 1);
 
@@ -706,7 +694,7 @@ static void dce110_stream_encoder_lvds_set_stream_attribute(
 	ASSERT(crtc_timing->pixel_encoding == PIXEL_ENCODING_RGB);
 }
 
-static void dce110_stream_encoder_set_mst_bandwidth(
+static void dce110_stream_encoder_set_throttled_vcp_size(
 	struct stream_encoder *enc,
 	struct fixed31_32 avg_time_slots_per_mtp)
 {
@@ -783,7 +771,6 @@ static void dce110_stream_encoder_update_hdmi_info_packets(
 		dce110_update_hdmi_info_packet(enc110, 3, &info_frame->hdrsmd);
 	}
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 	if (enc110->se_mask->HDMI_DB_DISABLE) {
 		/* for bring up, disable dp double  TODO */
 		if (REG(HDMI_DB_CONTROL))
@@ -795,7 +782,6 @@ static void dce110_stream_encoder_update_hdmi_info_packets(
 		dce110_update_hdmi_info_packet(enc110, 3, &info_frame->spd);
 		dce110_update_hdmi_info_packet(enc110, 4, &info_frame->hdrsmd);
 	}
-#endif
 }
 
 static void dce110_stream_encoder_stop_hdmi_info_packets(
@@ -821,7 +807,6 @@ static void dce110_stream_encoder_stop_hdmi_info_packets(
 		HDMI_GENERIC1_LINE, 0,
 		HDMI_GENERIC1_SEND, 0);
 
-#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 	/* stop generic packets 2 & 3 on HDMI */
 	if (REG(HDMI_GENERIC_PACKET_CONTROL2))
 		REG_SET_6(HDMI_GENERIC_PACKET_CONTROL2, 0,
@@ -840,7 +825,6 @@ static void dce110_stream_encoder_stop_hdmi_info_packets(
 			HDMI_GENERIC1_CONT, 0,
 			HDMI_GENERIC1_LINE, 0,
 			HDMI_GENERIC1_SEND, 0);
-#endif
 }
 
 static void dce110_stream_encoder_update_dp_info_packets(
@@ -915,6 +899,7 @@ static void dce110_stream_encoder_stop_dp_info_packets(
 }
 
 static void dce110_stream_encoder_dp_blank(
+	struct dc_link *link,
 	struct stream_encoder *enc)
 {
 	struct dce110_stream_encoder *enc110 = DCE110STRENC_FROM_STRENC(enc);
@@ -963,6 +948,7 @@ static void dce110_stream_encoder_dp_blank(
 
 /* output video stream to link encoder */
 static void dce110_stream_encoder_dp_unblank(
+	struct dc_link *link,
 	struct stream_encoder *enc,
 	const struct encoder_unblank_param *param)
 {
@@ -1035,106 +1021,29 @@ static void dce110_stream_encoder_set_avmute(
 }
 
 
+static void dce110_reset_hdmi_stream_attribute(
+	struct stream_encoder *enc)
+{
+	struct dce110_stream_encoder *enc110 = DCE110STRENC_FROM_STRENC(enc);
+	if (enc110->se_mask->HDMI_DATA_SCRAMBLE_EN)
+		REG_UPDATE_5(HDMI_CONTROL,
+			HDMI_PACKET_GEN_VERSION, 1,
+			HDMI_KEEPOUT_MODE, 1,
+			HDMI_DEEP_COLOR_ENABLE, 0,
+			HDMI_DATA_SCRAMBLE_EN, 0,
+			HDMI_CLOCK_CHANNEL_RATE, 0);
+	else
+		REG_UPDATE_3(HDMI_CONTROL,
+			HDMI_PACKET_GEN_VERSION, 1,
+			HDMI_KEEPOUT_MODE, 1,
+			HDMI_DEEP_COLOR_ENABLE, 0);
+}
+
 #define DP_SEC_AUD_N__DP_SEC_AUD_N__DEFAULT 0x8000
 #define DP_SEC_TIMESTAMP__DP_SEC_TIMESTAMP_MODE__AUTO_CALC 1
 
 #include "include/audio_types.h"
 
-/**
-* speakersToChannels
-*
-* @brief
-*  translate speakers to channels
-*
-*  FL  - Front Left
-*  FR  - Front Right
-*  RL  - Rear Left
-*  RR  - Rear Right
-*  RC  - Rear Center
-*  FC  - Front Center
-*  FLC - Front Left Center
-*  FRC - Front Right Center
-*  RLC - Rear Left Center
-*  RRC - Rear Right Center
-*  LFE - Low Freq Effect
-*
-*               FC
-*          FLC      FRC
-*    FL                    FR
-*
-*                    LFE
-*              ()
-*
-*
-*    RL                    RR
-*          RLC      RRC
-*               RC
-*
-*             ch  8   7   6   5   4   3   2   1
-* 0b00000011      -   -   -   -   -   -   FR  FL
-* 0b00000111      -   -   -   -   -   LFE FR  FL
-* 0b00001011      -   -   -   -   FC  -   FR  FL
-* 0b00001111      -   -   -   -   FC  LFE FR  FL
-* 0b00010011      -   -   -   RC  -   -   FR  FL
-* 0b00010111      -   -   -   RC  -   LFE FR  FL
-* 0b00011011      -   -   -   RC  FC  -   FR  FL
-* 0b00011111      -   -   -   RC  FC  LFE FR  FL
-* 0b00110011      -   -   RR  RL  -   -   FR  FL
-* 0b00110111      -   -   RR  RL  -   LFE FR  FL
-* 0b00111011      -   -   RR  RL  FC  -   FR  FL
-* 0b00111111      -   -   RR  RL  FC  LFE FR  FL
-* 0b01110011      -   RC  RR  RL  -   -   FR  FL
-* 0b01110111      -   RC  RR  RL  -   LFE FR  FL
-* 0b01111011      -   RC  RR  RL  FC  -   FR  FL
-* 0b01111111      -   RC  RR  RL  FC  LFE FR  FL
-* 0b11110011      RRC RLC RR  RL  -   -   FR  FL
-* 0b11110111      RRC RLC RR  RL  -   LFE FR  FL
-* 0b11111011      RRC RLC RR  RL  FC  -   FR  FL
-* 0b11111111      RRC RLC RR  RL  FC  LFE FR  FL
-* 0b11000011      FRC FLC -   -   -   -   FR  FL
-* 0b11000111      FRC FLC -   -   -   LFE FR  FL
-* 0b11001011      FRC FLC -   -   FC  -   FR  FL
-* 0b11001111      FRC FLC -   -   FC  LFE FR  FL
-* 0b11010011      FRC FLC -   RC  -   -   FR  FL
-* 0b11010111      FRC FLC -   RC  -   LFE FR  FL
-* 0b11011011      FRC FLC -   RC  FC  -   FR  FL
-* 0b11011111      FRC FLC -   RC  FC  LFE FR  FL
-* 0b11110011      FRC FLC RR  RL  -   -   FR  FL
-* 0b11110111      FRC FLC RR  RL  -   LFE FR  FL
-* 0b11111011      FRC FLC RR  RL  FC  -   FR  FL
-* 0b11111111      FRC FLC RR  RL  FC  LFE FR  FL
-*
-* @param
-*  speakers - speaker information as it comes from CEA audio block
-*/
-/* translate speakers to channels */
-
-union audio_cea_channels {
-	uint8_t all;
-	struct audio_cea_channels_bits {
-		uint32_t FL:1;
-		uint32_t FR:1;
-		uint32_t LFE:1;
-		uint32_t FC:1;
-		uint32_t RL_RC:1;
-		uint32_t RR:1;
-		uint32_t RC_RLC_FLC:1;
-		uint32_t RRC_FRC:1;
-	} channels;
-};
-
-struct audio_clock_info {
-	/* pixel clock frequency*/
-	uint32_t pixel_clock_in_10khz;
-	/* N - 32KHz audio */
-	uint32_t n_32khz;
-	/* CTS - 32KHz audio*/
-	uint32_t cts_32khz;
-	uint32_t n_44khz;
-	uint32_t cts_44khz;
-	uint32_t n_48khz;
-	uint32_t cts_48khz;
-};
 
 /* 25.2MHz/1.001*/
 /* 25.2MHz/1.001*/
@@ -1261,13 +1170,13 @@ static uint32_t calc_max_audio_packets_per_line(
 
 static void get_audio_clock_info(
 	enum dc_color_depth color_depth,
-	uint32_t crtc_pixel_clock_in_khz,
-	uint32_t actual_pixel_clock_in_khz,
+	uint32_t crtc_pixel_clock_100Hz,
+	uint32_t actual_pixel_clock_100Hz,
 	struct audio_clock_info *audio_clock_info)
 {
 	const struct audio_clock_info *clock_info;
 	uint32_t index;
-	uint32_t crtc_pixel_clock_in_10khz = crtc_pixel_clock_in_khz / 10;
+	uint32_t crtc_pixel_clock_in_10khz = crtc_pixel_clock_100Hz / 100;
 	uint32_t audio_array_size;
 
 	switch (color_depth) {
@@ -1304,16 +1213,16 @@ static void get_audio_clock_info(
 	}
 
 	/* not found */
-	if (actual_pixel_clock_in_khz == 0)
-		actual_pixel_clock_in_khz = crtc_pixel_clock_in_khz;
+	if (actual_pixel_clock_100Hz == 0)
+		actual_pixel_clock_100Hz = crtc_pixel_clock_100Hz;
 
 	/* See HDMI spec  the table entry under
 	 *  pixel clock of "Other". */
 	audio_clock_info->pixel_clock_in_10khz =
-			actual_pixel_clock_in_khz / 10;
-	audio_clock_info->cts_32khz = actual_pixel_clock_in_khz;
-	audio_clock_info->cts_44khz = actual_pixel_clock_in_khz;
-	audio_clock_info->cts_48khz = actual_pixel_clock_in_khz;
+			actual_pixel_clock_100Hz / 100;
+	audio_clock_info->cts_32khz = actual_pixel_clock_100Hz / 10;
+	audio_clock_info->cts_44khz = actual_pixel_clock_100Hz / 10;
+	audio_clock_info->cts_48khz = actual_pixel_clock_100Hz / 10;
 
 	audio_clock_info->n_32khz = 4096;
 	audio_clock_info->n_44khz = 6272;
@@ -1327,7 +1236,6 @@ static void dce110_se_audio_setup(
 {
 	struct dce110_stream_encoder *enc110 = DCE110STRENC_FROM_STRENC(enc);
 
-	uint32_t speakers = 0;
 	uint32_t channels = 0;
 
 	ASSERT(audio_info);
@@ -1335,7 +1243,6 @@ static void dce110_se_audio_setup(
 		/* This should not happen.it does so we don't get BSOD*/
 		return;
 
-	speakers = audio_info->flags.info.ALLSPEAKERS;
 	channels = speakers_to_channels(audio_info->flags.speaker_flags).all;
 
 	/* setup the audio stream source select (audio -> dig mapping) */
@@ -1379,14 +1286,14 @@ static void dce110_se_setup_hdmi_audio(
 
 	/* Program audio clock sample/regeneration parameters */
 	get_audio_clock_info(crtc_info->color_depth,
-			     crtc_info->requested_pixel_clock,
-			     crtc_info->calculated_pixel_clock,
+			     crtc_info->requested_pixel_clock_100Hz,
+			     crtc_info->calculated_pixel_clock_100Hz,
 			     &audio_clock_info);
 	DC_LOG_HW_AUDIO(
-			"\n%s:Input::requested_pixel_clock = %d"	\
-			"calculated_pixel_clock = %d \n", __func__,	\
-			crtc_info->requested_pixel_clock,		\
-			crtc_info->calculated_pixel_clock);
+			"\n%s:Input::requested_pixel_clock_100Hz = %d"	\
+			"calculated_pixel_clock_100Hz = %d \n", __func__,	\
+			crtc_info->requested_pixel_clock_100Hz,		\
+			crtc_info->calculated_pixel_clock_100Hz);
 
 	/* HDMI_ACR_32_0__HDMI_ACR_CTS_32_MASK */
 	REG_UPDATE(HDMI_ACR_32_0, HDMI_ACR_CTS_32, audio_clock_info.cts_32khz);
@@ -1594,6 +1501,17 @@ static void dig_connect_to_otg(
 	REG_UPDATE(DIG_FE_CNTL, DIG_SOURCE_SELECT, tg_inst);
 }
 
+static unsigned int dig_source_otg(
+	struct stream_encoder *enc)
+{
+	uint32_t tg_inst = 0;
+	struct dce110_stream_encoder *enc110 = DCE110STRENC_FROM_STRENC(enc);
+
+	REG_GET(DIG_FE_CNTL, DIG_SOURCE_SELECT, &tg_inst);
+
+	return tg_inst;
+}
+
 static const struct stream_encoder_funcs dce110_str_enc_funcs = {
 	.dp_set_stream_attribute =
 		dce110_stream_encoder_dp_set_stream_attribute,
@@ -1603,8 +1521,8 @@ static const struct stream_encoder_funcs dce110_str_enc_funcs = {
 		dce110_stream_encoder_dvi_set_stream_attribute,
 	.lvds_set_stream_attribute =
 		dce110_stream_encoder_lvds_set_stream_attribute,
-	.set_mst_bandwidth =
-		dce110_stream_encoder_set_mst_bandwidth,
+	.set_throttled_vcp_size =
+		dce110_stream_encoder_set_throttled_vcp_size,
 	.update_hdmi_info_packets =
 		dce110_stream_encoder_update_hdmi_info_packets,
 	.stop_hdmi_info_packets =
@@ -1628,6 +1546,8 @@ static const struct stream_encoder_funcs dce110_str_enc_funcs = {
 	.setup_stereo_sync  = setup_stereo_sync,
 	.set_avmute = dce110_stream_encoder_set_avmute,
 	.dig_connect_to_otg  = dig_connect_to_otg,
+	.hdmi_reset_stream_attribute = dce110_reset_hdmi_stream_attribute,
+	.dig_source_otg = dig_source_otg,
 };
 
 void dce110_stream_encoder_construct(

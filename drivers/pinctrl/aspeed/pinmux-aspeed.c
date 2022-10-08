@@ -5,7 +5,7 @@
 
 #include "pinmux-aspeed.h"
 
-const char *const aspeed_pinmux_ips[] = {
+static const char *const aspeed_pinmux_ips[] = {
 	[ASPEED_IP_SCU] = "SCU",
 	[ASPEED_IP_GFX] = "GFX",
 	[ASPEED_IP_LPC] = "LPC",
@@ -21,7 +21,8 @@ static inline void aspeed_sig_desc_print_val(
 }
 
 /**
- * Query the enabled or disabled state of a signal descriptor
+ * aspeed_sig_desc_eval() - Query the enabled or disabled state of a signal
+ * descriptor.
  *
  * @desc: The signal descriptor of interest
  * @enabled: True to query the enabled state, false to query disabled state
@@ -58,7 +59,8 @@ int aspeed_sig_desc_eval(const struct aspeed_sig_desc *desc,
 }
 
 /**
- * Query the enabled or disabled state for a mux function's signal on a pin
+ * aspeed_sig_expr_eval - Query the enabled or disabled state for a
+ * mux function's signal on a pin
  *
  * @ctx: The driver context for the pinctrl IP
  * @expr: An expression controlling the signal for a mux function on a pin
@@ -78,11 +80,14 @@ int aspeed_sig_desc_eval(const struct aspeed_sig_desc *desc,
  * neither the enabled nor disabled state. Thus we must explicitly test for
  * either condition as required.
  */
-int aspeed_sig_expr_eval(const struct aspeed_pinmux_data *ctx,
+int aspeed_sig_expr_eval(struct aspeed_pinmux_data *ctx,
 			 const struct aspeed_sig_expr *expr, bool enabled)
 {
-	int i;
 	int ret;
+	int i;
+
+	if (ctx->ops->eval)
+		return ctx->ops->eval(ctx, expr, enabled);
 
 	for (i = 0; i < expr->ndescs; i++) {
 		const struct aspeed_sig_desc *desc = &expr->descs[i];

@@ -757,7 +757,6 @@ static int hba_ioctl_callback(struct esas2r_adapter *a,
 
 		struct atto_hba_get_adapter_info *gai =
 			&hi->data.get_adap_info;
-		int pcie_cap_reg;
 
 		if (hi->flags & HBAF_TUNNEL) {
 			hi->status = ATTO_STS_UNSUPPORTED;
@@ -784,17 +783,14 @@ static int hba_ioctl_callback(struct esas2r_adapter *a,
 		gai->pci.dev_num = PCI_SLOT(a->pcid->devfn);
 		gai->pci.func_num = PCI_FUNC(a->pcid->devfn);
 
-		pcie_cap_reg = pci_find_capability(a->pcid, PCI_CAP_ID_EXP);
-		if (pcie_cap_reg) {
+		if (pci_is_pcie(a->pcid)) {
 			u16 stat;
 			u32 caps;
 
-			pci_read_config_word(a->pcid,
-					     pcie_cap_reg + PCI_EXP_LNKSTA,
-					     &stat);
-			pci_read_config_dword(a->pcid,
-					      pcie_cap_reg + PCI_EXP_LNKCAP,
-					      &caps);
+			pcie_capability_read_word(a->pcid, PCI_EXP_LNKSTA,
+						  &stat);
+			pcie_capability_read_dword(a->pcid, PCI_EXP_LNKCAP,
+						   &caps);
 
 			gai->pci.link_speed_curr =
 				(u8)(stat & PCI_EXP_LNKSTA_CLS);
@@ -951,10 +947,9 @@ static int hba_ioctl_callback(struct esas2r_adapter *a,
 					break;
 				}
 
-				memcpy(trc + 1,
+				memcpy(trc->contents,
 				       a->fw_coredump_buff + offset,
 				       len);
-
 				hi->data_length = len;
 			} else if (trc->trace_func == ATTO_TRC_TF_RESET) {
 				memset(a->fw_coredump_buff, 0,
@@ -1514,7 +1509,7 @@ ioctl_done:
 	}
 
 	/* Always copy the buffer back, if only to pick up the status */
-	err = __copy_to_user(arg, ioctl, sizeof(struct atto_express_ioctl));
+	err = copy_to_user(arg, ioctl, sizeof(struct atto_express_ioctl));
 	if (err != 0) {
 		esas2r_log(ESAS2R_LOG_WARN,
 			   "ioctl_handler copy_to_user didn't copy everything (err %d, cmd %u)",
@@ -1552,11 +1547,10 @@ static int allocate_fw_buffers(struct esas2r_adapter *a, u32 length)
 
 	a->firmware.orig_len = length;
 
-	a->firmware.data = (u8 *)dma_alloc_coherent(&a->pcid->dev,
-						    (size_t)length,
-						    (dma_addr_t *)&a->firmware.
-						    phys,
-						    GFP_KERNEL);
+	a->firmware.data = dma_alloc_coherent(&a->pcid->dev,
+					      (size_t)length,
+					      (dma_addr_t *)&a->firmware.phys,
+					      GFP_KERNEL);
 
 	if (!a->firmware.data) {
 		esas2r_debug("buffer alloc failed!");
@@ -1899,11 +1893,11 @@ int esas2r_write_vda(struct esas2r_adapter *a, const char *buf, long off,
 
 	if (!a->vda_buffer) {
 		dma_addr_t dma_addr;
-		a->vda_buffer = (u8 *)dma_alloc_coherent(&a->pcid->dev,
-							 (size_t)
-							 VDA_MAX_BUFFER_SIZE,
-							 &dma_addr,
-							 GFP_KERNEL);
+		a->vda_buffer = dma_alloc_coherent(&a->pcid->dev,
+						   (size_t)
+						   VDA_MAX_BUFFER_SIZE,
+						   &dma_addr,
+						   GFP_KERNEL);
 
 		a->ppvda_buffer = dma_addr;
 	}
@@ -2068,11 +2062,10 @@ int esas2r_write_fs(struct esas2r_adapter *a, const char *buf, long off,
 re_allocate_buffer:
 			a->fs_api_buffer_size = length;
 
-			a->fs_api_buffer = (u8 *)dma_alloc_coherent(
-				&a->pcid->dev,
-				(size_t)a->fs_api_buffer_size,
-				(dma_addr_t *)&a->ppfs_api_buffer,
-				GFP_KERNEL);
+			a->fs_api_buffer = dma_alloc_coherent(&a->pcid->dev,
+							      (size_t)a->fs_api_buffer_size,
+							      (dma_addr_t *)&a->ppfs_api_buffer,
+							      GFP_KERNEL);
 		}
 	}
 

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 %YAML 1.2
 ---
-$id: http://devicetree.org/schemas/iio/accelerometers/adi,adxl345.yaml#
+$id: http://devicetree.org/schemas/iio/accel/adi,adxl345.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
 title: Analog Devices ADXL345/ADXL375 3-Axis Digital Accelerometers
@@ -12,14 +12,18 @@ maintainers:
 description: |
   Analog Devices ADXL345/ADXL375 3-Axis Digital Accelerometers that supports
   both I2C & SPI interfaces.
-    http://www.analog.com/en/products/mems/accelerometers/adxl345.html
-    http://www.analog.com/en/products/sensors-mems/accelerometers/adxl375.html
+    https://www.analog.com/en/products/mems/accelerometers/adxl345.html
+    https://www.analog.com/en/products/sensors-mems/accelerometers/adxl375.html
 
 properties:
   compatible:
-    enum:
-      - adi,adxl345
-      - adi,adxl375
+    oneOf:
+      - items:
+          - const: adi,adxl346
+          - const: adi,adxl345
+      - enum:
+          - adi,adxl345
+          - adi,adxl375
 
   reg:
     maxItems: 1
@@ -28,6 +32,8 @@ properties:
 
   spi-cpol: true
 
+  spi-max-frequency: true
+
   interrupts:
     maxItems: 1
 
@@ -35,6 +41,8 @@ required:
   - compatible
   - reg
   - interrupts
+
+additionalProperties: false
 
 examples:
   - |
@@ -47,7 +55,7 @@ examples:
         /* Example for a I2C device node */
         accelerometer@2a {
             compatible = "adi,adxl345";
-            reg = <0x53>;
+            reg = <0x2a>;
             interrupt-parent = <&gpio0>;
             interrupts = <0 IRQ_TYPE_LEVEL_HIGH>;
         };

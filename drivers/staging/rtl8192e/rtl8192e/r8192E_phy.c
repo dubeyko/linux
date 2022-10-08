@@ -919,7 +919,7 @@ static u8 _rtl92e_phy_switch_channel_step(struct net_device *dev, u8 channel,
 				continue;
 			switch (CurrentCmd->CmdID) {
 			case CmdID_SetTxPowerLevel:
-				if (priv->IC_Cut > (u8)VERSION_8190_BD)
+				if (priv->IC_Cut > VERSION_8190_BD)
 					_rtl92e_set_tx_power_level(dev,
 								   channel);
 				break;
@@ -929,11 +929,11 @@ static u8 _rtl92e_phy_switch_channel_step(struct net_device *dev, u8 channel,
 				break;
 			case CmdID_WritePortUshort:
 				rtl92e_writew(dev, CurrentCmd->Para1,
-					      (u16)CurrentCmd->Para2);
+					      CurrentCmd->Para2);
 				break;
 			case CmdID_WritePortUchar:
 				rtl92e_writeb(dev, CurrentCmd->Para1,
-					      (u8)CurrentCmd->Para2);
+					      CurrentCmd->Para2);
 				break;
 			case CmdID_RF_WriteReg:
 				for (eRFPath = 0; eRFPath <
@@ -1124,14 +1124,14 @@ static void _rtl92e_cck_tx_power_track_bw_switch_thermal(struct net_device *dev)
 			priv->Record_CCK_20Mindex = 6;
 		priv->CCK_index = priv->Record_CCK_20Mindex;
 		RT_TRACE(COMP_POWER_TRACKING,
-			 "20MHz, _rtl92e_cck_tx_power_track_bw_switch_thermal(),CCK_index = %d\n",
+			 "20MHz, %s,CCK_index = %d\n", __func__,
 			 priv->CCK_index);
 	break;
 
 	case HT_CHANNEL_WIDTH_20_40:
 		priv->CCK_index = priv->Record_CCK_40Mindex;
 		RT_TRACE(COMP_POWER_TRACKING,
-			 "40MHz, _rtl92e_cck_tx_power_track_bw_switch_thermal(), CCK_index = %d\n",
+			 "40MHz, %s, CCK_index = %d\n", __func__,
 			 priv->CCK_index);
 	break;
 	}
@@ -1155,7 +1155,7 @@ static void _rtl92e_set_bw_mode_work_item(struct net_device *dev)
 	u8 regBwOpMode;
 
 	RT_TRACE(COMP_SWBW,
-		 "==>_rtl92e_set_bw_mode_work_item()  Switch to %s bandwidth\n",
+		 "==>%s Switch to %s bandwidth\n", __func__,
 		 priv->CurrentChannelBW == HT_CHANNEL_WIDTH_20 ?
 			 "20MHz" : "40MHz");
 
@@ -1299,17 +1299,17 @@ void rtl92e_init_gain(struct net_device *dev, u8 Operation)
 			    DIG_ALGO_BY_FALSE_ALARM)
 				rtl92e_set_bb_reg(dev, UFWP, bMaskByte1, 0x8);
 			priv->initgain_backup.xaagccore1 =
-				 (u8)rtl92e_get_bb_reg(dev, rOFDM0_XAAGCCore1,
-						       BitMask);
+				 rtl92e_get_bb_reg(dev, rOFDM0_XAAGCCore1,
+						   BitMask);
 			priv->initgain_backup.xbagccore1 =
-				 (u8)rtl92e_get_bb_reg(dev, rOFDM0_XBAGCCore1,
-						       BitMask);
+				 rtl92e_get_bb_reg(dev, rOFDM0_XBAGCCore1,
+						   BitMask);
 			priv->initgain_backup.xcagccore1 =
-				 (u8)rtl92e_get_bb_reg(dev, rOFDM0_XCAGCCore1,
-						       BitMask);
+				 rtl92e_get_bb_reg(dev, rOFDM0_XCAGCCore1,
+						   BitMask);
 			priv->initgain_backup.xdagccore1 =
-				 (u8)rtl92e_get_bb_reg(dev, rOFDM0_XDAGCCore1,
-						       BitMask);
+				 rtl92e_get_bb_reg(dev, rOFDM0_XDAGCCore1,
+						   BitMask);
 			BitMask = bMaskByte2;
 			priv->initgain_backup.cca = (u8)rtl92e_get_bb_reg(dev,
 						    rCCK0_CCA, BitMask);
@@ -1416,15 +1416,14 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 
 	if (priv->SetRFPowerStateInProgress)
 		return false;
-	RT_TRACE(COMP_PS, "===========> _rtl92e_set_rf_power_state()!\n");
+	RT_TRACE(COMP_PS, "===========> %s!\n", __func__);
 	priv->SetRFPowerStateInProgress = true;
 
 	switch (priv->rf_chip) {
 	case RF_8256:
 		switch (eRFPowerState) {
 		case eRfOn:
-			RT_TRACE(COMP_PS,
-				 "_rtl92e_set_rf_power_state() eRfOn!\n");
+			RT_TRACE(COMP_PS, "%s eRfOn!\n", __func__);
 			if ((priv->rtllib->eRFPowerState == eRfOff) &&
 			     RT_IN_PS_LEVEL(pPSC, RT_RF_OFF_LEVL_HALT_NIC)) {
 				bool rtstatus;
@@ -1490,10 +1489,8 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 				}
 
 				if (i >= MAX_DOZE_WAITING_TIMES_9x) {
-					RT_TRACE(COMP_POWER,
-						 "\n\n\n TimeOut!! _rtl92e_set_rf_power_state(): eRfOff: %d times TcbBusyQueue[%d] != 0 !!!\n",
-						 MAX_DOZE_WAITING_TIMES_9x,
-						 QueueID);
+					RT_TRACE(COMP_POWER, "\n\n\n TimeOut!! %s: eRfOff: %d times TcbBusyQueue[%d] != 0 !!!\n",
+						 __func__, MAX_DOZE_WAITING_TIMES_9x, QueueID);
 					break;
 				}
 			}
@@ -1501,8 +1498,7 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 			break;
 
 		case eRfOff:
-			RT_TRACE(COMP_PS,
-				 "_rtl92e_set_rf_power_state() eRfOff/Sleep !\n");
+			RT_TRACE(COMP_PS, "%s eRfOff/Sleep !\n", __func__);
 
 			for (QueueID = 0, i = 0; QueueID < MAX_TX_QUEUE; ) {
 				ring = &priv->tx_ring[QueueID];
@@ -1567,9 +1563,7 @@ static bool _rtl92e_set_rf_power_state(struct net_device *dev,
 	}
 
 	priv->SetRFPowerStateInProgress = false;
-	RT_TRACE(COMP_PS,
-		 "<=========== _rtl92e_set_rf_power_state() bResult = %d!\n",
-		 bResult);
+	RT_TRACE(COMP_PS, "<=========== %s bResult = %d!\n", __func__, bResult);
 	return bResult;
 }
 
@@ -1581,21 +1575,17 @@ bool rtl92e_set_rf_power_state(struct net_device *dev,
 	bool bResult = false;
 
 	RT_TRACE(COMP_PS,
-		 "---------> rtl92e_set_rf_power_state(): eRFPowerState(%d)\n",
-		 eRFPowerState);
+		 "---------> %s: eRFPowerState(%d)\n", __func__, eRFPowerState);
 	if (eRFPowerState == priv->rtllib->eRFPowerState &&
 	    priv->bHwRfOffAction == 0) {
-		RT_TRACE(COMP_PS,
-			 "<--------- rtl92e_set_rf_power_state(): discard the request for eRFPowerState(%d) is the same.\n",
-			 eRFPowerState);
+		RT_TRACE(COMP_PS, "<--------- %s: discard the request for eRFPowerState(%d) is the same.\n",
+			 __func__, eRFPowerState);
 		return bResult;
 	}
 
 	bResult = _rtl92e_set_rf_power_state(dev, eRFPowerState);
 
-	RT_TRACE(COMP_PS,
-		 "<--------- rtl92e_set_rf_power_state(): bResult(%d)\n",
-		 bResult);
+	RT_TRACE(COMP_PS, "<--------- %s: bResult(%d)\n", __func__, bResult);
 
 	return bResult;
 }

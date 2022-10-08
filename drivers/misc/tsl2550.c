@@ -148,16 +148,14 @@ static int tsl2550_calculate_lux(u8 ch0, u8 ch1)
 	u16 c0 = count_lut[ch0];
 	u16 c1 = count_lut[ch1];
 
-	/*
-	 * Calculate ratio.
-	 * Note: the "128" is a scaling factor
-	 */
-	u8 r = 128;
-
 	/* Avoid division by 0 and count 1 cannot be greater than count 0 */
 	if (c1 <= c0)
 		if (c0) {
-			r = c1 * 128 / c0;
+			/*
+			 * Calculate ratio.
+			 * Note: the "128" is a scaling factor
+			 */
+			u8 r = c1 * 128 / c0;
 
 			/* Calculate LUX */
 			lux = ((c0 - c1) * ratio_lut[r]) / 256;
@@ -391,7 +389,7 @@ exit:
 	return err;
 }
 
-static int tsl2550_remove(struct i2c_client *client)
+static void tsl2550_remove(struct i2c_client *client)
 {
 	sysfs_remove_group(&client->dev.kobj, &tsl2550_attr_group);
 
@@ -399,8 +397,6 @@ static int tsl2550_remove(struct i2c_client *client)
 	tsl2550_set_power_state(client, 0);
 
 	kfree(i2c_get_clientdata(client));
-
-	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
