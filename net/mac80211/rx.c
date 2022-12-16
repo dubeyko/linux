@@ -1571,9 +1571,6 @@ static void sta_ps_start(struct sta_info *sta)
 
 	ieee80211_clear_fast_xmit(sta);
 
-	if (!sta->sta.txq[0])
-		return;
-
 	for (tid = 0; tid < IEEE80211_NUM_TIDS; tid++) {
 		struct ieee80211_txq *txq = sta->sta.txq[tid];
 		struct txq_info *txqi = to_txq_info(txq);
@@ -1978,10 +1975,11 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 
 		if (mmie_keyidx < NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS ||
 		    mmie_keyidx >= NUM_DEFAULT_KEYS + NUM_DEFAULT_MGMT_KEYS +
-		    NUM_DEFAULT_BEACON_KEYS) {
-			cfg80211_rx_unprot_mlme_mgmt(rx->sdata->dev,
-						     skb->data,
-						     skb->len);
+				   NUM_DEFAULT_BEACON_KEYS) {
+			if (rx->sdata->dev)
+				cfg80211_rx_unprot_mlme_mgmt(rx->sdata->dev,
+							     skb->data,
+							     skb->len);
 			return RX_DROP_MONITOR; /* unexpected BIP keyidx */
 		}
 
@@ -2131,7 +2129,8 @@ ieee80211_rx_h_decrypt(struct ieee80211_rx_data *rx)
 	/* either the frame has been decrypted or will be dropped */
 	status->flag |= RX_FLAG_DECRYPTED;
 
-	if (unlikely(ieee80211_is_beacon(fc) && result == RX_DROP_UNUSABLE))
+	if (unlikely(ieee80211_is_beacon(fc) && result == RX_DROP_UNUSABLE &&
+		     rx->sdata->dev))
 		cfg80211_rx_unprot_mlme_mgmt(rx->sdata->dev,
 					     skb->data, skb->len);
 
@@ -2404,7 +2403,6 @@ static int ieee80211_802_1x_port_control(struct ieee80211_rx_data *rx)
 
 static int ieee80211_drop_unencrypted(struct ieee80211_rx_data *rx, __le16 fc)
 {
-	struct ieee80211_hdr *hdr = (void *)rx->skb->data;
 	struct sk_buff *skb = rx->skb;
 	struct ieee80211_rx_status *status = IEEE80211_SKB_RXCB(skb);
 
@@ -2415,31 +2413,6 @@ static int ieee80211_drop_unencrypted(struct ieee80211_rx_data *rx, __le16 fc)
 	if (status->flag & RX_FLAG_DECRYPTED)
 		return 0;
 
-	/* check mesh EAPOL frames first */
-	if (unlikely(rx->sta && ieee80211_vif_is_mesh(&rx->sdata->vif) &&
-		     ieee80211_is_data(fc))) {
-		struct ieee80211s_hdr *mesh_hdr;
-		u16 hdr_len = ieee80211_hdrlen(fc);
-		u16 ethertype_offset;
-		__be16 ethertype;
-
-		if (!ether_addr_equal(hdr->addr1, rx->sdata->vif.addr))
-			goto drop_check;
-
-		/* make sure fixed part of mesh header is there, also checks skb len */
-		if (!pskb_may_pull(rx->skb, hdr_len + 6))
-			goto drop_check;
-
-		mesh_hdr = (struct ieee80211s_hdr *)(skb->data + hdr_len);
-		ethertype_offset = hdr_len + ieee80211_get_mesh_hdrlen(mesh_hdr) +
-				   sizeof(rfc1042_header);
-
-		if (skb_copy_bits(rx->skb, ethertype_offset, &ethertype, 2) == 0 &&
-		    ethertype == rx->sdata->control_port_protocol)
-			return 0;
-	}
-
-drop_check:
 	/* Drop unencrypted frames if key is set. */
 	if (unlikely(!ieee80211_has_protected(fc) &&
 		     !ieee80211_is_any_nullfunc(fc) &&
@@ -2893,8 +2866,16 @@ ieee80211_rx_h_mesh_fwding(struct ieee80211_rx_data *rx)
 	hdr = (struct ieee80211_hdr *) skb->data;
 	mesh_hdr = (struct ieee80211s_hdr *) (skb->data + hdrlen);
 
-	if (ieee80211_drop_unencrypted(rx, hdr->frame_control))
-		return RX_DROP_MONITOR;
+	if (ieee80211_drop_unencrypted(rx, hdr->frame_control)) {
+		int offset = hdrlen + ieee80211_get_mesh_hdrlen(mesh_hdr) +
+			     sizeof(rfc1042_header);
+		__be16 ethertype;
+
+		if (!ether_addr_equal(hdr->addr1, rx->sdata->vif.addr) ||
+		    skb_copy_bits(rx->skb, offset, &ethertype, 2) != 0 ||
+		    ethertype != rx->sdata->control_port_protocol)
+			return RX_DROP_MONITOR;
+	}
 
 	/* frame is in RMC, don't forward */
 	if (ieee80211_is_data(hdr->frame_control) &&
@@ -4352,6 +4333,7 @@ void ieee80211_check_fast_rx(struct sta_info *sta)
 		.vif_type = sdata->vif.type,
 		.control_port_protocol = sdata->control_port_protocol,
 	}, *old, *new = NULL;
+	u32 offload_flags;
 	bool set_offload = false;
 	bool assign = false;
 	bool offload;
@@ -4467,10 +4449,10 @@ void ieee80211_check_fast_rx(struct sta_info *sta)
 	if (assign)
 		new = kmemdup(&fastrx, sizeof(fastrx), GFP_KERNEL);
 
-	offload = assign &&
-		  (sdata->vif.offload_flags & IEEE80211_OFFLOAD_DECAP_ENABLED);
+	offload_flags = get_bss_sdata(sdata)->vif.offload_flags;
+	offload = offload_flags & IEEE80211_OFFLOAD_DECAP_ENABLED;
 
-	if (offload)
+	if (assign && offload)
 		set_offload = !test_and_set_sta_flag(sta, WLAN_STA_DECAP_OFFLOAD);
 	else
 		set_offload = test_and_clear_sta_flag(sta, WLAN_STA_DECAP_OFFLOAD);
@@ -4708,7 +4690,7 @@ static bool ieee80211_invoke_fast_rx(struct ieee80211_rx_data *rx,
 
 	if (!(status->rx_flags & IEEE80211_RX_AMSDU)) {
 		if (!pskb_may_pull(skb, snap_offs + sizeof(*payload)))
-			goto drop;
+			return false;
 
 		payload = (void *)(skb->data + snap_offs);
 

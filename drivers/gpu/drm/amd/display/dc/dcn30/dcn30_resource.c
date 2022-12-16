@@ -108,8 +108,6 @@ enum dcn30_clk_src_array_id {
  */
 
 /* DCN */
-/* TODO awful hack. fixup dcn20_dwb.h */
-#undef BASE_INNER
 #define BASE_INNER(seg) DCN_BASE__INST0_SEG ## seg
 
 #define BASE(seg) BASE_INNER(seg)
@@ -141,6 +139,9 @@ enum dcn30_clk_src_array_id {
 #define SRII_DWB(reg_name, temp_name, block, id)\
 	.reg_name[id] = BASE(mm ## block ## id ## _ ## temp_name ## _BASE_IDX) + \
 					mm ## block ## id ## _ ## temp_name
+
+#define SF_DWB2(reg_name, block, id, field_name, post_fix)	\
+	.field_name = reg_name ## __ ## field_name ## post_fix
 
 #define DCCG_SRII(reg_name, block, id)\
 	.block ## _ ## reg_name[id] = BASE(mm ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
@@ -723,7 +724,6 @@ static const struct dc_debug_options debug_defaults_drv = {
 	.underflow_assert_delay_us = 0xFFFFFFFF,
 	.dwb_fi_phase = -1, // -1 = disable,
 	.dmub_command_table = true,
-	.disable_psr = false,
 	.use_max_lb = true,
 	.exit_idle_opt_for_cursor_updates = true
 };
@@ -742,9 +742,15 @@ static const struct dc_debug_options debug_defaults_diags = {
 	.scl_reset_length10 = true,
 	.dwb_fi_phase = -1, // -1 = disable
 	.dmub_command_table = true,
-	.disable_psr = true,
 	.enable_tri_buf = true,
 	.use_max_lb = true
+};
+
+static const struct dc_panel_config panel_config_defaults = {
+	.psr = {
+		.disable_psr = false,
+		.disallow_psrsu = false,
+	},
 };
 
 static void dcn30_dpp_destroy(struct dpp **dpp)
@@ -1323,6 +1329,7 @@ static struct clock_source *dcn30_clock_source_create(
 		return &clk_src->base;
 	}
 
+	kfree(clk_src);
 	BREAK_TO_DEBUGGER();
 	return NULL;
 }
@@ -1655,6 +1662,9 @@ noinline bool dcn30_internal_validate_bw(
 	if (!pipes)
 		return false;
 
+	context->bw_ctx.dml.vba.maxMpcComb = 0;
+	context->bw_ctx.dml.vba.VoltageLevel = 0;
+	context->bw_ctx.dml.vba.DRAMClockChangeSupport[0][0] = dm_dram_clock_change_vactive;
 	dc->res_pool->funcs->update_soc_for_wm_a(dc, context);
 	pipe_cnt = dc->res_pool->funcs->populate_dml_pipes(dc, context, pipes, fast_validate);
 
@@ -1873,6 +1883,7 @@ noinline bool dcn30_internal_validate_bw(
 
 	if (repopulate_pipes)
 		pipe_cnt = dc->res_pool->funcs->populate_dml_pipes(dc, context, pipes, fast_validate);
+	context->bw_ctx.dml.vba.VoltageLevel = vlevel;
 	*vlevel_out = vlevel;
 	*pipe_cnt_out = pipe_cnt;
 
@@ -2208,6 +2219,11 @@ void dcn30_update_bw_bounding_box(struct dc *dc, struct clk_bw_params *bw_params
 	}
 }
 
+static void dcn30_get_panel_config_defaults(struct dc_panel_config *panel_config)
+{
+	*panel_config = panel_config_defaults;
+}
+
 static const struct resource_funcs dcn30_res_pool_funcs = {
 	.destroy = dcn30_destroy_resource_pool,
 	.link_enc_create = dcn30_link_encoder_create,
@@ -2227,6 +2243,7 @@ static const struct resource_funcs dcn30_res_pool_funcs = {
 	.release_post_bldn_3dlut = dcn30_release_post_bldn_3dlut,
 	.update_bw_bounding_box = dcn30_update_bw_bounding_box,
 	.patch_unknown_plane_state = dcn20_patch_unknown_plane_state,
+	.get_panel_config_defaults = dcn30_get_panel_config_defaults,
 };
 
 #define CTX ctx

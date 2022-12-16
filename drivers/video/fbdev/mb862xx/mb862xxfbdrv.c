@@ -693,7 +693,7 @@ static int of_platform_mb862xx_probe(struct platform_device *ofdev)
 	par->dev = dev;
 
 	par->irq = irq_of_parse_and_map(np, 0);
-	if (par->irq == NO_IRQ) {
+	if (!par->irq) {
 		dev_err(dev, "failed to map irq\n");
 		ret = -ENODEV;
 		goto fbrel;
@@ -1180,6 +1180,9 @@ static struct pci_driver mb862xxfb_pci_driver = {
 static int mb862xxfb_init(void)
 {
 	int ret = -ENODEV;
+
+	if (fb_modesetting_disabled(DRV_NAME))
+		return -ENODEV;
 
 #if defined(CONFIG_FB_MB862XX_LIME)
 	ret = platform_driver_register(&of_platform_mb862xxfb_driver);

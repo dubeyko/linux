@@ -23,21 +23,6 @@
 #include <asm/processor.h>
 #include <asm/cache.h>
 
-/*
- * kern_addr_valid(ADDR) tests if ADDR is pointing to valid kernel
- * memory.  For the return value to be meaningful, ADDR must be >=
- * PAGE_OFFSET.  This operation can be relatively expensive (e.g.,
- * require a hash-, or multi-level tree-lookup or something of that
- * sort) but it guarantees to return TRUE only if accessing the page
- * at that address does not cause an error.  Note that there may be
- * addresses for which kern_addr_valid() returns FALSE even though an
- * access would not cause an error (e.g., this is typically true for
- * memory mapped I/O regions.
- *
- * XXX Need to implement this for parisc.
- */
-#define kern_addr_valid(addr)	(1)
-
 /* This is for the serialization of PxTLB broadcasts. At least on the N class
  * systems, only one PxTLB inter processor broadcast can be active at any one
  * time on the Merced bus. */
@@ -192,6 +177,11 @@ extern void __update_cache(pte_t pte);
 #define _PAGE_PRESENT_BIT  22   /* (0x200) Software: translation valid */
 #define _PAGE_HPAGE_BIT    21   /* (0x400) Software: Huge Page */
 #define _PAGE_USER_BIT     20   /* (0x800) Software: User accessible page */
+#ifdef CONFIG_HUGETLB_PAGE
+#define _PAGE_SPECIAL_BIT  _PAGE_DMB_BIT  /* DMB feature is currently unused */
+#else
+#define _PAGE_SPECIAL_BIT  _PAGE_HPAGE_BIT /* use unused HUGE PAGE bit */
+#endif
 
 /* N.B. The bits are defined in terms of a 32 bit word above, so the */
 /*      following macro is ok for both 32 and 64 bit.                */
@@ -219,7 +209,7 @@ extern void __update_cache(pte_t pte);
 #define _PAGE_PRESENT  (1 << xlate_pabit(_PAGE_PRESENT_BIT))
 #define _PAGE_HUGE     (1 << xlate_pabit(_PAGE_HPAGE_BIT))
 #define _PAGE_USER     (1 << xlate_pabit(_PAGE_USER_BIT))
-#define _PAGE_SPECIAL  (_PAGE_DMB)
+#define _PAGE_SPECIAL  (1 << xlate_pabit(_PAGE_SPECIAL_BIT))
 
 #define _PAGE_TABLE	(_PAGE_PRESENT | _PAGE_READ | _PAGE_WRITE | _PAGE_DIRTY | _PAGE_ACCESSED)
 #define _PAGE_CHG_MASK	(PAGE_MASK | _PAGE_ACCESSED | _PAGE_DIRTY | _PAGE_SPECIAL)

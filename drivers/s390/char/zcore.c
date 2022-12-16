@@ -30,6 +30,7 @@
 #include <asm/checksum.h>
 #include <asm/os_info.h>
 #include <asm/switch_to.h>
+#include <asm/maccess.h>
 #include "sclp.h"
 
 #define TRACE(x...) debug_sprintf_event(zcore_dbf, 1, x)
@@ -102,7 +103,7 @@ static inline int memcpy_hsa_kernel(void *dst, unsigned long src, size_t count)
 
 	kvec.iov_base = dst;
 	kvec.iov_len = count;
-	iov_iter_kvec(&iter, WRITE, &kvec, 1, count);
+	iov_iter_kvec(&iter, ITER_DEST, &kvec, 1, count);
 	if (memcpy_hsa_iter(&iter, src, count) < count)
 		return -EIO;
 	return 0;
@@ -281,6 +282,10 @@ static int __init zcore_init(void)
 		TRACE("type:   nvme\n");
 		TRACE("fid:    %x\n", ipl_info.data.nvme.fid);
 		TRACE("nsid:   %x\n", ipl_info.data.nvme.nsid);
+	} else if (ipl_info.type == IPL_TYPE_ECKD_DUMP) {
+		TRACE("type:   eckd\n");
+		TRACE("devno:  %x\n", ipl_info.data.eckd.dev_id.devno);
+		TRACE("ssid:   %x\n", ipl_info.data.eckd.dev_id.ssid);
 	}
 
 	rc = sclp_sdias_init();

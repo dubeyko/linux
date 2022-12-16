@@ -426,7 +426,7 @@ dasd_add_busid(const char *bus_id, int features)
 	if (!devmap) {
 		/* This bus_id is new. */
 		new->devindex = dasd_max_devindex++;
-		strlcpy(new->bus_id, bus_id, DASD_BUS_ID_SIZE);
+		strscpy(new->bus_id, bus_id, DASD_BUS_ID_SIZE);
 		new->features = features;
 		new->device = NULL;
 		list_add(&new->list, &dasd_hashlists[hash]);
@@ -1954,7 +1954,7 @@ dasd_copy_pair_show(struct device *dev,
 			break;
 		}
 	}
-	if (!copy->entry[i].primary)
+	if (i == DASD_CP_ENTRIES)
 		goto out;
 
 	/* print all secondary */

@@ -92,7 +92,7 @@ struct rx_pkt_attrib {
 	u8	privacy; /* in frame_ctrl field */
 	u8	bdecrypted;
 	u8	encrypt; /* when 0 indicate no encrypt. when non-zero,
-			  * indicate the encrypt algorith */
+			  * indicate the encrypt algorithm */
 	u8	iv_len;
 	u8	icv_len;
 	u8	crc_err;
@@ -175,7 +175,7 @@ struct recv_priv {
 	u8 *precv_buf;    /*  4 alignment */
 	struct __queue free_recv_buf_queue;
 	u32	free_recv_buf_queue_cnt;
-	/* For display the phy informatiom */
+	/* For display the phy information */
 	u8 is_signal_dbg;	/*  for debug */
 	u8 signal_strength_dbg;	/*  for debug */
 	s8 rssi;
@@ -243,6 +243,9 @@ struct recv_frame {
 	struct recv_reorder_ctrl *preorder_ctrl;
 };
 
+int _rtw_init_recv_priv(struct recv_priv *precvpriv, struct adapter *padapter);
+void _rtw_free_recv_priv(struct recv_priv *precvpriv);
+s32 rtw_recv_entry(struct recv_frame *precv_frame);
 struct recv_frame *_rtw_alloc_recvframe(struct __queue *pfree_recv_queue);
 struct recv_frame *rtw_alloc_recvframe(struct __queue *pfree_recv_queue);
 int  rtw_free_recvframe(struct recv_frame *precvframe,

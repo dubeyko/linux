@@ -24,6 +24,7 @@ config LINEAR_RANGES
 
 config PACKING
 	bool "Generic bitfield packing and unpacking"
+	select BITREVERSE
 	default n
 	help
 	  This option provides the packing() helper function, which permits
@@ -126,9 +127,6 @@ config TRACE_MMIO_ACCESS
 	  can be used for logging all MMIO read/write operations.
 
 source "lib/crypto/Kconfig"
-
-config LIB_MEMNEQ
-	bool
 
 config CRC_CCITT
 	tristate "CRC-CCITT functions"
@@ -343,12 +341,16 @@ config LZ4HC_COMPRESS
 config LZ4_DECOMPRESS
 	tristate
 
-config ZSTD_COMPRESS
+config ZSTD_COMMON
 	select XXHASH
 	tristate
 
+config ZSTD_COMPRESS
+	select ZSTD_COMMON
+	tristate
+
 config ZSTD_DECOMPRESS
-	select XXHASH
+	select ZSTD_COMMON
 	tristate
 
 source "lib/xz/Kconfig"
@@ -478,6 +480,10 @@ config INTERVAL_TREE
 
 	  for more information.
 
+config INTERVAL_TREE_SPAN_ITER
+	bool
+	depends on INTERVAL_TREE
+
 config XARRAY_MULTI
 	bool
 	help
@@ -526,6 +532,15 @@ config CPUMASK_OFFSTACK
 	  Use dynamic allocation for cpumask_var_t, instead of putting
 	  them on the stack.  This is a bit more expensive, but avoids
 	  stack overflow.
+
+config FORCE_NR_CPUS
+       bool "Set number of CPUs at compile time"
+       depends on SMP && EXPERT && !COMPILE_TEST
+       help
+         Say Yes if you have NR_CPUS set to an actual number of possible
+         CPUs in your system, not to a default value. This forces the core
+         code to rely on compile-time value and optimize kernel routines
+         better.
 
 config CPU_RMAP
 	bool
@@ -660,6 +675,9 @@ config ARCH_HAS_PMEM_API
 	bool
 
 config MEMREGION
+	bool
+
+config ARCH_HAS_CPU_CACHE_INVALIDATE_MEMREGION
 	bool
 
 config ARCH_HAS_MEMREMAP_COMPAT_ALIGN

@@ -297,13 +297,13 @@ static int check_acl(struct user_namespace *mnt_userns,
 		acl = get_cached_acl_rcu(inode, ACL_TYPE_ACCESS);
 	        if (!acl)
 	                return -EAGAIN;
-		/* no ->get_acl() calls in RCU mode... */
+		/* no ->get_inode_acl() calls in RCU mode... */
 		if (is_uncached_acl(acl))
 			return -ECHILD;
 	        return posix_acl_permission(mnt_userns, inode, acl, mask);
 	}
 
-	acl = get_acl(inode, ACL_TYPE_ACCESS);
+	acl = get_inode_acl(inode, ACL_TYPE_ACCESS);
 	if (IS_ERR(acl))
 		return PTR_ERR(acl);
 	if (acl) {
@@ -336,11 +336,11 @@ static int acl_permission_check(struct user_namespace *mnt_userns,
 				struct inode *inode, int mask)
 {
 	unsigned int mode = inode->i_mode;
-	kuid_t i_uid;
+	vfsuid_t vfsuid;
 
 	/* Are we the owner? If so, ACL's don't matter */
-	i_uid = i_uid_into_mnt(mnt_userns, inode);
-	if (likely(uid_eq(current_fsuid(), i_uid))) {
+	vfsuid = i_uid_into_vfsuid(mnt_userns, inode);
+	if (likely(vfsuid_eq_kuid(vfsuid, current_fsuid()))) {
 		mask &= 7;
 		mode >>= 6;
 		return (mask & ~mode) ? -EACCES : 0;
@@ -362,8 +362,8 @@ static int acl_permission_check(struct user_namespace *mnt_userns,
 	 * about? Need to check group ownership if so.
 	 */
 	if (mask & (mode ^ (mode >> 3))) {
-		kgid_t kgid = i_gid_into_mnt(mnt_userns, inode);
-		if (in_group_p(kgid))
+		vfsgid_t vfsgid = i_gid_into_vfsgid(mnt_userns, inode);
+		if (vfsgid_in_group_p(vfsgid))
 			mode >>= 3;
 	}
 
@@ -581,7 +581,7 @@ struct nameidata {
 	struct nameidata *saved;
 	unsigned	root_seq;
 	int		dfd;
-	kuid_t		dir_uid;
+	vfsuid_t	dir_vfsuid;
 	umode_t		dir_mode;
 } __randomize_layout;
 
@@ -1095,15 +1095,15 @@ fs_initcall(init_fs_namei_sysctls);
 static inline int may_follow_link(struct nameidata *nd, const struct inode *inode)
 {
 	struct user_namespace *mnt_userns;
-	kuid_t i_uid;
+	vfsuid_t vfsuid;
 
 	if (!sysctl_protected_symlinks)
 		return 0;
 
 	mnt_userns = mnt_user_ns(nd->path.mnt);
-	i_uid = i_uid_into_mnt(mnt_userns, inode);
+	vfsuid = i_uid_into_vfsuid(mnt_userns, inode);
 	/* Allowed if owner and follower match. */
-	if (uid_eq(current_cred()->fsuid, i_uid))
+	if (vfsuid_eq_kuid(vfsuid, current_fsuid()))
 		return 0;
 
 	/* Allowed if parent directory not sticky and world-writable. */
@@ -1111,7 +1111,7 @@ static inline int may_follow_link(struct nameidata *nd, const struct inode *inod
 		return 0;
 
 	/* Allowed if parent directory and link owner match. */
-	if (uid_valid(nd->dir_uid) && uid_eq(nd->dir_uid, i_uid))
+	if (vfsuid_valid(nd->dir_vfsuid) && vfsuid_eq(nd->dir_vfsuid, vfsuid))
 		return 0;
 
 	if (nd->flags & LOOKUP_RCU)
@@ -1183,8 +1183,8 @@ int may_linkat(struct user_namespace *mnt_userns, const struct path *link)
 	struct inode *inode = link->dentry->d_inode;
 
 	/* Inode writeback is not safe when the uid or gid are invalid. */
-	if (!uid_valid(i_uid_into_mnt(mnt_userns, inode)) ||
-	    !gid_valid(i_gid_into_mnt(mnt_userns, inode)))
+	if (!vfsuid_valid(i_uid_into_vfsuid(mnt_userns, inode)) ||
+	    !vfsgid_valid(i_gid_into_vfsgid(mnt_userns, inode)))
 		return -EOVERFLOW;
 
 	if (!sysctl_protected_hardlinks)
@@ -1232,13 +1232,13 @@ static int may_create_in_sticky(struct user_namespace *mnt_userns,
 				struct nameidata *nd, struct inode *const inode)
 {
 	umode_t dir_mode = nd->dir_mode;
-	kuid_t dir_uid = nd->dir_uid;
+	vfsuid_t dir_vfsuid = nd->dir_vfsuid;
 
 	if ((!sysctl_protected_fifos && S_ISFIFO(inode->i_mode)) ||
 	    (!sysctl_protected_regular && S_ISREG(inode->i_mode)) ||
 	    likely(!(dir_mode & S_ISVTX)) ||
-	    uid_eq(i_uid_into_mnt(mnt_userns, inode), dir_uid) ||
-	    uid_eq(current_fsuid(), i_uid_into_mnt(mnt_userns, inode)))
+	    vfsuid_eq(i_uid_into_vfsuid(mnt_userns, inode), dir_vfsuid) ||
+	    vfsuid_eq_kuid(i_uid_into_vfsuid(mnt_userns, inode), current_fsuid()))
 		return 0;
 
 	if (likely(dir_mode & 0002) ||
@@ -2307,7 +2307,7 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 OK:
 			/* pathname or trailing symlink, done */
 			if (!depth) {
-				nd->dir_uid = i_uid_into_mnt(mnt_userns, nd->inode);
+				nd->dir_vfsuid = i_uid_into_vfsuid(mnt_userns, nd->inode);
 				nd->dir_mode = nd->inode->i_mode;
 				nd->flags &= ~LOOKUP_PARENT;
 				return 0;
@@ -2885,9 +2885,9 @@ int __check_sticky(struct user_namespace *mnt_userns, struct inode *dir,
 {
 	kuid_t fsuid = current_fsuid();
 
-	if (uid_eq(i_uid_into_mnt(mnt_userns, inode), fsuid))
+	if (vfsuid_eq_kuid(i_uid_into_vfsuid(mnt_userns, inode), fsuid))
 		return 0;
-	if (uid_eq(i_uid_into_mnt(mnt_userns, dir), fsuid))
+	if (vfsuid_eq_kuid(i_uid_into_vfsuid(mnt_userns, dir), fsuid))
 		return 0;
 	return !capable_wrt_inode_uidgid(mnt_userns, inode, CAP_FOWNER);
 }
@@ -2926,8 +2926,8 @@ static int may_delete(struct user_namespace *mnt_userns, struct inode *dir,
 	BUG_ON(victim->d_parent->d_inode != dir);
 
 	/* Inode writeback is not safe when the uid or gid are invalid. */
-	if (!uid_valid(i_uid_into_mnt(mnt_userns, inode)) ||
-	    !gid_valid(i_gid_into_mnt(mnt_userns, inode)))
+	if (!vfsuid_valid(i_uid_into_vfsuid(mnt_userns, inode)) ||
+	    !vfsgid_valid(i_gid_into_vfsgid(mnt_userns, inode)))
 		return -EOVERFLOW;
 
 	audit_inode_child(dir, victim, AUDIT_TYPE_CHILD_DELETE);
@@ -3211,7 +3211,7 @@ static int handle_truncate(struct user_namespace *mnt_userns, struct file *filp)
 	if (error)
 		return error;
 
-	error = security_path_truncate(path);
+	error = security_file_truncate(filp);
 	if (!error) {
 		error = do_truncate(mnt_userns, path->dentry, 0,
 				    ATTR_MTIME|ATTR_CTIME|ATTR_OPEN,
@@ -3583,72 +3583,95 @@ static int do_open(struct nameidata *nd,
  * On non-idmapped mounts or if permission checking is to be performed on the
  * raw inode simply passs init_user_ns.
  */
-struct dentry *vfs_tmpfile(struct user_namespace *mnt_userns,
-			   struct dentry *dentry, umode_t mode, int open_flag)
+static int vfs_tmpfile(struct user_namespace *mnt_userns,
+		       const struct path *parentpath,
+		       struct file *file, umode_t mode)
 {
-	struct dentry *child = NULL;
-	struct inode *dir = dentry->d_inode;
+	struct dentry *child;
+	struct inode *dir = d_inode(parentpath->dentry);
 	struct inode *inode;
 	int error;
+	int open_flag = file->f_flags;
 
 	/* we want directory to be writable */
 	error = inode_permission(mnt_userns, dir, MAY_WRITE | MAY_EXEC);
 	if (error)
-		goto out_err;
-	error = -EOPNOTSUPP;
+		return error;
 	if (!dir->i_op->tmpfile)
-		goto out_err;
-	error = -ENOMEM;
-	child = d_alloc(dentry, &slash_name);
+		return -EOPNOTSUPP;
+	child = d_alloc(parentpath->dentry, &slash_name);
 	if (unlikely(!child))
-		goto out_err;
+		return -ENOMEM;
+	file->f_path.mnt = parentpath->mnt;
+	file->f_path.dentry = child;
 	mode = vfs_prepare_mode(mnt_userns, dir, mode, mode, mode);
-	error = dir->i_op->tmpfile(mnt_userns, dir, child, mode);
+	error = dir->i_op->tmpfile(mnt_userns, dir, file, mode);
+	dput(child);
 	if (error)
-		goto out_err;
-	error = -ENOENT;
-	inode = child->d_inode;
-	if (unlikely(!inode))
-		goto out_err;
+		return error;
+	/* Don't check for other permissions, the inode was just created */
+	error = may_open(mnt_userns, &file->f_path, 0, file->f_flags);
+	if (error)
+		return error;
+	inode = file_inode(file);
 	if (!(open_flag & O_EXCL)) {
 		spin_lock(&inode->i_lock);
 		inode->i_state |= I_LINKABLE;
 		spin_unlock(&inode->i_lock);
 	}
 	ima_post_create_tmpfile(mnt_userns, inode);
-	return child;
-
-out_err:
-	dput(child);
-	return ERR_PTR(error);
+	return 0;
 }
-EXPORT_SYMBOL(vfs_tmpfile);
+
+/**
+ * vfs_tmpfile_open - open a tmpfile for kernel internal use
+ * @mnt_userns:	user namespace of the mount the inode was found from
+ * @parentpath:	path of the base directory
+ * @mode:	mode of the new tmpfile
+ * @open_flag:	flags
+ * @cred:	credentials for open
+ *
+ * Create and open a temporary file.  The file is not accounted in nr_files,
+ * hence this is only for kernel internal use, and must not be installed into
+ * file tables or such.
+ */
+struct file *vfs_tmpfile_open(struct user_namespace *mnt_userns,
+			  const struct path *parentpath,
+			  umode_t mode, int open_flag, const struct cred *cred)
+{
+	struct file *file;
+	int error;
+
+	file = alloc_empty_file_noaccount(open_flag, cred);
+	if (!IS_ERR(file)) {
+		error = vfs_tmpfile(mnt_userns, parentpath, file, mode);
+		if (error) {
+			fput(file);
+			file = ERR_PTR(error);
+		}
+	}
+	return file;
+}
+EXPORT_SYMBOL(vfs_tmpfile_open);
 
 static int do_tmpfile(struct nameidata *nd, unsigned flags,
 		const struct open_flags *op,
 		struct file *file)
 {
 	struct user_namespace *mnt_userns;
-	struct dentry *child;
 	struct path path;
 	int error = path_lookupat(nd, flags | LOOKUP_DIRECTORY, &path);
+
 	if (unlikely(error))
 		return error;
 	error = mnt_want_write(path.mnt);
 	if (unlikely(error))
 		goto out;
 	mnt_userns = mnt_user_ns(path.mnt);
-	child = vfs_tmpfile(mnt_userns, path.dentry, op->mode, op->open_flag);
-	error = PTR_ERR(child);
-	if (IS_ERR(child))
+	error = vfs_tmpfile(mnt_userns, &path, file, op->mode);
+	if (error)
 		goto out2;
-	dput(path.dentry);
-	path.dentry = child;
-	audit_inode(nd->name, child, 0);
-	/* Don't check for other permissions, the inode was just created */
-	error = may_open(mnt_userns, &path, 0, op->open_flag);
-	if (!error)
-		error = vfs_open(&path, file);
+	audit_inode(nd->name, file->f_path.dentry, 0);
 out2:
 	mnt_drop_write(path.mnt);
 out:
@@ -5088,7 +5111,7 @@ int page_symlink(struct inode *inode, const char *symname, int len)
 	const struct address_space_operations *aops = mapping->a_ops;
 	bool nofs = !mapping_gfp_constraint(mapping, __GFP_FS);
 	struct page *page;
-	void *fsdata;
+	void *fsdata = NULL;
 	int err;
 	unsigned int flags;
 

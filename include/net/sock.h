@@ -323,7 +323,7 @@ struct sk_filter;
   *	@sk_tskey: counter to disambiguate concurrent tstamp requests
   *	@sk_zckey: counter to order MSG_ZEROCOPY notifications
   *	@sk_socket: Identd and reporting IO signals
-  *	@sk_user_data: RPC layer private data
+  *	@sk_user_data: RPC layer private data. Write-protected by @sk_callback_lock.
   *	@sk_frag: cached page frag
   *	@sk_peek_off: current peek_offset value
   *	@sk_send_head: front of stuff to transmit
@@ -503,10 +503,10 @@ struct sock {
 #if BITS_PER_LONG==32
 	seqlock_t		sk_stamp_seq;
 #endif
-	u16			sk_tsflags;
-	u8			sk_shutdown;
 	atomic_t		sk_tskey;
 	atomic_t		sk_zckey;
+	u32			sk_tsflags;
+	u8			sk_shutdown;
 
 	u8			sk_clockid;
 	u8			sk_txtime_deadline_mode : 1,
@@ -1889,10 +1889,17 @@ void sock_kfree_s(struct sock *sk, void *mem, int size);
 void sock_kzfree_s(struct sock *sk, void *mem, int size);
 void sk_send_sigurg(struct sock *sk);
 
+static inline void sock_replace_proto(struct sock *sk, struct proto *proto)
+{
+	if (sk->sk_socket)
+		clear_bit(SOCK_SUPPORT_ZC, &sk->sk_socket->flags);
+	WRITE_ONCE(sk->sk_prot, proto);
+}
+
 struct sockcm_cookie {
 	u64 transmit_time;
 	u32 mark;
-	u16 tsflags;
+	u32 tsflags;
 };
 
 static inline void sockcm_init(struct sockcm_cookie *sockc,
@@ -1901,7 +1908,7 @@ static inline void sockcm_init(struct sockcm_cookie *sockc,
 	*sockc = (struct sockcm_cookie) { .tsflags = sk->sk_tsflags };
 }
 
-int __sock_cmsg_send(struct sock *sk, struct msghdr *msg, struct cmsghdr *cmsg,
+int __sock_cmsg_send(struct sock *sk, struct cmsghdr *cmsg,
 		     struct sockcm_cookie *sockc);
 int sock_cmsg_send(struct sock *sk, struct msghdr *msg,
 		   struct sockcm_cookie *sockc);
@@ -2109,7 +2116,7 @@ static inline kuid_t sock_net_uid(const struct net *net, const struct sock *sk)
 
 static inline u32 net_tx_rndhash(void)
 {
-	u32 v = prandom_u32();
+	u32 v = get_random_u32();
 
 	return v ?: 1;
 }
@@ -2585,7 +2592,7 @@ static inline gfp_t gfp_any(void)
 
 static inline gfp_t gfp_memcg_charge(void)
 {
-	return in_softirq() ? GFP_NOWAIT : GFP_KERNEL;
+	return in_softirq() ? GFP_ATOMIC : GFP_KERNEL;
 }
 
 static inline long sock_rcvtimeo(const struct sock *sk, bool noblock)

@@ -144,10 +144,10 @@ static void eth_get_drvinfo(struct net_device *net, struct ethtool_drvinfo *p)
 {
 	struct eth_dev *dev = netdev_priv(net);
 
-	strlcpy(p->driver, "g_ether", sizeof(p->driver));
-	strlcpy(p->version, UETH__VERSION, sizeof(p->version));
-	strlcpy(p->fw_version, dev->gadget->name, sizeof(p->fw_version));
-	strlcpy(p->bus_info, dev_name(&dev->gadget->dev), sizeof(p->bus_info));
+	strscpy(p->driver, "g_ether", sizeof(p->driver));
+	strscpy(p->version, UETH__VERSION, sizeof(p->version));
+	strscpy(p->fw_version, dev->gadget->name, sizeof(p->fw_version));
+	strscpy(p->bus_info, dev_name(&dev->gadget->dev), sizeof(p->bus_info));
 }
 
 /* REVISIT can also support:
@@ -798,7 +798,6 @@ struct eth_dev *gether_setup_name(struct usb_gadget *g,
 	net->max_mtu = GETHER_MAX_MTU_SIZE;
 
 	dev->gadget = g;
-	SET_NETDEV_DEV(net, &g->dev);
 	SET_NETDEV_DEVTYPE(net, &gadget_type);
 
 	status = register_netdev(net);
@@ -873,8 +872,6 @@ int gether_register_netdev(struct net_device *net)
 	struct usb_gadget *g;
 	int status;
 
-	if (!net->dev.parent)
-		return -EINVAL;
 	dev = netdev_priv(net);
 	g = dev->gadget;
 
@@ -905,7 +902,6 @@ void gether_set_gadget(struct net_device *net, struct usb_gadget *g)
 
 	dev = netdev_priv(net);
 	dev->gadget = g;
-	SET_NETDEV_DEV(net, &g->dev);
 }
 EXPORT_SYMBOL_GPL(gether_set_gadget);
 

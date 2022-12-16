@@ -5,10 +5,7 @@
 
 #include "../include/osdep_service.h"
 #include "../include/drv_types.h"
-#include "../include/recv_osdep.h"
-#include "../include/xmit_osdep.h"
 #include "../include/hal_intf.h"
-#include "../include/mlme_osdep.h"
 #include "../include/sta_info.h"
 #include "../include/wifi.h"
 #include "../include/wlan_bssdef.h"
@@ -77,19 +74,6 @@ void _rtw_free_network(struct mlme_priv *pmlmepriv, struct wlan_network *pnetwor
 	list_add_tail(&pnetwork->list, &free_queue->queue);
 	pmlmepriv->num_of_scanned--;
 	spin_unlock_bh(&free_queue->lock);
-}
-
-void _rtw_free_network_nolock(struct	mlme_priv *pmlmepriv, struct wlan_network *pnetwork)
-{
-	struct __queue *free_queue = &pmlmepriv->free_bss_pool;
-
-	if (!pnetwork)
-		return;
-	if (pnetwork->fixed)
-		return;
-	list_del_init(&pnetwork->list);
-	list_add_tail(&pnetwork->list, get_list_head(free_queue));
-	pmlmepriv->num_of_scanned--;
 }
 
 /*
@@ -190,13 +174,43 @@ u8 *rtw_get_beacon_interval_from_ie(u8 *ie)
 	return ie + 8;
 }
 
+static void rtw_join_timeout_handler(struct timer_list *t)
+{
+	struct adapter *adapter = from_timer(adapter, t, mlmepriv.assoc_timer);
+
+	_rtw_join_timeout_handler(adapter);
+}
+
+static void _rtw_scan_timeout_handler(struct timer_list *t)
+{
+	struct adapter *adapter = from_timer(adapter, t, mlmepriv.scan_to_timer);
+
+	rtw_scan_timeout_handler(adapter);
+}
+
+static void _dynamic_check_timer_handlder(struct timer_list *t)
+{
+	struct adapter *adapter = from_timer(adapter, t, mlmepriv.dynamic_chk_timer);
+
+	rtw_dynamic_check_timer_handlder(adapter);
+	_set_timer(&adapter->mlmepriv.dynamic_chk_timer, 2000);
+}
+
+static void rtw_init_mlme_timer(struct adapter *padapter)
+{
+	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
+
+	timer_setup(&pmlmepriv->assoc_timer, rtw_join_timeout_handler, 0);
+	timer_setup(&pmlmepriv->scan_to_timer, _rtw_scan_timeout_handler, 0);
+	timer_setup(&pmlmepriv->dynamic_chk_timer, _dynamic_check_timer_handlder, 0);
+}
+
 int rtw_init_mlme_priv(struct adapter *padapter)/* struct	mlme_priv *pmlmepriv) */
 {
 	int	i;
 	u8	*pbuf;
 	struct wlan_network	*pnetwork;
 	struct mlme_priv		*pmlmepriv = &padapter->mlmepriv;
-	int	res = _SUCCESS;
 
 	/*  We don't need to memset padapter->XXX to zero, because adapter is allocated by vzalloc(). */
 
@@ -217,10 +231,9 @@ int rtw_init_mlme_priv(struct adapter *padapter)/* struct	mlme_priv *pmlmepriv) 
 
 	pbuf = vzalloc(MAX_BSS_CNT * (sizeof(struct wlan_network)));
 
-	if (!pbuf) {
-		res = _FAIL;
-		goto exit;
-	}
+	if (!pbuf)
+		return -ENOMEM;
+
 	pmlmepriv->free_bss_buf = pbuf;
 
 	pnetwork = (struct wlan_network *)pbuf;
@@ -235,13 +248,9 @@ int rtw_init_mlme_priv(struct adapter *padapter)/* struct	mlme_priv *pmlmepriv) 
 
 	/* allocate DMA-able/Non-Page memory for cmd_buf and rsp_buf */
 
-	rtw_clear_scan_deny(padapter);
-
 	rtw_init_mlme_timer(padapter);
 
-exit:
-
-	return res;
+	return 0;
 }
 
 void rtw_free_mlme_priv(struct mlme_priv *pmlmepriv)
@@ -285,9 +294,15 @@ exit:
 static void rtw_free_network_nolock(struct mlme_priv *pmlmepriv,
 				    struct wlan_network *pnetwork)
 {
+	struct __queue *free_queue = &pmlmepriv->free_bss_pool;
 
-	_rtw_free_network_nolock(pmlmepriv, pnetwork);
-
+	if (!pnetwork)
+		return;
+	if (pnetwork->fixed)
+		return;
+	list_del_init(&pnetwork->list);
+	list_add_tail(&pnetwork->list, get_list_head(free_queue));
+	pmlmepriv->num_of_scanned--;
 }
 
 void rtw_free_network_queue(struct adapter *dev, u8 isfreeall)
@@ -641,6 +656,23 @@ exit:
 	spin_unlock_bh(&pmlmepriv->lock);
 }
 
+static void rtw_xmit_schedule(struct adapter *padapter)
+{
+	struct xmit_priv *pxmitpriv;
+
+	if (!padapter)
+		return;
+
+	pxmitpriv = &padapter->xmitpriv;
+
+	spin_lock_bh(&pxmitpriv->lock);
+
+	if (rtw_txframes_pending(padapter))
+		tasklet_hi_schedule(&pxmitpriv->xmit_tasklet);
+
+	spin_unlock_bh(&pxmitpriv->lock);
+}
+
 void rtw_surveydone_event_callback(struct adapter	*adapter, u8 *pbuf)
 {
 	struct	mlme_priv *pmlmepriv = &adapter->mlmepriv;
@@ -697,7 +729,7 @@ void rtw_surveydone_event_callback(struct adapter	*adapter, u8 *pbuf)
 			} else {
 				if (rtw_to_roaming(adapter) != 0) {
 					if (--pmlmepriv->to_roaming == 0 ||
-					    rtw_sitesurvey_cmd(adapter, &pmlmepriv->assoc_ssid, 1, NULL, 0) != _SUCCESS) {
+					    rtw_sitesurvey_cmd(adapter, &pmlmepriv->assoc_ssid, 1) != _SUCCESS) {
 						rtw_set_roaming(adapter, 0);
 						rtw_free_assoc_resources(adapter, 1);
 						rtw_indicate_disconnect(adapter);
@@ -719,7 +751,7 @@ void rtw_surveydone_event_callback(struct adapter	*adapter, u8 *pbuf)
 	if (check_fwstate(pmlmepriv, _FW_LINKED))
 		p2p_ps_wk_cmd(adapter, P2P_PS_SCAN_DONE, 0);
 
-	rtw_os_xmit_schedule(adapter);
+	rtw_xmit_schedule(adapter);
 }
 
 static void free_scanqueue(struct	mlme_priv *pmlmepriv)
@@ -795,6 +827,48 @@ void rtw_free_assoc_resources(struct adapter *adapter, int lock_scanned_queue)
 
 }
 
+static struct rt_pmkid_list backup_pmkid[NUM_PMKID_CACHE];
+
+static void rtw_reset_securitypriv(struct adapter *adapter)
+{
+	u8 backup_index;
+	u8 backup_counter;
+	u32 backup_time;
+
+	if (adapter->securitypriv.dot11AuthAlgrthm == dot11AuthAlgrthm_8021X) {
+		/* 802.1x */
+		/*  We have to backup the PMK information for WiFi PMK Caching test item. */
+		/*  Backup the btkip_countermeasure information. */
+		/*  When the countermeasure is trigger, the driver have to disconnect with AP for 60 seconds. */
+		memcpy(&backup_pmkid[0], &adapter->securitypriv.PMKIDList[0], sizeof(struct rt_pmkid_list) * NUM_PMKID_CACHE);
+		backup_index = adapter->securitypriv.PMKIDIndex;
+		backup_counter = adapter->securitypriv.btkip_countermeasure;
+		backup_time = adapter->securitypriv.btkip_countermeasure_time;
+		memset((unsigned char *)&adapter->securitypriv, 0, sizeof(struct security_priv));
+
+		/*  Restore the PMK information to securitypriv structure for the following connection. */
+		memcpy(&adapter->securitypriv.PMKIDList[0],
+			    &backup_pmkid[0],
+			    sizeof(struct rt_pmkid_list) * NUM_PMKID_CACHE);
+		adapter->securitypriv.PMKIDIndex = backup_index;
+		adapter->securitypriv.btkip_countermeasure = backup_counter;
+		adapter->securitypriv.btkip_countermeasure_time = backup_time;
+		adapter->securitypriv.ndisauthtype = Ndis802_11AuthModeOpen;
+		adapter->securitypriv.ndisencryptstatus = Ndis802_11WEPDisabled;
+	} else {
+		/* reset values in securitypriv */
+		struct security_priv *psec_priv = &adapter->securitypriv;
+
+		psec_priv->dot11AuthAlgrthm = dot11AuthAlgrthm_Open;  /* open system */
+		psec_priv->dot11PrivacyAlgrthm = _NO_PRIVACY_;
+		psec_priv->dot11PrivacyKeyIndex = 0;
+		psec_priv->dot118021XGrpPrivacy = _NO_PRIVACY_;
+		psec_priv->dot118021XGrpKeyid = 1;
+		psec_priv->ndisauthtype = Ndis802_11AuthModeOpen;
+		psec_priv->ndisencryptstatus = Ndis802_11WEPDisabled;
+	}
+}
+
 /*
 *rtw_indicate_connect: the caller has to lock pmlmepriv->lock
 */
@@ -809,12 +883,13 @@ void rtw_indicate_connect(struct adapter *padapter)
 
 		rtw_led_control(padapter, LED_CTL_LINK);
 
-		rtw_os_indicate_connect(padapter);
+		rtw_indicate_wx_assoc_event(padapter);
+		netif_carrier_on(padapter->pnetdev);
+		if (padapter->pid[2] != 0)
+			rtw_signal_process(padapter->pid[2], SIGALRM);
 	}
 
 	pmlmepriv->to_roaming = 0;
-
-	rtw_set_scan_deny(padapter, 3000);
 }
 
 /*
@@ -831,11 +906,14 @@ void rtw_indicate_disconnect(struct adapter *padapter)
 
 	if (check_fwstate(&padapter->mlmepriv, _FW_LINKED) ||
 	    (pmlmepriv->to_roaming <= 0)) {
-		rtw_os_indicate_disconnect(padapter);
+		/*  Do it first for tx broadcast pkt after disconnection issue! */
+		netif_carrier_off(padapter->pnetdev);
+
+		rtw_indicate_wx_disassoc_event(padapter);
+		rtw_reset_securitypriv(padapter);
 
 		_clr_fwstate_(pmlmepriv, _FW_LINKED);
 		rtw_led_control(padapter, LED_CTL_NO_LINK);
-		rtw_clear_scan_deny(padapter);
 	}
 	p2p_ps_wk_cmd(padapter, P2P_PS_DISABLE, 1);
 
@@ -843,9 +921,9 @@ void rtw_indicate_disconnect(struct adapter *padapter)
 
 }
 
-inline void rtw_indicate_scan_done(struct adapter *padapter, bool aborted)
+inline void rtw_indicate_scan_done(struct adapter *padapter)
 {
-	rtw_os_indicate_scan_done(padapter, aborted);
+	indicate_wx_scan_complete_event(padapter);
 }
 
 static struct sta_info *rtw_joinbss_update_stainfo(struct adapter *padapter, struct wlan_network *pnetwork)
@@ -1068,8 +1146,7 @@ void rtw_joinbss_event_callback(struct adapter *adapter, u8 *pbuf)
 
 	mlmeext_joinbss_event_callback(adapter, pnetwork->join_res);
 
-	rtw_os_xmit_schedule(adapter);
-
+	rtw_xmit_schedule(adapter);
 }
 
 void rtw_set_max_rpt_macid(struct adapter *adapter, u8 macid)
@@ -1316,7 +1393,7 @@ void rtw_scan_timeout_handler (struct adapter *adapter)
 	spin_lock_bh(&pmlmepriv->lock);
 	_clr_fwstate_(pmlmepriv, _FW_UNDER_SURVEY);
 	spin_unlock_bh(&pmlmepriv->lock);
-	rtw_indicate_scan_done(adapter, true);
+	rtw_indicate_scan_done(adapter);
 }
 
 static void rtw_auto_scan_handler(struct adapter *padapter)
@@ -1442,10 +1519,6 @@ int rtw_select_and_join_from_scanned_queue(struct mlme_priv *pmlmepriv)
 	pmlmepriv->pscanned = phead->next;
 	while (phead != pmlmepriv->pscanned) {
 		pnetwork = container_of(pmlmepriv->pscanned, struct wlan_network, list);
-		if (!pnetwork) {
-			ret = _FAIL;
-			goto exit;
-		}
 		pmlmepriv->pscanned = pmlmepriv->pscanned->next;
 		rtw_check_join_candidate(pmlmepriv, &candidate, pnetwork);
 	}
@@ -1639,6 +1712,33 @@ static int rtw_append_pmkid(struct adapter *Adapter, int iEntry, u8 *ie, uint ie
 	return ie_len;
 }
 
+static void rtw_report_sec_ie(struct adapter *adapter, u8 authmode, u8 *sec_ie)
+{
+	uint len;
+	u8 *buff, *p, i;
+	union iwreq_data wrqu;
+
+	buff = NULL;
+	if (authmode == _WPA_IE_ID_) {
+		buff = kzalloc(IW_CUSTOM_MAX, GFP_ATOMIC);
+		if (!buff)
+			return;
+		p = buff;
+		p += sprintf(p, "ASSOCINFO(ReqIEs =");
+		len = sec_ie[1] + 2;
+		len =  (len < IW_CUSTOM_MAX) ? len : IW_CUSTOM_MAX;
+		for (i = 0; i < len; i++)
+			p += sprintf(p, "%02x", sec_ie[i]);
+		p += sprintf(p, ")");
+		memset(&wrqu, 0, sizeof(wrqu));
+		wrqu.data.length = p - buff;
+		wrqu.data.length = (wrqu.data.length < IW_CUSTOM_MAX) ?
+				   wrqu.data.length : IW_CUSTOM_MAX;
+		wireless_send_event(adapter->pnetdev, IWEVCUSTOM, &wrqu, buff);
+		kfree(buff);
+	}
+}
+
 int rtw_restruct_sec_ie(struct adapter *adapter, u8 *in_ie, u8 *out_ie, uint in_len)
 {
 	u8 authmode = 0;
@@ -1711,22 +1811,6 @@ void rtw_update_registrypriv_dev_network(struct adapter *adapter)
 	pdev_network->Privacy = (psecuritypriv->dot11PrivacyAlgrthm > 0 ? 1 : 0); /*  adhoc no 802.1x */
 
 	pdev_network->Rssi = 0;
-
-	switch (pregistrypriv->wireless_mode) {
-	case WIRELESS_11B:
-		pdev_network->NetworkTypeInUse = (Ndis802_11DS);
-		break;
-	case WIRELESS_11G:
-	case WIRELESS_11BG:
-	case WIRELESS_11_24N:
-	case WIRELESS_11G_24N:
-	case WIRELESS_11BG_24N:
-		pdev_network->NetworkTypeInUse = (Ndis802_11OFDM24);
-		break;
-	default:
-		/*  TODO */
-		break;
-	}
 
 	pdev_network->Configuration.DSConfig = (pregistrypriv->channel);
 

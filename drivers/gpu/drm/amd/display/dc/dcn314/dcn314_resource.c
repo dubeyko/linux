@@ -184,6 +184,9 @@ enum dcn31_clk_src_array_id {
 	.reg_name[id] = BASE(reg ## block ## id ## _ ## temp_name ## _BASE_IDX) + \
 					reg ## block ## id ## _ ## temp_name
 
+#define SF_DWB2(reg_name, block, id, field_name, post_fix)	\
+	.field_name = reg_name ## __ ## field_name ## post_fix
+
 #define DCCG_SRII(reg_name, block, id)\
 	.block ## _ ## reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
 					reg ## block ## id ## _ ## reg_name
@@ -847,7 +850,7 @@ static const struct resource_caps res_cap_dcn314 = {
 	.num_ddc = 5,
 	.num_vmid = 16,
 	.num_mpc_3dlut = 2,
-	.num_dsc = 3,
+	.num_dsc = 4,
 };
 
 static const struct dc_plane_cap plane_cap = {
@@ -881,7 +884,9 @@ static const struct dc_plane_cap plane_cap = {
 };
 
 static const struct dc_debug_options debug_defaults_drv = {
-	.disable_z10 = true, /*hw not support it*/
+	.disable_z10 = false,
+	.enable_z9_disable_interface = true,
+	.psr_skip_crtc_disable = true,
 	.disable_dmcu = true,
 	.force_abm_enable = false,
 	.timing_trace = false,
@@ -914,7 +919,6 @@ static const struct dc_debug_options debug_defaults_drv = {
 			.afmt = true,
 		}
 	},
-	.optimize_edp_link_rate = true,
 	.seamless_boot_odm_combine = true
 };
 
@@ -934,6 +938,16 @@ static const struct dc_debug_options debug_defaults_diags = {
 	.dmub_command_table = true,
 	.enable_tri_buf = true,
 	.use_max_lb = true
+};
+
+static const struct dc_panel_config panel_config_defaults = {
+	.psr = {
+		.disable_psr = false,
+		.disallow_psrsu = false,
+	},
+	.ilr = {
+		.optimize_edp_link_rate = true,
+	},
 };
 
 static void dcn31_dpp_destroy(struct dpp **dpp)
@@ -1675,6 +1689,11 @@ static void dcn314_update_bw_bounding_box(struct dc *dc, struct clk_bw_params *b
 	DC_FP_END();
 }
 
+static void dcn314_get_panel_config_defaults(struct dc_panel_config *panel_config)
+{
+	*panel_config = panel_config_defaults;
+}
+
 static struct resource_funcs dcn314_res_pool_funcs = {
 	.destroy = dcn314_destroy_resource_pool,
 	.link_enc_create = dcn31_link_encoder_create,
@@ -1697,6 +1716,7 @@ static struct resource_funcs dcn314_res_pool_funcs = {
 	.release_post_bldn_3dlut = dcn30_release_post_bldn_3dlut,
 	.update_bw_bounding_box = dcn314_update_bw_bounding_box,
 	.patch_unknown_plane_state = dcn20_patch_unknown_plane_state,
+	.get_panel_config_defaults = dcn314_get_panel_config_defaults,
 };
 
 static struct clock_source *dcn30_clock_source_create(
@@ -1754,6 +1774,8 @@ static bool dcn314_resource_construct(
 	dc->caps.max_slave_rgb_planes = 2;
 	dc->caps.post_blend_color_processing = true;
 	dc->caps.force_dp_tps4_for_cp2520 = true;
+	if (dc->config.forceHBR2CP2520)
+		dc->caps.force_dp_tps4_for_cp2520 = false;
 	dc->caps.dp_hpo = true;
 	dc->caps.dp_hdmi21_pcon_support = true;
 	dc->caps.edp_dsc_support = true;

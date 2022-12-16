@@ -426,10 +426,6 @@ lpfc_dev_loss_tmo_handler(struct lpfc_nodelist *ndlp)
 	name = (uint8_t *)&ndlp->nlp_portname;
 	phba = vport->phba;
 
-	spin_lock_irqsave(&ndlp->lock, iflags);
-	ndlp->nlp_flag &= ~NLP_IN_DEV_LOSS;
-	spin_unlock_irqrestore(&ndlp->lock, iflags);
-
 	if (phba->sli_rev == LPFC_SLI_REV4)
 		fcf_inuse = lpfc_fcf_inuse(phba);
 
@@ -451,22 +447,36 @@ lpfc_dev_loss_tmo_handler(struct lpfc_nodelist *ndlp)
 				 *name, *(name+1), *(name+2), *(name+3),
 				 *(name+4), *(name+5), *(name+6), *(name+7),
 				 ndlp->nlp_DID);
+
+		spin_lock_irqsave(&ndlp->lock, iflags);
+		ndlp->nlp_flag &= ~NLP_IN_DEV_LOSS;
+		spin_unlock_irqrestore(&ndlp->lock, iflags);
 		return fcf_inuse;
 	}
 
 	/* Fabric nodes are done. */
 	if (ndlp->nlp_type & NLP_FABRIC) {
 		spin_lock_irqsave(&ndlp->lock, iflags);
-		/* In massive vport configuration settings, it's possible
-		 * dev_loss_tmo fired during node recovery.  So, check if
-		 * fabric nodes are in discovery states outstanding.
+
+		/* In massive vport configuration settings or when the FLOGI
+		 * completes with a sequence timeout, it's possible
+		 * dev_loss_tmo fired during node recovery.  The driver has to
+		 * account for this race to allow for recovery and keep
+		 * the reference counting correct.
 		 */
 		switch (ndlp->nlp_DID) {
 		case Fabric_DID:
 			fc_vport = vport->fc_vport;
-			if (fc_vport &&
-			    fc_vport->vport_state == FC_VPORT_INITIALIZING)
-				recovering = true;
+			if (fc_vport) {
+				/* NPIV path. */
+				if (fc_vport->vport_state ==
+				    FC_VPORT_INITIALIZING)
+					recovering = true;
+			} else {
+				/* Physical port path. */
+				if (phba->hba_flag & HBA_FLOGI_OUTSTANDING)
+					recovering = true;
+			}
 			break;
 		case Fabric_Cntl_DID:
 			if (ndlp->nlp_flag & NLP_REG_LOGIN_SEND)
@@ -514,6 +524,9 @@ lpfc_dev_loss_tmo_handler(struct lpfc_nodelist *ndlp)
 			return fcf_inuse;
 		}
 
+		spin_lock_irqsave(&ndlp->lock, iflags);
+		ndlp->nlp_flag &= ~NLP_IN_DEV_LOSS;
+		spin_unlock_irqrestore(&ndlp->lock, iflags);
 		lpfc_nlp_put(ndlp);
 		return fcf_inuse;
 	}
@@ -552,6 +565,9 @@ lpfc_dev_loss_tmo_handler(struct lpfc_nodelist *ndlp)
 		return fcf_inuse;
 	}
 
+	spin_lock_irqsave(&ndlp->lock, iflags);
+	ndlp->nlp_flag &= ~NLP_IN_DEV_LOSS;
+	spin_unlock_irqrestore(&ndlp->lock, iflags);
 	if (!(ndlp->fc4_xpt_flags & NVME_XPT_REGD))
 		lpfc_disc_state_machine(vport, ndlp, NULL, NLP_EVT_DEVICE_RM);
 
@@ -2156,8 +2172,8 @@ lpfc_check_pending_fcoe_event(struct lpfc_hba *phba, uint8_t unreg_fcf)
  * This function makes an running random selection decision on FCF record to
  * use through a sequence of @fcf_cnt eligible FCF records with equal
  * probability. To perform integer manunipulation of random numbers with
- * size unit32_t, the lower 16 bits of the 32-bit random number returned
- * from prandom_u32() are taken as the random random number generated.
+ * size unit32_t, a 16-bit random number returned from get_random_u16() is
+ * taken as the random random number generated.
  *
  * Returns true when outcome is for the newly read FCF record should be
  * chosen; otherwise, return false when outcome is for keeping the previously
@@ -2169,7 +2185,7 @@ lpfc_sli4_new_fcf_random_select(struct lpfc_hba *phba, uint32_t fcf_cnt)
 	uint32_t rand_num;
 
 	/* Get 16-bit uniform random number */
-	rand_num = 0xFFFF & prandom_u32();
+	rand_num = get_random_u16();
 
 	/* Decision with probability 1/fcf_cnt */
 	if ((fcf_cnt * rand_num) < 0xFFFF)

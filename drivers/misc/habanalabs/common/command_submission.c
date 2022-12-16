@@ -12,7 +12,9 @@
 #include <linux/slab.h>
 
 #define HL_CS_FLAGS_TYPE_MASK	(HL_CS_FLAGS_SIGNAL | HL_CS_FLAGS_WAIT | \
-					HL_CS_FLAGS_COLLECTIVE_WAIT)
+			HL_CS_FLAGS_COLLECTIVE_WAIT | HL_CS_FLAGS_RESERVE_SIGNALS_ONLY | \
+			HL_CS_FLAGS_UNRESERVE_SIGNALS_ONLY | HL_CS_FLAGS_ENGINE_CORE_COMMAND)
+
 
 #define MAX_TS_ITER_NUM 10
 
@@ -740,13 +742,11 @@ static void cs_do_release(struct kref *ref)
 		 */
 		if (hl_cs_cmpl->encaps_signals)
 			kref_put(&hl_cs_cmpl->encaps_sig_hdl->refcount,
-						hl_encaps_handle_do_release);
+					hl_encaps_release_handle_and_put_ctx);
 	}
 
-	if ((cs->type == CS_TYPE_WAIT || cs->type == CS_TYPE_COLLECTIVE_WAIT)
-			&& cs->encaps_signals)
-		kref_put(&cs->encaps_sig_hdl->refcount,
-					hl_encaps_handle_do_release);
+	if ((cs->type == CS_TYPE_WAIT || cs->type == CS_TYPE_COLLECTIVE_WAIT) && cs->encaps_signals)
+		kref_put(&cs->encaps_sig_hdl->refcount, hl_encaps_release_handle_and_put_ctx);
 
 out:
 	/* Must be called before hl_ctx_put because inside we use ctx to get
@@ -796,7 +796,7 @@ out:
 static void cs_timedout(struct work_struct *work)
 {
 	struct hl_device *hdev;
-	u64 event_mask;
+	u64 event_mask = 0x0;
 	int rc;
 	struct hl_cs *cs = container_of(work, struct hl_cs,
 						 work_tdr.work);
@@ -824,15 +824,11 @@ static void cs_timedout(struct work_struct *work)
 	}
 
 	/* Save only the first CS timeout parameters */
-	rc = atomic_cmpxchg(&hdev->last_error.cs_timeout.write_enable, 1, 0);
+	rc = atomic_cmpxchg(&hdev->captured_err_info.cs_timeout.write_enable, 1, 0);
 	if (rc) {
-		hdev->last_error.cs_timeout.timestamp = ktime_get();
-		hdev->last_error.cs_timeout.seq = cs->sequence;
-
-		event_mask = device_reset ? (HL_NOTIFIER_EVENT_CS_TIMEOUT |
-				HL_NOTIFIER_EVENT_DEVICE_RESET) : HL_NOTIFIER_EVENT_CS_TIMEOUT;
-
-		hl_notifier_event_send_all(hdev, event_mask);
+		hdev->captured_err_info.cs_timeout.timestamp = ktime_get();
+		hdev->captured_err_info.cs_timeout.seq = cs->sequence;
+		event_mask |= HL_NOTIFIER_EVENT_CS_TIMEOUT;
 	}
 
 	switch (cs->type) {
@@ -867,8 +863,12 @@ static void cs_timedout(struct work_struct *work)
 
 	cs_put(cs);
 
-	if (device_reset)
-		hl_device_reset(hdev, HL_DRV_RESET_TDR);
+	if (device_reset) {
+		event_mask |= HL_NOTIFIER_EVENT_DEVICE_RESET;
+		hl_device_cond_reset(hdev, HL_DRV_RESET_TDR, event_mask);
+	} else if (event_mask) {
+		hl_notifier_event_send_all(hdev, event_mask);
+	}
 }
 
 static int allocate_cs(struct hl_device *hdev, struct hl_ctx *ctx,
@@ -1009,6 +1009,34 @@ static void cs_rollback(struct hl_device *hdev, struct hl_cs *cs)
 		hl_complete_job(hdev, job);
 }
 
+/*
+ * release_reserved_encaps_signals() - release reserved encapsulated signals.
+ * @hdev: pointer to habanalabs device structure
+ *
+ * Release reserved encapsulated signals which weren't un-reserved, or for which a CS with
+ * encapsulated signals wasn't submitted and thus weren't released as part of CS roll-back.
+ * For these signals need also to put the refcount of the H/W SOB which was taken at the
+ * reservation.
+ */
+static void release_reserved_encaps_signals(struct hl_device *hdev)
+{
+	struct hl_ctx *ctx = hl_get_compute_ctx(hdev);
+	struct hl_cs_encaps_sig_handle *handle;
+	struct hl_encaps_signals_mgr *mgr;
+	u32 id;
+
+	if (!ctx)
+		return;
+
+	mgr = &ctx->sig_mgr;
+
+	idr_for_each_entry(&mgr->handles, handle, id)
+		if (handle->cs_seq == ULLONG_MAX)
+			kref_put(&handle->refcount, hl_encaps_release_handle_and_put_sob_ctx);
+
+	hl_ctx_put(ctx);
+}
+
 void hl_cs_rollback_all(struct hl_device *hdev, bool skip_wq_flush)
 {
 	int i;
@@ -1037,6 +1065,8 @@ void hl_cs_rollback_all(struct hl_device *hdev, bool skip_wq_flush)
 	}
 
 	force_complete_multi_cs(hdev);
+
+	release_reserved_encaps_signals(hdev);
 }
 
 static void
@@ -1242,6 +1272,8 @@ static enum hl_cs_type hl_cs_get_cs_type(u32 cs_type_flags)
 		return CS_RESERVE_SIGNALS;
 	else if (cs_type_flags & HL_CS_FLAGS_UNRESERVE_SIGNALS_ONLY)
 		return CS_UNRESERVE_SIGNALS;
+	else if (cs_type_flags & HL_CS_FLAGS_ENGINE_CORE_COMMAND)
+		return CS_TYPE_ENGINE_CORE;
 	else
 		return CS_TYPE_DEFAULT;
 }
@@ -1253,6 +1285,7 @@ static int hl_cs_sanity_checks(struct hl_fpriv *hpriv, union hl_cs_args *args)
 	u32 cs_type_flags, num_chunks;
 	enum hl_device_status status;
 	enum hl_cs_type cs_type;
+	bool is_sync_stream;
 
 	if (!hl_device_operational(hdev, &status)) {
 		return -EBUSY;
@@ -1276,9 +1309,10 @@ static int hl_cs_sanity_checks(struct hl_fpriv *hpriv, union hl_cs_args *args)
 	cs_type = hl_cs_get_cs_type(cs_type_flags);
 	num_chunks = args->in.num_chunks_execute;
 
-	if (unlikely((cs_type == CS_TYPE_SIGNAL || cs_type == CS_TYPE_WAIT ||
-			cs_type == CS_TYPE_COLLECTIVE_WAIT) &&
-			!hdev->supports_sync_stream)) {
+	is_sync_stream = (cs_type == CS_TYPE_SIGNAL || cs_type == CS_TYPE_WAIT ||
+			cs_type == CS_TYPE_COLLECTIVE_WAIT);
+
+	if (unlikely(is_sync_stream && !hdev->supports_sync_stream)) {
 		dev_err(hdev->dev, "Sync stream CS is not supported\n");
 		return -EINVAL;
 	}
@@ -1288,7 +1322,7 @@ static int hl_cs_sanity_checks(struct hl_fpriv *hpriv, union hl_cs_args *args)
 			dev_err(hdev->dev, "Got execute CS with 0 chunks, context %d\n", ctx->asid);
 			return -EINVAL;
 		}
-	} else if (num_chunks != 1) {
+	} else if (is_sync_stream && num_chunks != 1) {
 		dev_err(hdev->dev,
 			"Sync stream CS mandates one chunk only, context %d\n",
 			ctx->asid);
@@ -1584,13 +1618,14 @@ static int hl_cs_ctx_switch(struct hl_fpriv *hpriv, union hl_cs_args *args,
 	struct hl_device *hdev = hpriv->hdev;
 	struct hl_ctx *ctx = hpriv->ctx;
 	bool need_soft_reset = false;
-	int rc = 0, do_ctx_switch;
+	int rc = 0, do_ctx_switch = 0;
 	void __user *chunks;
 	u32 num_chunks, tmp;
 	u16 sob_count;
 	int ret;
 
-	do_ctx_switch = atomic_cmpxchg(&ctx->thread_ctx_switch_token, 1, 0);
+	if (hdev->supports_ctx_switch)
+		do_ctx_switch = atomic_cmpxchg(&ctx->thread_ctx_switch_token, 1, 0);
 
 	if (do_ctx_switch || (args->in.cs_flags & HL_CS_FLAGS_FORCE_RESTORE)) {
 		mutex_lock(&hpriv->restore_phase_mutex);
@@ -1661,9 +1696,10 @@ wait_again:
 			}
 		}
 
-		ctx->thread_ctx_switch_wait_token = 1;
+		if (hdev->supports_ctx_switch)
+			ctx->thread_ctx_switch_wait_token = 1;
 
-	} else if (!ctx->thread_ctx_switch_wait_token) {
+	} else if (hdev->supports_ctx_switch && !ctx->thread_ctx_switch_wait_token) {
 		rc = hl_poll_timeout_memory(hdev,
 			&ctx->thread_ctx_switch_wait_token, tmp, (tmp == 1),
 			100, jiffies_to_usecs(hdev->timeout_jiffies), false);
@@ -1992,6 +2028,8 @@ static int cs_ioctl_reserve_signals(struct hl_fpriv *hpriv,
 	 * signal offset support
 	 */
 	handle->pre_sob_val = prop->next_sob_val - handle->count;
+
+	handle->cs_seq = ULLONG_MAX;
 
 	*signals_count = prop->next_sob_val;
 	hdev->asic_funcs->hw_queues_unlock(hdev);
@@ -2342,12 +2380,45 @@ put_cs:
 	/* We finished with the CS in this function, so put the ref */
 	cs_put(cs);
 free_cs_chunk_array:
-	if (!wait_cs_submitted && cs_encaps_signals && handle_found &&
-							is_wait_cs)
-		kref_put(&encaps_sig_hdl->refcount,
-				hl_encaps_handle_do_release);
+	if (!wait_cs_submitted && cs_encaps_signals && handle_found && is_wait_cs)
+		kref_put(&encaps_sig_hdl->refcount, hl_encaps_release_handle_and_put_ctx);
 	kfree(cs_chunk_array);
 out:
+	return rc;
+}
+
+static int cs_ioctl_engine_cores(struct hl_fpriv *hpriv, u64 engine_cores,
+						u32 num_engine_cores, u32 core_command)
+{
+	int rc;
+	struct hl_device *hdev = hpriv->hdev;
+	void __user *engine_cores_arr;
+	u32 *cores;
+
+	if (!num_engine_cores || num_engine_cores > hdev->asic_prop.num_engine_cores) {
+		dev_err(hdev->dev, "Number of engine cores %d is invalid\n", num_engine_cores);
+		return -EINVAL;
+	}
+
+	if (core_command != HL_ENGINE_CORE_RUN && core_command != HL_ENGINE_CORE_HALT) {
+		dev_err(hdev->dev, "Engine core command is invalid\n");
+		return -EINVAL;
+	}
+
+	engine_cores_arr = (void __user *) (uintptr_t) engine_cores;
+	cores = kmalloc_array(num_engine_cores, sizeof(u32), GFP_KERNEL);
+	if (!cores)
+		return -ENOMEM;
+
+	if (copy_from_user(cores, engine_cores_arr, num_engine_cores * sizeof(u32))) {
+		dev_err(hdev->dev, "Failed to copy core-ids array from user\n");
+		kfree(cores);
+		return -EFAULT;
+	}
+
+	rc = hdev->asic_funcs->set_engine_cores(hdev, cores, num_engine_cores, core_command);
+	kfree(cores);
+
 	return rc;
 }
 
@@ -2402,6 +2473,10 @@ int hl_cs_ioctl(struct hl_fpriv *hpriv, void *data)
 	case CS_UNRESERVE_SIGNALS:
 		rc = cs_ioctl_unreserve_signals(hpriv,
 					args->in.encaps_sig_handle_id);
+		break;
+	case CS_TYPE_ENGINE_CORE:
+		rc = cs_ioctl_engine_cores(hpriv, args->in.engine_cores,
+				args->in.num_engine_cores, args->in.core_command);
 		break;
 	default:
 		rc = cs_ioctl_default(hpriv, chunks, num_chunks, &cs_seq,
@@ -2524,7 +2599,7 @@ static int hl_cs_poll_fences(struct multi_cs_data *mcs_data, struct multi_cs_com
 	ktime_t max_ktime, first_cs_time;
 	enum hl_cs_wait_status status;
 
-	memset(fence_ptr, 0, arr_len * sizeof(*fence_ptr));
+	memset(fence_ptr, 0, arr_len * sizeof(struct hl_fence *));
 
 	/* get all fences under the same lock */
 	rc = hl_ctx_get_fences(mcs_data->ctx, seq_arr, fence_ptr, arr_len);
@@ -2826,7 +2901,7 @@ static int hl_multi_cs_wait_ioctl(struct hl_fpriv *hpriv, void *data)
 	}
 
 	/* allocate array for the fences */
-	fence_arr = kmalloc_array(seq_arr_len, sizeof(*fence_arr), GFP_KERNEL);
+	fence_arr = kmalloc_array(seq_arr_len, sizeof(struct hl_fence *), GFP_KERNEL);
 	if (!fence_arr) {
 		rc = -ENOMEM;
 		goto free_seq_arr;

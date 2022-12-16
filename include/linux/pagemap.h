@@ -504,9 +504,8 @@ pgoff_t page_cache_prev_miss(struct address_space *mapping,
 #define FGP_NOFS		0x00000010
 #define FGP_NOWAIT		0x00000020
 #define FGP_FOR_MMAP		0x00000040
-#define FGP_HEAD		0x00000080
-#define FGP_ENTRY		0x00000100
-#define FGP_STABLE		0x00000200
+#define FGP_ENTRY		0x00000080
+#define FGP_STABLE		0x00000100
 
 struct folio *__filemap_get_folio(struct address_space *mapping, pgoff_t index,
 		int fgp_flags, gfp_t gfp);
@@ -718,8 +717,8 @@ static inline struct page *find_subpage(struct page *head, pgoff_t index)
 
 unsigned filemap_get_folios(struct address_space *mapping, pgoff_t *start,
 		pgoff_t end, struct folio_batch *fbatch);
-unsigned find_get_pages_contig(struct address_space *mapping, pgoff_t start,
-			       unsigned int nr_pages, struct page **pages);
+unsigned filemap_get_folios_contig(struct address_space *mapping,
+		pgoff_t *start, pgoff_t end, struct folio_batch *fbatch);
 unsigned find_get_pages_range_tag(struct address_space *mapping, pgoff_t *index,
 			pgoff_t end, xa_mark_t tag, unsigned int nr_pages,
 			struct page **pages);
@@ -989,19 +988,16 @@ static inline int lock_page_killable(struct page *page)
 }
 
 /*
- * lock_page_or_retry - Lock the page, unless this would block and the
+ * folio_lock_or_retry - Lock the folio, unless this would block and the
  * caller indicated that it can handle a retry.
  *
  * Return value and mmap_lock implications depend on flags; see
  * __folio_lock_or_retry().
  */
-static inline bool lock_page_or_retry(struct page *page, struct mm_struct *mm,
-				     unsigned int flags)
+static inline bool folio_lock_or_retry(struct folio *folio,
+		struct mm_struct *mm, unsigned int flags)
 {
-	struct folio *folio;
 	might_sleep();
-
-	folio = page_folio(page);
 	return folio_trylock(folio) || __folio_lock_or_retry(folio, mm, flags);
 }
 
@@ -1042,7 +1038,6 @@ static inline int wait_on_page_locked_killable(struct page *page)
 	return folio_wait_locked_killable(page_folio(page));
 }
 
-int folio_put_wait_locked(struct folio *folio, int state);
 void wait_on_page_writeback(struct page *page);
 void folio_wait_writeback(struct folio *folio);
 int folio_wait_writeback_killable(struct folio *folio);
@@ -1106,12 +1101,10 @@ int add_to_page_cache_lru(struct page *page, struct address_space *mapping,
 int filemap_add_folio(struct address_space *mapping, struct folio *folio,
 		pgoff_t index, gfp_t gfp);
 void filemap_remove_folio(struct folio *folio);
-void delete_from_page_cache(struct page *page);
 void __filemap_remove_folio(struct folio *folio, void *shadow);
-void replace_page_cache_page(struct page *old, struct page *new);
+void replace_page_cache_folio(struct folio *old, struct folio *new);
 void delete_from_page_cache_batch(struct address_space *mapping,
 				  struct folio_batch *fbatch);
-int try_to_release_page(struct page *page, gfp_t gfp);
 bool filemap_release_folio(struct folio *folio, gfp_t gfp);
 loff_t mapping_seek_hole_data(struct address_space *, loff_t start, loff_t end,
 		int whence);

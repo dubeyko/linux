@@ -23,11 +23,6 @@
 #include <linux/bpf-cgroup.h>
 #include <net/ping.h>
 
-static void ping_v6_destroy(struct sock *sk)
-{
-	inet6_destroy_sock(sk);
-}
-
 /* Compatibility glue so we can support IPv6 when it's compiled as a module */
 static int dummy_ipv6_recv_error(struct sock *sk, struct msghdr *msg, int len,
 				 int *addr_len)
@@ -179,7 +174,7 @@ static int ping_v6_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 
 	lock_sock(sk);
 	err = ip6_append_data(sk, ping_getfrag, &pfh, len,
-			      0, &ipc6, &fl6, rt,
+			      sizeof(struct icmp6hdr), &ipc6, &fl6, rt,
 			      MSG_DONTWAIT);
 
 	if (err) {
@@ -205,7 +200,6 @@ struct proto pingv6_prot = {
 	.owner =	THIS_MODULE,
 	.init =		ping_init_sock,
 	.close =	ping_close,
-	.destroy =	ping_v6_destroy,
 	.pre_connect =	ping_v6_pre_connect,
 	.connect =	ip6_datagram_connect_v6_only,
 	.disconnect =	__udp_disconnect,

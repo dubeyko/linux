@@ -107,9 +107,9 @@ static struct mt76_wcid *mt7615_rx_get_wcid(struct mt7615_dev *dev,
 	return &sta->vif->sta.wcid;
 }
 
-void mt7615_mac_reset_counters(struct mt7615_dev *dev)
+void mt7615_mac_reset_counters(struct mt7615_phy *phy)
 {
-	struct mt76_phy *mphy_ext = dev->mt76.phys[MT_BAND1];
+	struct mt7615_dev *dev = phy->dev;
 	int i;
 
 	for (i = 0; i < 4; i++) {
@@ -117,10 +117,8 @@ void mt7615_mac_reset_counters(struct mt7615_dev *dev)
 		mt76_rr(dev, MT_TX_AGG_CNT(1, i));
 	}
 
-	memset(dev->mt76.aggr_stats, 0, sizeof(dev->mt76.aggr_stats));
-	dev->mt76.phy.survey_time = ktime_get_boottime();
-	if (mphy_ext)
-		mphy_ext->survey_time = ktime_get_boottime();
+	memset(phy->mt76->aggr_stats, 0, sizeof(phy->mt76->aggr_stats));
+	phy->mt76->survey_time = ktime_get_boottime();
 
 	/* reset airtime counters */
 	mt76_rr(dev, MT_MIB_SDR9(0));
@@ -345,6 +343,7 @@ static int mt7615_mac_fill_rx(struct mt7615_dev *dev, struct sk_buff *skb)
 	u32 rxd1 = le32_to_cpu(rxd[1]);
 	u32 rxd2 = le32_to_cpu(rxd[2]);
 	u32 csum_mask = MT_RXD0_NORMAL_IP_SUM | MT_RXD0_NORMAL_UDP_TCP_SUM;
+	u32 csum_status = *(u32 *)skb->cb;
 	bool unicast, hdr_trans, remove_pad, insert_ccmp_hdr = false;
 	u16 hdr_gap;
 	int phy_idx;
@@ -394,7 +393,8 @@ static int mt7615_mac_fill_rx(struct mt7615_dev *dev, struct sk_buff *skb)
 		spin_unlock_bh(&dev->sta_poll_lock);
 	}
 
-	if ((rxd0 & csum_mask) == csum_mask)
+	if (mt76_is_mmio(&dev->mt76) && (rxd0 & csum_mask) == csum_mask &&
+	    !(csum_status & (BIT(0) | BIT(2) | BIT(3))))
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 
 	if (rxd2 & MT_RXD2_NORMAL_FCS_ERR)
@@ -610,14 +610,14 @@ static int mt7615_mac_fill_rx(struct mt7615_dev *dev, struct sk_buff *skb)
 			 * When header translation failure is indicated,
 			 * the hardware will insert an extra 2-byte field
 			 * containing the data length after the protocol
-			 * type field.
+			 * type field. This happens either when the LLC-SNAP
+			 * pattern did not match, or if a VLAN header was
+			 * detected.
 			 */
 			pad_start = 12;
 			if (get_unaligned_be16(skb->data + pad_start) == ETH_P_8021Q)
 				pad_start += 4;
-
-			if (get_unaligned_be16(skb->data + pad_start) !=
-			    skb->len - pad_start - 2)
+			else
 				pad_start = 0;
 		}
 
@@ -1175,6 +1175,21 @@ void mt7615_mac_set_rates(struct mt7615_phy *phy, struct mt7615_sta *sta,
 }
 EXPORT_SYMBOL_GPL(mt7615_mac_set_rates);
 
+void mt7615_mac_enable_rtscts(struct mt7615_dev *dev,
+			      struct ieee80211_vif *vif, bool enable)
+{
+	struct mt7615_vif *mvif = (struct mt7615_vif *)vif->drv_priv;
+	u32 addr;
+
+	addr = mt7615_mac_wtbl_addr(dev, mvif->sta.wcid.idx) + 3 * 4;
+
+	if (enable)
+		mt76_set(dev, addr, MT_WTBL_W3_RTS);
+	else
+		mt76_clear(dev, addr, MT_WTBL_W3_RTS);
+}
+EXPORT_SYMBOL_GPL(mt7615_mac_enable_rtscts);
+
 static int
 mt7615_mac_wtbl_update_key(struct mt7615_dev *dev, struct mt76_wcid *wcid,
 			   struct ieee80211_key_conf *key,
@@ -1651,7 +1666,7 @@ bool mt7615_rx_check(struct mt76_dev *mdev, void *data, int len)
 EXPORT_SYMBOL_GPL(mt7615_rx_check);
 
 void mt7615_queue_rx_skb(struct mt76_dev *mdev, enum mt76_rxq_id q,
-			 struct sk_buff *skb)
+			 struct sk_buff *skb, u32 *info)
 {
 	struct mt7615_dev *dev = container_of(mdev, struct mt7615_dev, mt76);
 	__le32 *rxd = (__le32 *)skb->data;
@@ -1997,7 +2012,7 @@ mt7615_mac_update_mib_stats(struct mt7615_phy *phy)
 	struct mt7615_dev *dev = phy->dev;
 	struct mib_stats *mib = &phy->mib;
 	bool ext_phy = phy != &dev->phy;
-	int i, aggr;
+	int i, aggr = 0;
 	u32 val, val2;
 
 	mib->fcs_err_cnt += mt76_get_field(dev, MT_MIB_SDR3(ext_phy),
@@ -2011,7 +2026,6 @@ mt7615_mac_update_mib_stats(struct mt7615_phy *phy)
 		mib->aggr_per = 1000 * (val - val2) / val;
 	}
 
-	aggr = ext_phy ? ARRAY_SIZE(dev->mt76.aggr_stats) / 2 : 0;
 	for (i = 0; i < 4; i++) {
 		val = mt76_rr(dev, MT_MIB_MB_SDR1(ext_phy, i));
 		mib->ba_miss_cnt += FIELD_GET(MT_MIB_BA_MISS_COUNT_MASK, val);
@@ -2024,8 +2038,8 @@ mt7615_mac_update_mib_stats(struct mt7615_phy *phy)
 						  val);
 
 		val = mt76_rr(dev, MT_TX_AGG_CNT(ext_phy, i));
-		dev->mt76.aggr_stats[aggr++] += val & 0xffff;
-		dev->mt76.aggr_stats[aggr++] += val >> 16;
+		phy->mt76->aggr_stats[aggr++] += val & 0xffff;
+		phy->mt76->aggr_stats[aggr++] += val >> 16;
 	}
 }
 

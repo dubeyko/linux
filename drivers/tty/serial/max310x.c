@@ -787,10 +787,7 @@ static void max310x_handle_tx(struct uart_port *port)
 		} else {
 			max310x_batch_write(port, xmit->buf + xmit->tail, to_send);
 		}
-
-		/* Add data to send */
-		port->icount.tx += to_send;
-		xmit->tail = (xmit->tail + to_send) & (UART_XMIT_SIZE - 1);
+		uart_xmit_advance(port, to_send);
 	}
 
 	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
@@ -906,7 +903,7 @@ static void max310x_break_ctl(struct uart_port *port, int break_state)
 
 static void max310x_set_termios(struct uart_port *port,
 				struct ktermios *termios,
-				struct ktermios *old)
+				const struct ktermios *old)
 {
 	unsigned int lcr = 0, flow = 0;
 	int baud;

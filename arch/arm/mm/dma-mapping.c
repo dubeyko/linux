@@ -564,14 +564,6 @@ static void *__dma_alloc(struct device *dev, size_t size, dma_addr_t *handle,
 	if (mask < 0xffffffffULL)
 		gfp |= GFP_DMA;
 
-	/*
-	 * Following is a work-around (a.k.a. hack) to prevent pages
-	 * with __GFP_COMP being passed to split_page() which cannot
-	 * handle them.  The real problem is that this flag probably
-	 * should be 0 on ARM as it is not supported on this
-	 * platform; see CONFIG_HUGETLBFS.
-	 */
-	gfp &= ~(__GFP_COMP);
 	args.gfp = gfp;
 
 	*handle = DMA_MAPPING_ERROR;
@@ -1092,15 +1084,6 @@ static void *arm_iommu_alloc_attrs(struct device *dev, size_t size,
 	if (coherent_flag  == COHERENT || !gfpflags_allow_blocking(gfp))
 		return __iommu_alloc_simple(dev, size, gfp, handle,
 					    coherent_flag, attrs);
-
-	/*
-	 * Following is a work-around (a.k.a. hack) to prevent pages
-	 * with __GFP_COMP being passed to split_page() which cannot
-	 * handle them.  The real problem is that this flag probably
-	 * should be 0 on ARM as it is not supported on this
-	 * platform; see CONFIG_HUGETLBFS.
-	 */
-	gfp &= ~(__GFP_COMP);
 
 	pages = __iommu_alloc_buffer(dev, size, gfp, attrs, coherent_flag);
 	if (!pages)
@@ -1769,8 +1752,14 @@ static void arm_teardown_iommu_dma_ops(struct device *dev) { }
 void arch_setup_dma_ops(struct device *dev, u64 dma_base, u64 size,
 			const struct iommu_ops *iommu, bool coherent)
 {
-	dev->archdata.dma_coherent = coherent;
-	dev->dma_coherent = coherent;
+	/*
+	 * Due to legacy code that sets the ->dma_coherent flag from a bus
+	 * notifier we can't just assign coherent to the ->dma_coherent flag
+	 * here, but instead have to make sure we only set but never clear it
+	 * for now.
+	 */
+	if (coherent)
+		dev->dma_coherent = true;
 
 	/*
 	 * Don't override the dma_ops if they have already been set. Ideally

@@ -10,10 +10,12 @@
 #include <uapi/misc/habanalabs.h>
 #include "habanalabs.h"
 
-#include <linux/kernel.h>
 #include <linux/fs.h>
-#include <linux/uaccess.h>
+#include <linux/kernel.h>
+#include <linux/pci.h>
 #include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <linux/vmalloc.h>
 
 static u32 hl_debug_struct_size[HL_DEBUG_OP_TIMESTAMP + 1] = {
 	[HL_DEBUG_OP_ETR] = sizeof(struct hl_debug_params_etr),
@@ -103,6 +105,8 @@ static int hw_ip_info(struct hl_device *hdev, struct hl_info_args *args)
 
 	hw_ip.edma_enabled_mask = prop->edma_enabled_mask;
 	hw_ip.server_type = prop->server_type;
+	hw_ip.security_enabled = prop->fw_security_enabled;
+	hw_ip.revision_id = hdev->pdev->revision;
 
 	return copy_to_user(out, &hw_ip,
 		min((size_t) size, sizeof(hw_ip))) ? -EFAULT : 0;
@@ -119,6 +123,10 @@ static int hw_events_info(struct hl_device *hdev, bool aggregate,
 		return -EINVAL;
 
 	arr = hdev->asic_funcs->get_events_stat(hdev, aggregate, &size);
+	if (!arr) {
+		dev_err(hdev->dev, "Events info not supported\n");
+		return -EOPNOTSUPP;
+	}
 
 	return copy_to_user(out, arr, min(max_size, size)) ? -EFAULT : 0;
 }
@@ -591,8 +599,8 @@ static int cs_timeout_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
 	if ((!max_size) || (!out))
 		return -EINVAL;
 
-	info.seq = hdev->last_error.cs_timeout.seq;
-	info.timestamp = ktime_to_ns(hdev->last_error.cs_timeout.timestamp);
+	info.seq = hdev->captured_err_info.cs_timeout.seq;
+	info.timestamp = ktime_to_ns(hdev->captured_err_info.cs_timeout.timestamp);
 
 	return copy_to_user(out, &info, min_t(size_t, max_size, sizeof(info))) ? -EFAULT : 0;
 }
@@ -601,20 +609,14 @@ static int razwi_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
 {
 	struct hl_device *hdev = hpriv->hdev;
 	u32 max_size = args->return_size;
-	struct hl_info_razwi_event info = {0};
+	struct hl_info_razwi_event *info = &hdev->captured_err_info.razwi;
 	void __user *out = (void __user *) (uintptr_t) args->return_pointer;
 
 	if ((!max_size) || (!out))
 		return -EINVAL;
 
-	info.timestamp = ktime_to_ns(hdev->last_error.razwi.timestamp);
-	info.addr = hdev->last_error.razwi.addr;
-	info.engine_id_1 = hdev->last_error.razwi.engine_id_1;
-	info.engine_id_2 = hdev->last_error.razwi.engine_id_2;
-	info.no_engine_id = hdev->last_error.razwi.non_engine_initiator;
-	info.error_type = hdev->last_error.razwi.type;
-
-	return copy_to_user(out, &info, min_t(size_t, max_size, sizeof(info))) ? -EFAULT : 0;
+	return copy_to_user(out, info, min_t(size_t, max_size, sizeof(struct hl_info_razwi_event)))
+				? -EFAULT : 0;
 }
 
 static int undefined_opcode_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
@@ -627,13 +629,13 @@ static int undefined_opcode_info(struct hl_fpriv *hpriv, struct hl_info_args *ar
 	if ((!max_size) || (!out))
 		return -EINVAL;
 
-	info.timestamp = ktime_to_ns(hdev->last_error.undef_opcode.timestamp);
-	info.engine_id = hdev->last_error.undef_opcode.engine_id;
-	info.cq_addr = hdev->last_error.undef_opcode.cq_addr;
-	info.cq_size = hdev->last_error.undef_opcode.cq_size;
-	info.stream_id = hdev->last_error.undef_opcode.stream_id;
-	info.cb_addr_streams_len = hdev->last_error.undef_opcode.cb_addr_streams_len;
-	memcpy(info.cb_addr_streams, hdev->last_error.undef_opcode.cb_addr_streams,
+	info.timestamp = ktime_to_ns(hdev->captured_err_info.undef_opcode.timestamp);
+	info.engine_id = hdev->captured_err_info.undef_opcode.engine_id;
+	info.cq_addr = hdev->captured_err_info.undef_opcode.cq_addr;
+	info.cq_size = hdev->captured_err_info.undef_opcode.cq_size;
+	info.stream_id = hdev->captured_err_info.undef_opcode.stream_id;
+	info.cb_addr_streams_len = hdev->captured_err_info.undef_opcode.cb_addr_streams_len;
+	memcpy(info.cb_addr_streams, hdev->captured_err_info.undef_opcode.cb_addr_streams,
 			sizeof(info.cb_addr_streams));
 
 	return copy_to_user(out, &info, min_t(size_t, max_size, sizeof(info))) ? -EFAULT : 0;
@@ -658,6 +660,55 @@ static int dev_mem_alloc_page_sizes_info(struct hl_fpriv *hpriv, struct hl_info_
 	info.page_order_bitmask = hdev->asic_prop.dmmu.supported_pages_mask;
 
 	return copy_to_user(out, &info, min_t(size_t, max_size, sizeof(info))) ? -EFAULT : 0;
+}
+
+static int sec_attest_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
+{
+	void __user *out = (void __user *) (uintptr_t) args->return_pointer;
+	struct cpucp_sec_attest_info *sec_attest_info;
+	struct hl_info_sec_attest *info;
+	u32 max_size = args->return_size;
+	int rc;
+
+	if ((!max_size) || (!out))
+		return -EINVAL;
+
+	sec_attest_info = kmalloc(sizeof(*sec_attest_info), GFP_KERNEL);
+	if (!sec_attest_info)
+		return -ENOMEM;
+
+	info = kmalloc(sizeof(*info), GFP_KERNEL);
+	if (!info) {
+		rc = -ENOMEM;
+		goto free_sec_attest_info;
+	}
+
+	rc = hl_fw_get_sec_attest_info(hpriv->hdev, sec_attest_info, args->sec_attest_nonce);
+	if (rc)
+		goto free_info;
+
+	info->nonce = le32_to_cpu(sec_attest_info->nonce);
+	info->pcr_quote_len = le16_to_cpu(sec_attest_info->pcr_quote_len);
+	info->pub_data_len = le16_to_cpu(sec_attest_info->pub_data_len);
+	info->certificate_len = le16_to_cpu(sec_attest_info->certificate_len);
+	info->pcr_num_reg = sec_attest_info->pcr_num_reg;
+	info->pcr_reg_len = sec_attest_info->pcr_reg_len;
+	info->quote_sig_len = sec_attest_info->quote_sig_len;
+	memcpy(&info->pcr_data, &sec_attest_info->pcr_data, sizeof(info->pcr_data));
+	memcpy(&info->pcr_quote, &sec_attest_info->pcr_quote, sizeof(info->pcr_quote));
+	memcpy(&info->public_data, &sec_attest_info->public_data, sizeof(info->public_data));
+	memcpy(&info->certificate, &sec_attest_info->certificate, sizeof(info->certificate));
+	memcpy(&info->quote_sig, &sec_attest_info->quote_sig, sizeof(info->quote_sig));
+
+	rc = copy_to_user(out, info,
+				min_t(size_t, max_size, sizeof(*info))) ? -EFAULT : 0;
+
+free_info:
+	kfree(info);
+free_sec_attest_info:
+	kfree(sec_attest_info);
+
+	return rc;
 }
 
 static int eventfd_register(struct hl_fpriv *hpriv, struct hl_info_args *args)
@@ -695,6 +746,78 @@ static int eventfd_unregister(struct hl_fpriv *hpriv, struct hl_info_args *args)
 	hpriv->notifier_event.eventfd = NULL;
 	mutex_unlock(&hpriv->notifier_event.lock);
 	return 0;
+}
+
+static int engine_status_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
+{
+	void __user *out = (void __user *) (uintptr_t) args->return_pointer;
+	u32 status_buf_size = args->return_size;
+	struct hl_device *hdev = hpriv->hdev;
+	struct engines_data eng_data;
+	int rc;
+
+	if ((status_buf_size < SZ_1K) || (status_buf_size > HL_ENGINES_DATA_MAX_SIZE) || (!out))
+		return -EINVAL;
+
+	eng_data.actual_size = 0;
+	eng_data.allocated_buf_size = status_buf_size;
+	eng_data.buf = vmalloc(status_buf_size);
+	if (!eng_data.buf)
+		return -ENOMEM;
+
+	hdev->asic_funcs->is_device_idle(hdev, NULL, 0, &eng_data);
+
+	if (eng_data.actual_size > eng_data.allocated_buf_size) {
+		dev_err(hdev->dev,
+			"Engines data size (%d Bytes) is bigger than allocated size (%u Bytes)\n",
+			eng_data.actual_size, status_buf_size);
+		vfree(eng_data.buf);
+		return -ENOMEM;
+	}
+
+	args->user_buffer_actual_size = eng_data.actual_size;
+	rc = copy_to_user(out, eng_data.buf, min_t(size_t, status_buf_size, eng_data.actual_size)) ?
+				-EFAULT : 0;
+
+	vfree(eng_data.buf);
+
+	return rc;
+}
+
+static int page_fault_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
+{
+	struct hl_device *hdev = hpriv->hdev;
+	u32 max_size = args->return_size;
+	struct hl_page_fault_info *info = &hdev->captured_err_info.pgf_info.pgf;
+	void __user *out = (void __user *) (uintptr_t) args->return_pointer;
+
+	if ((!max_size) || (!out))
+		return -EINVAL;
+
+	return copy_to_user(out, info, min_t(size_t, max_size, sizeof(struct hl_page_fault_info)))
+				? -EFAULT : 0;
+}
+
+static int user_mappings_info(struct hl_fpriv *hpriv, struct hl_info_args *args)
+{
+	void __user *out = (void __user *) (uintptr_t) args->return_pointer;
+	u32 user_buf_size = args->return_size;
+	struct hl_device *hdev = hpriv->hdev;
+	struct page_fault_info *pgf_info;
+	u64 actual_size;
+
+	pgf_info = &hdev->captured_err_info.pgf_info;
+	args->array_size = pgf_info->num_of_user_mappings;
+
+	if (!out)
+		return -EINVAL;
+
+	actual_size = pgf_info->num_of_user_mappings * sizeof(struct hl_user_mapping);
+	if (user_buf_size < actual_size)
+		return -ENOMEM;
+
+	return copy_to_user(out, pgf_info->user_mappings, min_t(size_t, user_buf_size, actual_size))
+				? -EFAULT : 0;
 }
 
 static int _hl_info_ioctl(struct hl_fpriv *hpriv, void *data,
@@ -756,6 +879,15 @@ static int _hl_info_ioctl(struct hl_fpriv *hpriv, void *data,
 	case HL_INFO_GET_EVENTS:
 		return events_info(hpriv, args);
 
+	case HL_INFO_PAGE_FAULT_EVENT:
+		return page_fault_info(hpriv, args);
+
+	case HL_INFO_USER_MAPPINGS:
+		return user_mappings_info(hpriv, args);
+
+	case HL_INFO_UNREGISTER_EVENTFD:
+		return eventfd_unregister(hpriv, args);
+
 	default:
 		break;
 	}
@@ -806,11 +938,14 @@ static int _hl_info_ioctl(struct hl_fpriv *hpriv, void *data,
 	case HL_INFO_DRAM_PENDING_ROWS:
 		return dram_pending_rows_info(hpriv, args);
 
+	case HL_INFO_SECURED_ATTESTATION:
+		return sec_attest_info(hpriv, args);
+
 	case HL_INFO_REGISTER_EVENTFD:
 		return eventfd_register(hpriv, args);
 
-	case HL_INFO_UNREGISTER_EVENTFD:
-		return eventfd_unregister(hpriv, args);
+	case HL_INFO_ENGINE_STATUS:
+		return engine_status_info(hpriv, args);
 
 	default:
 		dev_err(dev, "Invalid request %d\n", args->op);

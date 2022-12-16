@@ -43,6 +43,8 @@
 #define BPP_BLENDED_PIPE 0xffffffff
 #define DCN31_MAX_DSC_IMAGE_WIDTH 5184
 #define DCN31_MAX_FMT_420_BUFFER_WIDTH 4096
+#define DCN3_15_MIN_COMPBUF_SIZE_KB 128
+#define DCN3_15_MAX_DET_SIZE 384
 
 // For DML-C changes that hasn't been propagated to VBA yet
 //#define __DML_VBA_ALLOW_DELTA__
@@ -1050,17 +1052,16 @@ static bool CalculatePrefetchSchedule(
 	else
 		bytes_pp = myPipe->BytePerPixelY + myPipe->BytePerPixelC;
 	/*rev 99*/
-	prefetch_bw_pr = dml_min(1, bytes_pp * myPipe->PixelClock / (double) myPipe->DPPPerPlane);
+	prefetch_bw_pr = bytes_pp * myPipe->PixelClock / (double) myPipe->DPPPerPlane;
+	prefetch_bw_pr = dml_min(1, myPipe->VRatio) * prefetch_bw_pr;
 	max_Tsw = dml_max(PrefetchSourceLinesY, PrefetchSourceLinesC) * LineTime;
 	prefetch_sw_bytes = PrefetchSourceLinesY * swath_width_luma_ub * myPipe->BytePerPixelY + PrefetchSourceLinesC * swath_width_chroma_ub * myPipe->BytePerPixelC;
-	prefetch_bw_oto = dml_max(bytes_pp * myPipe->PixelClock / myPipe->DPPPerPlane, prefetch_sw_bytes / (dml_max(PrefetchSourceLinesY, PrefetchSourceLinesC) * LineTime));
 	prefetch_bw_oto = dml_max(prefetch_bw_pr, prefetch_sw_bytes / max_Tsw);
 
 	min_Lsw = dml_max(1, dml_max(PrefetchSourceLinesY, PrefetchSourceLinesC) / max_vratio_pre);
 	Lsw_oto = dml_ceil(4 * dml_max(prefetch_sw_bytes / prefetch_bw_oto / LineTime, min_Lsw), 1) / 4;
 	Tsw_oto = Lsw_oto * LineTime;
 
-	prefetch_bw_oto = (PrefetchSourceLinesY * swath_width_luma_ub * myPipe->BytePerPixelY + PrefetchSourceLinesC * swath_width_chroma_ub * myPipe->BytePerPixelC) / Tsw_oto;
 
 #ifdef __DML_VBA_DEBUG__
 	dml_print("DML: HTotal: %d\n", myPipe->HTotal);
@@ -3775,6 +3776,17 @@ static noinline void CalculatePrefetchSchedulePerPlane(
 		&v->VReadyOffsetPix[k]);
 }
 
+static void PatchDETBufferSizeInKByte(unsigned int NumberOfActivePlanes, int NoOfDPPThisState[], unsigned int config_return_buffer_size_in_kbytes, unsigned int *DETBufferSizeInKByte)
+{
+	int i, total_pipes = 0;
+	for (i = 0; i < NumberOfActivePlanes; i++)
+		total_pipes += NoOfDPPThisState[i];
+	*DETBufferSizeInKByte = ((config_return_buffer_size_in_kbytes - DCN3_15_MIN_COMPBUF_SIZE_KB) / 64 / total_pipes) * 64;
+	if (*DETBufferSizeInKByte > DCN3_15_MAX_DET_SIZE)
+		*DETBufferSizeInKByte = DCN3_15_MAX_DET_SIZE;
+}
+
+
 void dml31_ModeSupportAndSystemConfigurationFull(struct display_mode_lib *mode_lib)
 {
 	struct vba_vars_st *v = &mode_lib->vba;
@@ -4533,6 +4545,8 @@ void dml31_ModeSupportAndSystemConfigurationFull(struct display_mode_lib *mode_l
 				v->ODMCombineEnableThisState[k] = v->ODMCombineEnablePerState[i][k];
 			}
 
+			if (v->NumberOfActivePlanes > 1 && mode_lib->project == DML_PROJECT_DCN315)
+				PatchDETBufferSizeInKByte(v->NumberOfActivePlanes, v->NoOfDPPThisState, v->ip.config_return_buffer_size_in_kbytes, &v->DETBufferSizeInKByte[0]);
 			CalculateSwathAndDETConfiguration(
 					false,
 					v->NumberOfActivePlanes,
@@ -5068,7 +5082,7 @@ void dml31_ModeSupportAndSystemConfigurationFull(struct display_mode_lib *mode_l
 							v->SwathHeightYThisState[k],
 							v->SwathHeightCThisState[k],
 							v->HTotal[k] / v->PixelClock[k],
-							v->UrgentLatency,
+							v->UrgLatency[i],
 							v->CursorBufferSize,
 							v->CursorWidth[k][0],
 							v->CursorBPP[k][0],
@@ -5346,6 +5360,58 @@ void dml31_ModeSupportAndSystemConfigurationFull(struct display_mode_lib *mode_l
 				v->ModeSupport[i][j] = true;
 			} else {
 				v->ModeSupport[i][j] = false;
+#ifdef __DML_VBA_DEBUG__
+				if (v->ScaleRatioAndTapsSupport == false)
+					dml_print("DML SUPPORT:     ScaleRatioAndTapsSupport failed");
+				if (v->SourceFormatPixelAndScanSupport == false)
+					dml_print("DML SUPPORT:     SourceFormatPixelAndScanSupport failed");
+				if (v->ViewportSizeSupport[i][j] == false)
+					dml_print("DML SUPPORT:     ViewportSizeSupport failed");
+				if (v->LinkCapacitySupport[i] == false)
+					dml_print("DML SUPPORT:     LinkCapacitySupport failed");
+				if (v->ODMCombine4To1SupportCheckOK[i] == false)
+					dml_print("DML SUPPORT:     DSC422NativeNotSupported failed");
+				if (v->NotEnoughDSCUnits[i] == true)
+					dml_print("DML SUPPORT:     NotEnoughDSCUnits");
+				if (v->DTBCLKRequiredMoreThanSupported[i] == true)
+					dml_print("DML SUPPORT:     DTBCLKRequiredMoreThanSupported");
+				if (v->ROBSupport[i][j] == false)
+					dml_print("DML SUPPORT:     ROBSupport failed");
+				if (v->DISPCLK_DPPCLK_Support[i][j] == false)
+					dml_print("DML SUPPORT:     DISPCLK_DPPCLK_Support failed");
+				if (v->TotalAvailablePipesSupport[i][j] == false)
+					dml_print("DML SUPPORT:     DSC422NativeNotSupported failed");
+				if (EnoughWritebackUnits == false)
+					dml_print("DML SUPPORT:     DSC422NativeNotSupported failed");
+				if (v->WritebackLatencySupport == false)
+					dml_print("DML SUPPORT:     WritebackLatencySupport failed");
+				if (v->WritebackScaleRatioAndTapsSupport == false)
+					dml_print("DML SUPPORT:     DSC422NativeNotSupported ");
+				if (v->CursorSupport == false)
+					dml_print("DML SUPPORT:     DSC422NativeNotSupported failed");
+				if (v->PitchSupport == false)
+					dml_print("DML SUPPORT:     PitchSupport failed");
+				if (ViewportExceedsSurface == true)
+					dml_print("DML SUPPORT:     ViewportExceedsSurface failed");
+				if (v->PrefetchSupported[i][j] == false)
+					dml_print("DML SUPPORT:     PrefetchSupported failed");
+				if (v->DynamicMetadataSupported[i][j] == false)
+					dml_print("DML SUPPORT:     DSC422NativeNotSupported failed");
+				if (v->TotalVerticalActiveBandwidthSupport[i][j] == false)
+					dml_print("DML SUPPORT:     TotalVerticalActiveBandwidthSupport failed");
+				if (v->VRatioInPrefetchSupported[i][j] == false)
+					dml_print("DML SUPPORT:     VRatioInPrefetchSupported failed");
+				if (v->PTEBufferSizeNotExceeded[i][j] == false)
+					dml_print("DML SUPPORT:     PTEBufferSizeNotExceeded failed");
+				if (v->NonsupportedDSCInputBPC == true)
+					dml_print("DML SUPPORT:     NonsupportedDSCInputBPC failed");
+				if (!((v->HostVMEnable == false
+					&& v->ImmediateFlipRequirement[0] != dm_immediate_flip_required)
+							|| v->ImmediateFlipSupportedForState[i][j] == true))
+					dml_print("DML SUPPORT:     ImmediateFlipRequirement failed");
+				if (FMTBufferExceeded == true)
+					dml_print("DML SUPPORT:     FMTBufferExceeded failed");
+#endif
 			}
 		}
 	}

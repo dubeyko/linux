@@ -1963,9 +1963,6 @@ minstrel_ht_alloc(struct ieee80211_hw *hw)
 		/* safe default, does not necessarily have to match hw properties */
 		mp->max_retry = 7;
 
-	if (hw->max_rates >= 4)
-		mp->has_mrr = true;
-
 	mp->hw = hw;
 	mp->update_interval = HZ / 20;
 
@@ -2036,7 +2033,7 @@ static void __init init_sample_table(void)
 
 	memset(sample_table, 0xff, sizeof(sample_table));
 	for (col = 0; col < SAMPLE_COLUMNS; col++) {
-		prandom_bytes(rnd, sizeof(rnd));
+		get_random_bytes(rnd, sizeof(rnd));
 		for (i = 0; i < MCS_GROUP_RATES; i++) {
 			new_idx = (i + rnd[i]) % MCS_GROUP_RATES;
 			while (sample_table[col][new_idx] != 0xff)

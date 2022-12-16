@@ -40,6 +40,7 @@
 #define FN(reg_name, field_name) \
 	optc1->tg_shift->field_name, optc1->tg_mask->field_name
 
+#define STATIC_SCREEN_EVENT_MASK_DRR_DOUBLE_BUFFER_UPDATE_EN 0x2000 /*bit 13*/
 static void optc31_set_odm_combine(struct timing_generator *optc, int *opp_id, int opp_cnt,
 		struct dc_crtc_timing *timing)
 {
@@ -201,7 +202,6 @@ void optc31_set_drr(
 
 		// Setup manual flow control for EOF via TRIG_A
 		optc->funcs->setup_manual_trigger(optc);
-
 	} else {
 		REG_UPDATE_4(OTG_V_TOTAL_CONTROL,
 				OTG_SET_V_TOTAL_MIN_MASK, 0,
@@ -232,6 +232,32 @@ void optc3_init_odm(struct timing_generator *optc)
 			OPTC_MEM_SEL, 0);
 	optc1->opp_count = 1;
 }
+void optc31_set_static_screen_control(
+	struct timing_generator *optc,
+	uint32_t event_triggers,
+	uint32_t num_frames)
+{
+	struct optc *optc1 = DCN10TG_FROM_TG(optc);
+	uint32_t framecount;
+	uint32_t events;
+
+	if (num_frames > 0xFF)
+		num_frames = 0xFF;
+	REG_GET_2(OTG_STATIC_SCREEN_CONTROL,
+			OTG_STATIC_SCREEN_EVENT_MASK, &events,
+			OTG_STATIC_SCREEN_FRAME_COUNT, &framecount);
+
+	if (events == event_triggers && num_frames == framecount)
+		return;
+	if ((event_triggers & STATIC_SCREEN_EVENT_MASK_DRR_DOUBLE_BUFFER_UPDATE_EN)
+			!= 0)
+		event_triggers = event_triggers &
+		~STATIC_SCREEN_EVENT_MASK_DRR_DOUBLE_BUFFER_UPDATE_EN;
+
+	REG_UPDATE_2(OTG_STATIC_SCREEN_CONTROL,
+			OTG_STATIC_SCREEN_EVENT_MASK, event_triggers,
+			OTG_STATIC_SCREEN_FRAME_COUNT, num_frames);
+}
 
 static struct timing_generator_funcs dcn31_tg_funcs = {
 		.validate_timing = optc1_validate_timing,
@@ -260,7 +286,6 @@ static struct timing_generator_funcs dcn31_tg_funcs = {
 		.enable_crtc_reset = optc1_enable_crtc_reset,
 		.disable_reset_trigger = optc1_disable_reset_trigger,
 		.lock = optc3_lock,
-		.is_locked = optc1_is_locked,
 		.unlock = optc1_unlock,
 		.lock_doublebuffer_enable = optc3_lock_doublebuffer_enable,
 		.lock_doublebuffer_disable = optc3_lock_doublebuffer_disable,
@@ -268,7 +293,7 @@ static struct timing_generator_funcs dcn31_tg_funcs = {
 		.set_drr = optc31_set_drr,
 		.get_last_used_drr_vtotal = optc2_get_last_used_drr_vtotal,
 		.set_vtotal_min_max = optc1_set_vtotal_min_max,
-		.set_static_screen_control = optc1_set_static_screen_control,
+		.set_static_screen_control = optc31_set_static_screen_control,
 		.program_stereo = optc1_program_stereo,
 		.is_stereo_left_eye = optc1_is_stereo_left_eye,
 		.tg_init = optc3_tg_init,

@@ -234,11 +234,32 @@ static void kiocb_end_write(struct io_kiocb *req)
 	}
 }
 
+/*
+ * Trigger the notifications after having done some IO, and finish the write
+ * accounting, if any.
+ */
+static void io_req_io_end(struct io_kiocb *req)
+{
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+
+	if (rw->kiocb.ki_flags & IOCB_WRITE) {
+		kiocb_end_write(req);
+		fsnotify_modify(req->file);
+	} else {
+		fsnotify_access(req->file);
+	}
+}
+
 static bool __io_complete_rw_common(struct io_kiocb *req, long res)
 {
 	if (unlikely(res != req->cqe.res)) {
 		if ((res == -EAGAIN || res == -EOPNOTSUPP) &&
 		    io_rw_should_reissue(req)) {
+			/*
+			 * Reissue will start accounting again, finish the
+			 * current cycle.
+			 */
+			io_req_io_end(req);
 			req->flags |= REQ_F_REISSUE | REQ_F_PARTIAL_IO;
 			return true;
 		}
@@ -264,15 +285,13 @@ static inline int io_fixup_rw_res(struct io_kiocb *req, long res)
 
 static void io_req_rw_complete(struct io_kiocb *req, bool *locked)
 {
-	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+	io_req_io_end(req);
 
-	if (rw->kiocb.ki_flags & IOCB_WRITE) {
-		kiocb_end_write(req);
-		fsnotify_modify(req->file);
-	} else {
-		fsnotify_access(req->file);
+	if (req->flags & (REQ_F_BUFFER_SELECTED|REQ_F_BUFFER_RING)) {
+		unsigned issue_flags = *locked ? 0 : IO_URING_F_UNLOCKED;
+
+		req->cqe.flags |= io_put_kbuf(req, issue_flags);
 	}
-
 	io_req_task_complete(req, locked);
 }
 
@@ -317,6 +336,11 @@ static int kiocb_done(struct io_kiocb *req, ssize_t ret,
 		req->file->f_pos = rw->kiocb.ki_pos;
 	if (ret >= 0 && (rw->kiocb.ki_complete == io_complete_rw)) {
 		if (!__io_complete_rw_common(req, ret)) {
+			/*
+			 * Safe to call io_end from here as we're inline
+			 * from the submission path.
+			 */
+			io_req_io_end(req);
 			io_req_set_res(req, final_ret,
 				       io_put_kbuf(req, issue_flags));
 			return IOU_OK;
@@ -530,12 +554,12 @@ static inline int io_rw_prep_async(struct io_kiocb *req, int rw)
 
 int io_readv_prep_async(struct io_kiocb *req)
 {
-	return io_rw_prep_async(req, READ);
+	return io_rw_prep_async(req, ITER_DEST);
 }
 
 int io_writev_prep_async(struct io_kiocb *req)
 {
-	return io_rw_prep_async(req, WRITE);
+	return io_rw_prep_async(req, ITER_SOURCE);
 }
 
 /*
@@ -647,6 +671,7 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 	ret = kiocb_set_rw_flags(kiocb, rw->flags);
 	if (unlikely(ret))
 		return ret;
+	kiocb->ki_flags |= IOCB_ALLOC_CACHE;
 
 	/*
 	 * If the file is marked O_NONBLOCK, still allow retry for it if it
@@ -662,7 +687,7 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 			return -EOPNOTSUPP;
 
 		kiocb->private = NULL;
-		kiocb->ki_flags |= IOCB_HIPRI | IOCB_ALLOC_CACHE;
+		kiocb->ki_flags |= IOCB_HIPRI;
 		kiocb->ki_complete = io_complete_rw_iopoll;
 		req->iopoll_completed = 0;
 	} else {
@@ -686,7 +711,7 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 	loff_t *ppos;
 
 	if (!req_has_async_data(req)) {
-		ret = io_import_iovec(READ, req, &iovec, s, issue_flags);
+		ret = io_import_iovec(ITER_DEST, req, &iovec, s, issue_flags);
 		if (unlikely(ret < 0))
 			return ret;
 	} else {
@@ -698,7 +723,7 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 		 * buffers, as we dropped the selected one before retry.
 		 */
 		if (io_do_buffer_select(req)) {
-			ret = io_import_iovec(READ, req, &iovec, s, issue_flags);
+			ret = io_import_iovec(ITER_DEST, req, &iovec, s, issue_flags);
 			if (unlikely(ret < 0))
 				return ret;
 		}
@@ -833,7 +858,7 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 	loff_t *ppos;
 
 	if (!req_has_async_data(req)) {
-		ret = io_import_iovec(WRITE, req, &iovec, s, issue_flags);
+		ret = io_import_iovec(ITER_SOURCE, req, &iovec, s, issue_flags);
 		if (unlikely(ret < 0))
 			return ret;
 	} else {
@@ -916,7 +941,7 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 			goto copy_iov;
 
 		if (ret2 != req->cqe.res && ret2 >= 0 && need_complete_io(req)) {
-			struct io_async_rw *rw;
+			struct io_async_rw *io;
 
 			trace_io_uring_short_write(req->ctx, kiocb->ki_pos - ret2,
 						req->cqe.res, ret2);
@@ -929,9 +954,9 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 			iov_iter_save_state(&s->iter, &s->iter_state);
 			ret = io_setup_async_rw(req, iovec, s, true);
 
-			rw = req->async_data;
-			if (rw)
-				rw->bytes_done += ret2;
+			io = req->async_data;
+			if (io)
+				io->bytes_done += ret2;
 
 			if (kiocb->ki_flags & IOCB_WRITE)
 				kiocb_end_write(req);

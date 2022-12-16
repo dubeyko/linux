@@ -34,6 +34,7 @@
 #include <linux/log2.h>
 #include <linux/bpf_verifier.h>
 #include <linux/nodemask.h>
+#include <linux/bpf_mem_alloc.h>
 
 #include <asm/barrier.h>
 #include <asm/unaligned.h>
@@ -59,6 +60,9 @@
 #define ARG1	regs[BPF_REG_ARG1]
 #define CTX	regs[BPF_REG_CTX]
 #define IMM	insn->imm
+
+struct bpf_mem_alloc bpf_global_ma;
+bool bpf_global_ma_set;
 
 /* No hurry in this branch
  *
@@ -1032,7 +1036,7 @@ bpf_jit_binary_alloc(unsigned int proglen, u8 **image_ptr,
 	hdr->size = size;
 	hole = min_t(unsigned int, size - (proglen + sizeof(*hdr)),
 		     PAGE_SIZE - sizeof(*hdr));
-	start = (get_random_int() % hole) & ~(alignment - 1);
+	start = get_random_u32_below(hole) & ~(alignment - 1);
 
 	/* Leave a random number of instructions before BPF code. */
 	*image_ptr = &hdr->image[start];
@@ -1094,7 +1098,7 @@ bpf_jit_binary_pack_alloc(unsigned int proglen, u8 **image_ptr,
 
 	hole = min_t(unsigned int, size - (proglen + sizeof(*ro_header)),
 		     BPF_PROG_CHUNK_SIZE - sizeof(*ro_header));
-	start = (get_random_int() % hole) & ~(alignment - 1);
+	start = get_random_u32_below(hole) & ~(alignment - 1);
 
 	*image_ptr = &ro_header->image[start];
 	*rw_image = &(*rw_header)->image[start];
@@ -1216,7 +1220,7 @@ static int bpf_jit_blind_insn(const struct bpf_insn *from,
 			      bool emit_zext)
 {
 	struct bpf_insn *to = to_buff;
-	u32 imm_rnd = get_random_int();
+	u32 imm_rnd = get_random_u32();
 	s16 off;
 
 	BUILD_BUG_ON(BPF_REG_AX  + 1 != MAX_BPF_JIT_REG);
@@ -2007,7 +2011,7 @@ out:
 static unsigned int PROG_NAME(stack_size)(const void *ctx, const struct bpf_insn *insn) \
 { \
 	u64 stack[stack_size / sizeof(u64)]; \
-	u64 regs[MAX_BPF_EXT_REG]; \
+	u64 regs[MAX_BPF_EXT_REG] = {}; \
 \
 	FP = (u64) (unsigned long) &stack[ARRAY_SIZE(stack)]; \
 	ARG1 = (u64) (unsigned long) ctx; \
@@ -2251,8 +2255,14 @@ static void __bpf_prog_array_free_sleepable_cb(struct rcu_head *rcu)
 {
 	struct bpf_prog_array *progs;
 
+	/* If RCU Tasks Trace grace period implies RCU grace period, there is
+	 * no need to call kfree_rcu(), just call kfree() directly.
+	 */
 	progs = container_of(rcu, struct bpf_prog_array, rcu);
-	kfree_rcu(progs, rcu);
+	if (rcu_trace_implies_rcu_gp())
+		kfree(progs);
+	else
+		kfree_rcu(progs, rcu);
 }
 
 void bpf_prog_array_free_sleepable(struct bpf_prog_array *progs)
@@ -2739,6 +2749,18 @@ int __weak bpf_arch_text_invalidate(void *dst, size_t len)
 {
 	return -ENOTSUPP;
 }
+
+#ifdef CONFIG_BPF_SYSCALL
+static int __init bpf_global_ma_init(void)
+{
+	int ret;
+
+	ret = bpf_mem_alloc_init(&bpf_global_ma, 0, false);
+	bpf_global_ma_set = !ret;
+	return ret;
+}
+late_initcall(bpf_global_ma_init);
+#endif
 
 DEFINE_STATIC_KEY_FALSE(bpf_stats_enabled_key);
 EXPORT_SYMBOL(bpf_stats_enabled_key);

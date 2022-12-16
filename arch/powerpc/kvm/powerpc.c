@@ -36,7 +36,6 @@
 #include <asm/setup.h>
 
 #include "timing.h"
-#include "irq.h"
 #include "../mm/mmu_decl.h"
 
 #define CREATE_TRACE_POINTS
@@ -239,7 +238,6 @@ int kvmppc_kvm_pv(struct kvm_vcpu *vcpu)
 	case EV_HCALL_TOKEN(EV_IDLE):
 		r = EV_SUCCESS;
 		kvm_vcpu_halt(vcpu);
-		kvm_clear_request(KVM_REQ_UNHALT, vcpu);
 		break;
 	default:
 		r = EV_UNIMPLEMENTED;
@@ -786,7 +784,6 @@ int kvm_arch_vcpu_create(struct kvm_vcpu *vcpu)
 
 	hrtimer_init(&vcpu->arch.dec_timer, CLOCK_REALTIME, HRTIMER_MODE_ABS);
 	vcpu->arch.dec_timer.function = kvmppc_decrementer_wakeup;
-	vcpu->arch.dec_expires = get_tb();
 
 #ifdef CONFIG_KVM_EXIT_TIMING
 	mutex_init(&vcpu->arch.exit_timing_lock);
@@ -2167,10 +2164,25 @@ static int kvm_vm_ioctl_get_pvinfo(struct kvm_ppc_pvinfo *pvinfo)
 	return 0;
 }
 
+bool kvm_arch_irqchip_in_kernel(struct kvm *kvm)
+{
+	int ret = 0;
+
+#ifdef CONFIG_KVM_MPIC
+	ret = ret || (kvm->arch.mpic != NULL);
+#endif
+#ifdef CONFIG_KVM_XICS
+	ret = ret || (kvm->arch.xics != NULL);
+	ret = ret || (kvm->arch.xive != NULL);
+#endif
+	smp_rmb();
+	return ret;
+}
+
 int kvm_vm_ioctl_irq_line(struct kvm *kvm, struct kvm_irq_level *irq_event,
 			  bool line_status)
 {
-	if (!irqchip_in_kernel(kvm))
+	if (!kvm_arch_irqchip_in_kernel(kvm))
 		return -ENXIO;
 
 	irq_event->status = kvm_set_irq(kvm, KVM_USERSPACE_IRQ_SOURCE_ID,

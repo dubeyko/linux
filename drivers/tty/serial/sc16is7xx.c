@@ -686,13 +686,10 @@ static void sc16is7xx_handle_tx(struct uart_port *port)
 		}
 		to_send = (to_send > txlen) ? txlen : to_send;
 
-		/* Add data to send */
-		port->icount.tx += to_send;
-
 		/* Convert to linear buffer */
 		for (i = 0; i < to_send; ++i) {
 			s->buf[i] = xmit->buf[xmit->tail];
-			xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+			uart_xmit_advance(port, 1);
 		}
 
 		sc16is7xx_fifo_write(port, to_send);
@@ -1015,7 +1012,7 @@ static void sc16is7xx_break_ctl(struct uart_port *port, int break_state)
 
 static void sc16is7xx_set_termios(struct uart_port *port,
 				  struct ktermios *termios,
-				  struct ktermios *old)
+				  const struct ktermios *old)
 {
 	struct sc16is7xx_port *s = dev_get_drvdata(port->dev);
 	struct sc16is7xx_one *one = to_sc16is7xx_one(port, port);

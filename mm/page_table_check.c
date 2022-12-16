@@ -4,6 +4,7 @@
  * Copyright (c) 2021, Google LLC.
  * Pasha Tatashin <pasha.tatashin@soleen.com>
  */
+#include <linux/kstrtox.h>
 #include <linux/mm.h>
 #include <linux/page_table_check.h>
 
@@ -23,7 +24,7 @@ EXPORT_SYMBOL(page_table_check_disabled);
 
 static int __init early_page_table_check_param(char *buf)
 {
-	return strtobool(buf, &__page_table_check_enabled);
+	return kstrtobool(buf, &__page_table_check_enabled);
 }
 
 early_param("page_table_check", early_page_table_check_param);
@@ -53,7 +54,7 @@ static struct page_table_check *get_page_table_check(struct page_ext *page_ext)
 }
 
 /*
- * An enty is removed from the page table, decrement the counters for that page
+ * An entry is removed from the page table, decrement the counters for that page
  * verify that it is of correct type and counters do not become negative.
  */
 static void page_table_check_clear(struct mm_struct *mm, unsigned long addr,
@@ -68,7 +69,7 @@ static void page_table_check_clear(struct mm_struct *mm, unsigned long addr,
 		return;
 
 	page = pfn_to_page(pfn);
-	page_ext = lookup_page_ext(page);
+	page_ext = page_ext_get(page);
 	anon = PageAnon(page);
 
 	for (i = 0; i < pgcnt; i++) {
@@ -83,10 +84,11 @@ static void page_table_check_clear(struct mm_struct *mm, unsigned long addr,
 		}
 		page_ext = page_ext_next(page_ext);
 	}
+	page_ext_put(page_ext);
 }
 
 /*
- * A new enty is added to the page table, increment the counters for that page
+ * A new entry is added to the page table, increment the counters for that page
  * verify that it is of correct type and is not being mapped with a different
  * type to a different process.
  */
@@ -103,7 +105,7 @@ static void page_table_check_set(struct mm_struct *mm, unsigned long addr,
 		return;
 
 	page = pfn_to_page(pfn);
-	page_ext = lookup_page_ext(page);
+	page_ext = page_ext_get(page);
 	anon = PageAnon(page);
 
 	for (i = 0; i < pgcnt; i++) {
@@ -118,6 +120,7 @@ static void page_table_check_set(struct mm_struct *mm, unsigned long addr,
 		}
 		page_ext = page_ext_next(page_ext);
 	}
+	page_ext_put(page_ext);
 }
 
 /*
@@ -126,9 +129,10 @@ static void page_table_check_set(struct mm_struct *mm, unsigned long addr,
  */
 void __page_table_check_zero(struct page *page, unsigned int order)
 {
-	struct page_ext *page_ext = lookup_page_ext(page);
+	struct page_ext *page_ext;
 	unsigned long i;
 
+	page_ext = page_ext_get(page);
 	BUG_ON(!page_ext);
 	for (i = 0; i < (1ul << order); i++) {
 		struct page_table_check *ptc = get_page_table_check(page_ext);
@@ -137,6 +141,7 @@ void __page_table_check_zero(struct page *page, unsigned int order)
 		BUG_ON(atomic_read(&ptc->file_map_count));
 		page_ext = page_ext_next(page_ext);
 	}
+	page_ext_put(page_ext);
 }
 
 void __page_table_check_pte_clear(struct mm_struct *mm, unsigned long addr,

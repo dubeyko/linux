@@ -32,9 +32,20 @@ properties:
           - st,lsm6dsrx
           - st,lsm6dst
           - st,lsm6dsop
+          - st,lsm6dsv
+          - st,lsm6dso16is
       - items:
           - const: st,asm330lhhx
           - const: st,lsm6dsr
+      - items:
+          - const: st,lsm6dstx
+          - const: st,lsm6dst
+      - items:
+          - const: st,lsm6dsv16x
+          - const: st,lsm6dsv
+      - items:
+          - const: st,ism330is
+          - const: st,lsm6dso16is
 
   reg:
     maxItems: 1
@@ -44,8 +55,6 @@ properties:
     maxItems: 2
     description:
       Supports up to 2 interrupt lines via the INT1 and INT2 pins.
-
-  spi-max-frequency: true
 
   vdd-supply:
     description: if defined provides VDD power to the sensor.
@@ -81,11 +90,14 @@ properties:
   wakeup-source:
     $ref: /schemas/types.yaml#/definitions/flag
 
-additionalProperties: false
-
 required:
   - compatible
   - reg
+
+allOf:
+  - $ref: /schemas/spi/spi-peripheral-props.yaml#
+
+unevaluatedProperties: false
 
 examples:
   - |

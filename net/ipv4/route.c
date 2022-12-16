@@ -471,7 +471,7 @@ static u32 ip_idents_reserve(u32 hash, int segs)
 	old = READ_ONCE(*p_tstamp);
 
 	if (old != now && cmpxchg(p_tstamp, old, now) == old)
-		delta = prandom_u32_max(now - old);
+		delta = get_random_u32_below(now - old);
 
 	/* If UBSAN reports an error there, please make sure your compiler
 	 * supports -fno-strict-overflow before reporting it that was a bug
@@ -689,7 +689,7 @@ static void update_or_create_fnhe(struct fib_nh_common *nhc, __be32 daddr,
 	} else {
 		/* Randomize max depth to avoid some side channels attacks. */
 		int max_depth = FNHE_RECLAIM_DEPTH +
-				prandom_u32_max(FNHE_RECLAIM_DEPTH);
+				get_random_u32_below(FNHE_RECLAIM_DEPTH);
 
 		while (depth > max_depth) {
 			fnhe_remove_oldest(hash);
@@ -3664,7 +3664,7 @@ static __net_init int rt_genid_init(struct net *net)
 {
 	atomic_set(&net->ipv4.rt_genid, 0);
 	atomic_set(&net->fnhe_genid, 0);
-	atomic_set(&net->ipv4.dev_addr_genid, get_random_int());
+	atomic_set(&net->ipv4.dev_addr_genid, get_random_u32());
 	return 0;
 }
 
@@ -3719,7 +3719,7 @@ int __init ip_rt_init(void)
 
 	ip_idents = idents_hash;
 
-	prandom_bytes(ip_idents, (ip_idents_mask + 1) * sizeof(*ip_idents));
+	get_random_bytes(ip_idents, (ip_idents_mask + 1) * sizeof(*ip_idents));
 
 	ip_tstamps = idents_hash + (ip_idents_mask + 1) * sizeof(*ip_idents);
 

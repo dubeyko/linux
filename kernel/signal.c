@@ -913,8 +913,9 @@ static bool prepare_signal(int sig, struct task_struct *p, bool force)
 		if (signal->core_state)
 			return sig == SIGKILL;
 		/*
-		 * The process is in the middle of dying, nothing to do.
+		 * The process is in the middle of dying, drop the signal.
 		 */
+		return false;
 	} else if (sig_kernel_stop(sig)) {
 		/*
 		 * This is a stop signal.  Remove SIGCONT from all queues.
@@ -1254,7 +1255,7 @@ int send_signal_locked(int sig, struct kernel_siginfo *info,
 
 static void print_fatal_signal(int signr)
 {
-	struct pt_regs *regs = signal_pt_regs();
+	struct pt_regs *regs = task_pt_regs(current);
 	pr_info("potentially unexpected fatal signal %d.\n", signr);
 
 #if defined(__i386__) && !defined(__arch_um__)
@@ -2304,7 +2305,7 @@ static int ptrace_stop(int exit_code, int why, unsigned long message,
 	read_unlock(&tasklist_lock);
 	cgroup_enter_frozen();
 	preempt_enable_no_resched();
-	freezable_schedule();
+	schedule();
 	cgroup_leave_frozen(true);
 
 	/*
@@ -2473,7 +2474,7 @@ static bool do_signal_stop(int signr)
 
 		/* Now we don't run again until woken by SIGCONT or SIGKILL */
 		cgroup_enter_frozen();
-		freezable_schedule();
+		schedule();
 		return true;
 	} else {
 		/*
@@ -2548,11 +2549,11 @@ static void do_freezer_trap(void)
 	 * immediately (if there is a non-fatal signal pending), and
 	 * put the task into sleep.
 	 */
-	__set_current_state(TASK_INTERRUPTIBLE);
+	__set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
 	clear_thread_flag(TIF_SIGPENDING);
 	spin_unlock_irq(&current->sighand->siglock);
 	cgroup_enter_frozen();
-	freezable_schedule();
+	schedule();
 }
 
 static int ptrace_signal(int signr, kernel_siginfo_t *info, enum pid_type type)
@@ -2692,6 +2693,7 @@ relock:
 		/* Has this task already been marked for death? */
 		if ((signal->flags & SIGNAL_GROUP_EXIT) ||
 		     signal->group_exec_task) {
+			clear_siginfo(&ksig->info);
 			ksig->info.si_signo = signr = SIGKILL;
 			sigdelset(&current->pending.signal, SIGKILL);
 			trace_signal_deliver(SIGKILL, SEND_SIG_NOINFO,
@@ -3600,9 +3602,9 @@ static int do_sigtimedwait(const sigset_t *which, kernel_siginfo_t *info,
 		recalc_sigpending();
 		spin_unlock_irq(&tsk->sighand->siglock);
 
-		__set_current_state(TASK_INTERRUPTIBLE);
-		ret = freezable_schedule_hrtimeout_range(to, tsk->timer_slack_ns,
-							 HRTIMER_MODE_REL);
+		__set_current_state(TASK_INTERRUPTIBLE|TASK_FREEZABLE);
+		ret = schedule_hrtimeout_range(to, tsk->timer_slack_ns,
+					       HRTIMER_MODE_REL);
 		spin_lock_irq(&tsk->sighand->siglock);
 		__set_task_blocked(tsk, &tsk->real_blocked);
 		sigemptyset(&tsk->real_blocked);

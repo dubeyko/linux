@@ -21,6 +21,7 @@
 #include <linux/device.h>
 #include <linux/efi.h>
 #include <linux/of.h>
+#include <linux/initrd.h>
 #include <linux/io.h>
 #include <linux/kexec.h>
 #include <linux/platform_device.h>
@@ -55,9 +56,12 @@ EXPORT_SYMBOL(efi);
 unsigned long __ro_after_init efi_rng_seed = EFI_INVALID_TABLE_ADDR;
 static unsigned long __initdata mem_reserve = EFI_INVALID_TABLE_ADDR;
 static unsigned long __initdata rt_prop = EFI_INVALID_TABLE_ADDR;
+static unsigned long __initdata initrd = EFI_INVALID_TABLE_ADDR;
+
+extern unsigned long screen_info_table;
 
 struct mm_struct efi_mm = {
-	.mm_rb			= RB_ROOT,
+	.mm_mt			= MTREE_INIT_EXT(mm_mt, MM_MT_FLAGS, efi_mm.mmap_lock),
 	.mm_users		= ATOMIC_INIT(2),
 	.mm_count		= ATOMIC_INIT(1),
 	.write_protect_seq      = SEQCNT_ZERO(efi_mm.write_protect_seq),
@@ -269,6 +273,8 @@ static __init int efivar_ssdt_load(void)
 			acpi_status ret = acpi_load_table(data, NULL);
 			if (ret)
 				pr_err("failed to load table: %u\n", ret);
+			else
+				continue;
 		} else {
 			pr_err("failed to get var data: 0x%lx\n", status);
 		}
@@ -333,6 +339,24 @@ static void __init efi_debugfs_init(void)
 static inline void efi_debugfs_init(void) {}
 #endif
 
+static void refresh_nv_rng_seed(struct work_struct *work)
+{
+	u8 seed[EFI_RANDOM_SEED_SIZE];
+
+	get_random_bytes(seed, sizeof(seed));
+	efi.set_variable(L"RandomSeed", &LINUX_EFI_RANDOM_SEED_TABLE_GUID,
+			 EFI_VARIABLE_NON_VOLATILE | EFI_VARIABLE_BOOTSERVICE_ACCESS |
+			 EFI_VARIABLE_RUNTIME_ACCESS, sizeof(seed), seed);
+	memzero_explicit(seed, sizeof(seed));
+}
+static int refresh_nv_rng_seed_notification(struct notifier_block *nb, unsigned long action, void *data)
+{
+	static DECLARE_WORK(work, refresh_nv_rng_seed);
+	schedule_work(&work);
+	return NOTIFY_DONE;
+}
+static struct notifier_block refresh_nv_rng_seed_nb = { .notifier_call = refresh_nv_rng_seed_notification };
+
 /*
  * We register the efi subsystem with the firmware subsystem and the
  * efivars subsystem with the efi subsystem, if the system was booted with
@@ -390,10 +414,6 @@ static int __init efisubsys_init(void)
 		goto err_unregister;
 	}
 
-	error = efi_runtime_map_init(efi_kobj);
-	if (error)
-		goto err_remove_group;
-
 	/* and the standard mountpoint for efivarfs */
 	error = sysfs_create_mount_point(efi_kobj, "efivars");
 	if (error) {
@@ -409,6 +429,7 @@ static int __init efisubsys_init(void)
 		platform_device_register_simple("efi_secret", 0, NULL, 0);
 #endif
 
+	execute_with_initialized_rng(&refresh_nv_rng_seed_nb);
 	return 0;
 
 err_remove_group:
@@ -419,6 +440,7 @@ err_unregister:
 		generic_ops_unregister();
 err_put:
 	kobject_put(efi_kobj);
+	efi_kobj = NULL;
 	destroy_workqueue(efi_rts_wq);
 	return error;
 }
@@ -532,6 +554,7 @@ static const efi_config_table_type_t common_tables[] __initconst = {
 	{LINUX_EFI_TPM_EVENT_LOG_GUID,		&efi.tpm_log,		"TPMEventLog"	},
 	{LINUX_EFI_TPM_FINAL_LOG_GUID,		&efi.tpm_final_log,	"TPMFinalLog"	},
 	{LINUX_EFI_MEMRESERVE_TABLE_GUID,	&mem_reserve,		"MEMRESERVE"	},
+	{LINUX_EFI_INITRD_MEDIA_GUID,		&initrd,		"INITRD"	},
 	{EFI_RT_PROPERTIES_TABLE_GUID,		&rt_prop,		"RTPROP"	},
 #ifdef CONFIG_EFI_RCI2_TABLE
 	{DELLEMC_EFI_RCI2_TABLE_GUID,		&rci2_table_phys			},
@@ -541,6 +564,9 @@ static const efi_config_table_type_t common_tables[] __initconst = {
 #endif
 #ifdef CONFIG_EFI_COCO_SECRET
 	{LINUX_EFI_COCO_SECRET_AREA_GUID,	&efi.coco_secret,	"CocoSecret"	},
+#endif
+#ifdef CONFIG_EFI_GENERIC_STUB
+	{LINUX_EFI_SCREEN_INFO_TABLE_GUID,	&screen_info_table			},
 #endif
 	{},
 };
@@ -606,7 +632,7 @@ int __init efi_config_parse_tables(const efi_config_table_t *config_tables,
 
 		seed = early_memremap(efi_rng_seed, sizeof(*seed));
 		if (seed != NULL) {
-			size = READ_ONCE(seed->size);
+			size = min_t(u32, seed->size, SZ_1K); // sanity check
 			early_memunmap(seed, sizeof(*seed));
 		} else {
 			pr_err("Could not map UEFI random seed!\n");
@@ -615,8 +641,8 @@ int __init efi_config_parse_tables(const efi_config_table_t *config_tables,
 			seed = early_memremap(efi_rng_seed,
 					      sizeof(*seed) + size);
 			if (seed != NULL) {
-				pr_notice("seeding entropy pool\n");
 				add_bootloader_randomness(seed->bits, size);
+				memzero_explicit(seed->bits, size);
 				early_memunmap(seed, sizeof(*seed) + size);
 			} else {
 				pr_err("Could not map UEFI random seed!\n");
@@ -670,6 +696,18 @@ int __init efi_config_parse_tables(const efi_config_table_t *config_tables,
 		tbl = early_memremap(rt_prop, sizeof(*tbl));
 		if (tbl) {
 			efi.runtime_supported_mask &= tbl->runtime_services_supported;
+			early_memunmap(tbl, sizeof(*tbl));
+		}
+	}
+
+	if (IS_ENABLED(CONFIG_BLK_DEV_INITRD) &&
+	    initrd != EFI_INVALID_TABLE_ADDR && phys_initrd_size == 0) {
+		struct linux_efi_initrd *tbl;
+
+		tbl = early_memremap(initrd, sizeof(*tbl));
+		if (tbl) {
+			phys_initrd_start = tbl->base;
+			phys_initrd_size = tbl->size;
 			early_memunmap(tbl, sizeof(*tbl));
 		}
 	}

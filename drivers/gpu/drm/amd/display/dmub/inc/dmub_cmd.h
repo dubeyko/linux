@@ -225,6 +225,12 @@ union dmub_psr_debug_flags {
 		 * Use TPS3 signal when restore main link.
 		 */
 		uint32_t force_wakeup_by_tps3 : 1;
+
+		/**
+		 * Back to back flip, therefore cannot power down PHY
+		 */
+		uint32_t back_to_back_flip : 1;
+
 	} bitfields;
 
 	/**
@@ -400,8 +406,10 @@ union dmub_fw_boot_options {
 		uint32_t diag_env: 1; /* 1 if diagnostic environment */
 		uint32_t gpint_scratch8: 1; /* 1 if GPINT is in scratch8*/
 		uint32_t usb4_cm_version: 1; /**< 1 CM support */
+		uint32_t dpia_hpd_int_enable_supported: 1; /* 1 if dpia hpd int enable supported */
+		uint32_t usb4_dpia_bw_alloc_supported: 1; /* 1 if USB4 dpia BW allocation supported */
 
-		uint32_t reserved : 17; /**< reserved */
+		uint32_t reserved : 15; /**< reserved */
 	} bits; /**< boot bits */
 	uint32_t all; /**< 32-bit access to bits */
 };
@@ -728,6 +736,17 @@ enum dmub_cmd_type {
 	/**
 	 * Command type used for all VBIOS interface commands.
 	 */
+
+	/**
+	 * Command type used for all SECURE_DISPLAY commands.
+	 */
+	DMUB_CMD__SECURE_DISPLAY = 85,
+
+	/**
+	 * Command type used to set DPIA HPD interrupt state
+	 */
+	DMUB_CMD__DPIA_HPD_INT_ENABLE = 86,
+
 	DMUB_CMD__VBIOS = 128,
 };
 
@@ -758,11 +777,6 @@ enum dmub_cmd_dpia_type {
 	DMUB_CMD__DPIA_DIG1_DPIA_CONTROL = 0,
 	DMUB_CMD__DPIA_SET_CONFIG_ACCESS = 1,
 	DMUB_CMD__DPIA_MST_ALLOC_SLOTS = 2,
-};
-
-enum dmub_cmd_header_sub_type {
-	DMUB_CMD__SUB_TYPE_GENERAL         = 0,
-	DMUB_CMD__SUB_TYPE_CURSOR_POSITION = 1
 };
 
 #pragma pack(push, 1)
@@ -1015,13 +1029,14 @@ struct dmub_cmd_fw_assisted_mclk_switch_pipe_data_v2 {
 			uint16_t vtotal;
 			uint16_t htotal;
 			uint8_t vblank_pipe_index;
-			uint8_t padding[2];
+			uint8_t padding[1];
 			struct {
 				uint8_t drr_in_use;
 				uint8_t drr_window_size_ms;	// Indicates largest VMIN/VMAX adjustment per frame
 				uint16_t min_vtotal_supported;	// Min VTOTAL that supports switching in VBLANK
 				uint16_t max_vtotal_supported;	// Max VTOTAL that can support SubVP static scheduling
 				uint8_t use_ramping;		// Use ramping or not
+				uint8_t drr_vblank_start_margin;
 			} drr_info;				// DRR considered as part of SubVP + VBLANK case
 		} vblank_data;
 	} pipe_config;
@@ -1258,6 +1273,14 @@ struct dmub_cmd_mst_alloc_slots_control_data {
 struct dmub_rb_cmd_set_mst_alloc_slots {
 	struct dmub_cmd_header header; /* header */
 	struct dmub_cmd_mst_alloc_slots_control_data mst_slots_control; /* mst slots control */
+};
+
+/**
+ * DMUB command structure for DPIA HPD int enable control.
+ */
+struct dmub_rb_cmd_dpia_hpd_int_enable {
+	struct dmub_cmd_header header; /* header */
+	uint32_t enable; /* dpia hpd interrupt enable */
 };
 
 /**
@@ -1856,9 +1879,13 @@ struct dmub_cmd_psr_copy_settings_data {
 	 */
 	uint8_t use_phy_fsm;
 	/**
+	 * frame delay for frame re-lock
+	 */
+	uint8_t relock_delay_frame_cnt;
+	/**
 	 * Explicit padding to 2 byte boundary.
 	 */
-	uint8_t pad3[2];
+	uint8_t pad3;
 };
 
 /**
@@ -2089,7 +2116,99 @@ struct dmub_rb_cmd_update_dirty_rect {
 /**
  * Data passed from driver to FW in a DMUB_CMD__UPDATE_CURSOR_INFO command.
  */
-struct dmub_cmd_update_cursor_info_data {
+union dmub_reg_cursor_control_cfg {
+	struct {
+		uint32_t     cur_enable: 1;
+		uint32_t         reser0: 3;
+		uint32_t cur_2x_magnify: 1;
+		uint32_t         reser1: 3;
+		uint32_t           mode: 3;
+		uint32_t         reser2: 5;
+		uint32_t          pitch: 2;
+		uint32_t         reser3: 6;
+		uint32_t line_per_chunk: 5;
+		uint32_t         reser4: 3;
+	} bits;
+	uint32_t raw;
+};
+struct dmub_cursor_position_cache_hubp {
+	union dmub_reg_cursor_control_cfg cur_ctl;
+	union dmub_reg_position_cfg {
+		struct {
+			uint32_t cur_x_pos: 16;
+			uint32_t cur_y_pos: 16;
+		} bits;
+		uint32_t raw;
+	} position;
+	union dmub_reg_hot_spot_cfg {
+		struct {
+			uint32_t hot_x: 16;
+			uint32_t hot_y: 16;
+		} bits;
+		uint32_t raw;
+	} hot_spot;
+	union dmub_reg_dst_offset_cfg {
+		struct {
+			uint32_t dst_x_offset: 13;
+			uint32_t reserved: 19;
+		} bits;
+		uint32_t raw;
+	} dst_offset;
+};
+
+union dmub_reg_cur0_control_cfg {
+	struct {
+		uint32_t     cur0_enable: 1;
+		uint32_t  expansion_mode: 1;
+		uint32_t          reser0: 1;
+		uint32_t     cur0_rom_en: 1;
+		uint32_t            mode: 3;
+		uint32_t        reserved: 25;
+	} bits;
+	uint32_t raw;
+};
+struct dmub_cursor_position_cache_dpp {
+	union dmub_reg_cur0_control_cfg cur0_ctl;
+};
+struct dmub_cursor_position_cfg {
+	struct  dmub_cursor_position_cache_hubp pHubp;
+	struct  dmub_cursor_position_cache_dpp  pDpp;
+	uint8_t pipe_idx;
+	/*
+	 * Padding is required. To be 4 Bytes Aligned.
+	 */
+	uint8_t padding[3];
+};
+
+struct dmub_cursor_attribute_cache_hubp {
+	uint32_t SURFACE_ADDR_HIGH;
+	uint32_t SURFACE_ADDR;
+	union    dmub_reg_cursor_control_cfg  cur_ctl;
+	union    dmub_reg_cursor_size_cfg {
+		struct {
+			uint32_t width: 16;
+			uint32_t height: 16;
+		} bits;
+		uint32_t raw;
+	} size;
+	union    dmub_reg_cursor_settings_cfg {
+		struct {
+			uint32_t     dst_y_offset: 8;
+			uint32_t chunk_hdl_adjust: 2;
+			uint32_t         reserved: 22;
+		} bits;
+		uint32_t raw;
+	} settings;
+};
+struct dmub_cursor_attribute_cache_dpp {
+	union dmub_reg_cur0_control_cfg cur0_ctl;
+};
+struct dmub_cursor_attributes_cfg {
+	struct  dmub_cursor_attribute_cache_hubp aHubp;
+	struct  dmub_cursor_attribute_cache_dpp  aDpp;
+};
+
+struct dmub_cmd_update_cursor_payload0 {
 	/**
 	 * Cursor dirty rects.
 	 */
@@ -2116,6 +2235,20 @@ struct dmub_cmd_update_cursor_info_data {
 	 * Currently the support is only for 0 or 1
 	 */
 	uint8_t panel_inst;
+	/**
+	 * Cursor Position Register.
+	 * Registers contains Hubp & Dpp modules
+	 */
+	struct dmub_cursor_position_cfg position_cfg;
+};
+
+struct dmub_cmd_update_cursor_payload1 {
+	struct dmub_cursor_attributes_cfg attribute_cfg;
+};
+
+union dmub_cmd_update_cursor_info_data {
+	struct dmub_cmd_update_cursor_payload0 payload0;
+	struct dmub_cmd_update_cursor_payload1 payload1;
 };
 /**
  * Definition of a DMUB_CMD__UPDATE_CURSOR_INFO command.
@@ -2128,7 +2261,7 @@ struct dmub_rb_cmd_update_cursor_info {
 	/**
 	 * Data passed from driver to FW in a DMUB_CMD__UPDATE_CURSOR_INFO command.
 	 */
-	struct dmub_cmd_update_cursor_info_data update_cursor_info_data;
+	union dmub_cmd_update_cursor_info_data update_cursor_info_data;
 };
 
 /**
@@ -2825,11 +2958,7 @@ struct dmub_rb_cmd_get_visual_confirm_color {
 struct dmub_optc_state {
 	uint32_t v_total_max;
 	uint32_t v_total_min;
-	uint32_t v_total_mid;
-	uint32_t v_total_mid_frame_num;
 	uint32_t tg_inst;
-	uint32_t enable_manual_trigger;
-	uint32_t clear_force_vsync;
 };
 
 struct dmub_rb_cmd_drr_update {
@@ -3029,6 +3158,33 @@ struct dmub_rb_cmd_get_usbc_cable_id {
 		struct dmub_cmd_cable_id_output output; /**< Output */
 		uint8_t output_raw; /**< Raw data output */
 	} data;
+};
+
+/**
+ * Command type of a DMUB_CMD__SECURE_DISPLAY command
+ */
+enum dmub_cmd_secure_display_type {
+	DMUB_CMD__SECURE_DISPLAY_TEST_CMD = 0,		/* test command to only check if inbox message works */
+	DMUB_CMD__SECURE_DISPLAY_CRC_STOP_UPDATE,
+	DMUB_CMD__SECURE_DISPLAY_CRC_WIN_NOTIFY
+};
+
+/**
+ * Definition of a DMUB_CMD__SECURE_DISPLAY command
+ */
+struct dmub_rb_cmd_secure_display {
+	struct dmub_cmd_header header;
+	/**
+	 * Data passed from driver to dmub firmware.
+	 */
+	struct dmub_cmd_roi_info {
+		uint16_t x_start;
+		uint16_t x_end;
+		uint16_t y_start;
+		uint16_t y_end;
+		uint8_t otg_id;
+		uint8_t phy_id;
+	} roi_info;
 };
 
 /**
@@ -3235,6 +3391,15 @@ union dmub_rb_cmd {
 	 * Definition of a DMUB_CMD__QUERY_HPD_STATE command.
 	 */
 	struct dmub_rb_cmd_query_hpd_state query_hpd;
+	/**
+	 * Definition of a DMUB_CMD__SECURE_DISPLAY command.
+	 */
+	struct dmub_rb_cmd_secure_display secure_display;
+
+	/**
+	 * Definition of a DMUB_CMD__DPIA_HPD_INT_ENABLE command.
+	 */
+	struct dmub_rb_cmd_dpia_hpd_int_enable dpia_hpd_int_enable;
 };
 
 /**

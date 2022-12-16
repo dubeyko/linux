@@ -15,12 +15,14 @@
 #include <linux/mfd/ocelot.h>
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
-#include <linux/pinctrl/pinmux.h>
 #include <linux/platform_device.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
 #include <linux/spinlock.h>
+
+#include <linux/pinctrl/pinconf.h>
+#include <linux/pinctrl/pinmux.h>
 
 #include "core.h"
 #include "pinconf.h"
@@ -865,9 +867,10 @@ static int microchip_sgpio_register_bank(struct device *dev,
 	gc->can_sleep		= !bank->is_input;
 
 	if (bank->is_input && priv->properties->flags & SGPIO_FLAGS_HAS_IRQ) {
-		int irq = fwnode_irq_get(fwnode, 0);
+		int irq;
 
-		if (irq) {
+		irq = fwnode_irq_get(fwnode, 0);
+		if (irq > 0) {
 			struct gpio_irq_chip *girq = &gc->irq;
 
 			gpio_irq_chip_set_chip(girq, &microchip_sgpio_irqchip);

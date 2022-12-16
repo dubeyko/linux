@@ -933,6 +933,7 @@ struct xhci_virt_ep {
 	 * have to restore the device state to the previous state
 	 */
 	struct xhci_ring		*new_ring;
+	unsigned int			err_count;
 	unsigned int			ep_state;
 #define SET_DEQ_PENDING		(1 << 0)
 #define EP_HALTED		(1 << 1)	/* For stall handling */
@@ -1627,7 +1628,6 @@ struct xhci_ring {
 	 * if we own the TRB (if we are the consumer).  See section 4.9.1.
 	 */
 	u32			cycle_state;
-	unsigned int            err_count;
 	unsigned int		stream_id;
 	unsigned int		num_segs;
 	unsigned int		num_trbs_free;
@@ -1807,8 +1807,6 @@ struct xhci_hcd {
 	struct xhci_erst	erst;
 	/* Scratchpad */
 	struct xhci_scratchpad  *scratchpad;
-	/* Store LPM test failed devices' information */
-	struct list_head	lpm_failed_devs;
 
 	/* slot enabling and address device helpers */
 	/* these are not thread safe so use mutex */
@@ -1827,7 +1825,6 @@ struct xhci_hcd {
 	/* Host controller watchdog timer structures */
 	unsigned int		xhc_state;
 	unsigned long		run_graceperiod;
-	u32			command;
 	struct s3_save		s3;
 /* Host controller is dying - not responding to commands. "I'm not dead yet!"
  *
@@ -1899,6 +1896,8 @@ struct xhci_hcd {
 #define XHCI_NO_SOFT_RETRY	BIT_ULL(40)
 #define XHCI_BROKEN_D3COLD	BIT_ULL(41)
 #define XHCI_EP_CTX_BROKEN_DCS	BIT_ULL(42)
+#define XHCI_SUSPEND_RESUME_CLKS	BIT_ULL(43)
+#define XHCI_RESET_TO_DEFAULT	BIT_ULL(44)
 
 	unsigned int		num_active_eps;
 	unsigned int		limit_active_eps;
@@ -2041,7 +2040,6 @@ int xhci_setup_addressable_virt_dev(struct xhci_hcd *xhci, struct usb_device *ud
 void xhci_copy_ep0_dequeue_into_input_ctx(struct xhci_hcd *xhci,
 		struct usb_device *udev);
 unsigned int xhci_get_endpoint_index(struct usb_endpoint_descriptor *desc);
-unsigned int xhci_get_endpoint_address(unsigned int ep_index);
 unsigned int xhci_last_valid_endpoint(u32 added_ctxs);
 void xhci_endpoint_zero(struct xhci_hcd *xhci, struct xhci_virt_device *virt_dev, struct usb_host_endpoint *ep);
 void xhci_update_tt_active_eps(struct xhci_hcd *xhci,

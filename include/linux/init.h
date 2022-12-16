@@ -2,7 +2,9 @@
 #ifndef _LINUX_INIT_H
 #define _LINUX_INIT_H
 
+#include <linux/build_bug.h>
 #include <linux/compiler.h>
+#include <linux/stringify.h>
 #include <linux/types.h>
 
 /* Built-in __init functions needn't be compiled with retpoline */
@@ -134,7 +136,7 @@ static inline initcall_t initcall_from_entry(initcall_entry_t *entry)
 
 extern initcall_entry_t __con_initcall_start[], __con_initcall_end[];
 
-/* Used for contructor calls. */
+/* Used for constructor calls. */
 typedef void (*ctor_fn_t)(void);
 
 struct file_system_type;
@@ -143,6 +145,7 @@ struct file_system_type;
 extern int do_one_initcall(initcall_t fn);
 extern char __initdata boot_command_line[];
 extern char *saved_command_line;
+extern unsigned int saved_command_line_len;
 extern unsigned int reset_devices;
 
 /* used by init/main.c */

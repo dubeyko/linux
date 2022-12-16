@@ -342,6 +342,9 @@ xfs_iget_recycle(
 
 	trace_xfs_iget_recycle(ip);
 
+	if (!xfs_ilock_nowait(ip, XFS_ILOCK_EXCL))
+		return -EAGAIN;
+
 	/*
 	 * We need to make it look like the inode is being reclaimed to prevent
 	 * the actual reclaim workers from stomping over us while we recycle
@@ -355,6 +358,7 @@ xfs_iget_recycle(
 
 	ASSERT(!rwsem_is_locked(&inode->i_rwsem));
 	error = xfs_reinit_inode(mp, inode);
+	xfs_iunlock(ip, XFS_ILOCK_EXCL);
 	if (error) {
 		/*
 		 * Re-initializing the inode failed, and we are in deep
@@ -518,6 +522,8 @@ xfs_iget_cache_hit(
 	if (ip->i_flags & XFS_IRECLAIMABLE) {
 		/* Drops i_flags_lock and RCU read lock. */
 		error = xfs_iget_recycle(pag, ip);
+		if (error == -EAGAIN)
+			goto out_skip;
 		if (error)
 			return error;
 	} else {
@@ -596,7 +602,7 @@ xfs_iget_cache_miss(
 	 */
 	if (xfs_has_v3inodes(mp) &&
 	    (flags & XFS_IGET_CREATE) && !xfs_has_ikeep(mp)) {
-		VFS_I(ip)->i_generation = prandom_u32();
+		VFS_I(ip)->i_generation = get_random_u32();
 	} else {
 		struct xfs_buf		*bp;
 

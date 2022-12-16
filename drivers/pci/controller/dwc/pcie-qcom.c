@@ -12,6 +12,7 @@
 #include <linux/crc8.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
+#include <linux/interconnect.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
@@ -180,7 +181,7 @@ struct qcom_pcie_resources_2_3_3 {
 
 /* 6 clocks typically, 7 for sm8250 */
 struct qcom_pcie_resources_2_7_0 {
-	struct clk_bulk_data clks[9];
+	struct clk_bulk_data clks[12];
 	int num_clks;
 	struct regulator_bulk_data supplies[2];
 	struct reset_control *pci_reset;
@@ -208,17 +209,12 @@ struct qcom_pcie_ops {
 	int (*init)(struct qcom_pcie *pcie);
 	int (*post_init)(struct qcom_pcie *pcie);
 	void (*deinit)(struct qcom_pcie *pcie);
-	void (*post_deinit)(struct qcom_pcie *pcie);
 	void (*ltssm_enable)(struct qcom_pcie *pcie);
 	int (*config_sid)(struct qcom_pcie *pcie);
 };
 
 struct qcom_pcie_cfg {
 	const struct qcom_pcie_ops *ops;
-	unsigned int has_tbu_clk:1;
-	unsigned int has_ddrss_sf_tbu_clk:1;
-	unsigned int has_aggre0_clk:1;
-	unsigned int has_aggre1_clk:1;
 };
 
 struct qcom_pcie {
@@ -228,6 +224,7 @@ struct qcom_pcie {
 	union qcom_pcie_resources res;
 	struct phy *phy;
 	struct gpio_desc *reset;
+	struct icc_path *icc_mem;
 	const struct qcom_pcie_cfg *cfg;
 };
 
@@ -1175,6 +1172,7 @@ static int qcom_pcie_get_resources_2_7_0(struct qcom_pcie *pcie)
 	struct qcom_pcie_resources_2_7_0 *res = &pcie->res.v2_7_0;
 	struct dw_pcie *pci = pcie->pci;
 	struct device *dev = pci->dev;
+	unsigned int num_clks, num_opt_clks;
 	unsigned int idx;
 	int ret;
 
@@ -1195,18 +1193,25 @@ static int qcom_pcie_get_resources_2_7_0(struct qcom_pcie *pcie)
 	res->clks[idx++].id = "bus_master";
 	res->clks[idx++].id = "bus_slave";
 	res->clks[idx++].id = "slave_q2a";
-	if (pcie->cfg->has_tbu_clk)
-		res->clks[idx++].id = "tbu";
-	if (pcie->cfg->has_ddrss_sf_tbu_clk)
-		res->clks[idx++].id = "ddrss_sf_tbu";
-	if (pcie->cfg->has_aggre0_clk)
-		res->clks[idx++].id = "aggre0";
-	if (pcie->cfg->has_aggre1_clk)
-		res->clks[idx++].id = "aggre1";
 
+	num_clks = idx;
+
+	ret = devm_clk_bulk_get(dev, num_clks, res->clks);
+	if (ret < 0)
+		return ret;
+
+	res->clks[idx++].id = "tbu";
+	res->clks[idx++].id = "ddrss_sf_tbu";
+	res->clks[idx++].id = "aggre0";
+	res->clks[idx++].id = "aggre1";
+	res->clks[idx++].id = "noc_aggr_4";
+	res->clks[idx++].id = "noc_aggr_south_sf";
+	res->clks[idx++].id = "cnoc_qx";
+
+	num_opt_clks = idx - num_clks;
 	res->num_clks = idx;
 
-	ret = devm_clk_bulk_get(dev, res->num_clks, res->clks);
+	ret = devm_clk_bulk_get_optional(dev, num_opt_clks, res->clks + num_clks);
 	if (ret < 0)
 		return ret;
 
@@ -1233,7 +1238,7 @@ static int qcom_pcie_init_2_7_0(struct qcom_pcie *pcie)
 
 	ret = reset_control_assert(res->pci_reset);
 	if (ret < 0) {
-		dev_err(dev, "cannot deassert pci reset\n");
+		dev_err(dev, "cannot assert pci reset\n");
 		goto err_disable_clocks;
 	}
 
@@ -1509,15 +1514,13 @@ static int qcom_pcie_host_init(struct dw_pcie_rp *pp)
 	if (pcie->cfg->ops->config_sid) {
 		ret = pcie->cfg->ops->config_sid(pcie);
 		if (ret)
-			goto err;
+			goto err_assert_reset;
 	}
 
 	return 0;
 
-err:
+err_assert_reset:
 	qcom_ep_reset_assert(pcie);
-	if (pcie->cfg->ops->post_deinit)
-		pcie->cfg->ops->post_deinit(pcie);
 err_disable_phy:
 	phy_power_off(pcie->phy);
 err_deinit:
@@ -1601,68 +1604,35 @@ static const struct qcom_pcie_ops ops_2_9_0 = {
 	.ltssm_enable = qcom_pcie_2_3_2_ltssm_enable,
 };
 
-static const struct qcom_pcie_cfg apq8084_cfg = {
+static const struct qcom_pcie_cfg cfg_1_0_0 = {
 	.ops = &ops_1_0_0,
 };
 
-static const struct qcom_pcie_cfg ipq8064_cfg = {
+static const struct qcom_pcie_cfg cfg_1_9_0 = {
+	.ops = &ops_1_9_0,
+};
+
+static const struct qcom_pcie_cfg cfg_2_1_0 = {
 	.ops = &ops_2_1_0,
 };
 
-static const struct qcom_pcie_cfg msm8996_cfg = {
+static const struct qcom_pcie_cfg cfg_2_3_2 = {
 	.ops = &ops_2_3_2,
 };
 
-static const struct qcom_pcie_cfg ipq8074_cfg = {
+static const struct qcom_pcie_cfg cfg_2_3_3 = {
 	.ops = &ops_2_3_3,
 };
 
-static const struct qcom_pcie_cfg ipq4019_cfg = {
+static const struct qcom_pcie_cfg cfg_2_4_0 = {
 	.ops = &ops_2_4_0,
 };
 
-static const struct qcom_pcie_cfg sdm845_cfg = {
+static const struct qcom_pcie_cfg cfg_2_7_0 = {
 	.ops = &ops_2_7_0,
-	.has_tbu_clk = true,
 };
 
-static const struct qcom_pcie_cfg sm8150_cfg = {
-	/* sm8150 has qcom IP rev 1.5.0. However 1.5.0 ops are same as
-	 * 1.9.0, so reuse the same.
-	 */
-	.ops = &ops_1_9_0,
-};
-
-static const struct qcom_pcie_cfg sm8250_cfg = {
-	.ops = &ops_1_9_0,
-	.has_tbu_clk = true,
-	.has_ddrss_sf_tbu_clk = true,
-};
-
-static const struct qcom_pcie_cfg sm8450_pcie0_cfg = {
-	.ops = &ops_1_9_0,
-	.has_ddrss_sf_tbu_clk = true,
-	.has_aggre0_clk = true,
-	.has_aggre1_clk = true,
-};
-
-static const struct qcom_pcie_cfg sm8450_pcie1_cfg = {
-	.ops = &ops_1_9_0,
-	.has_ddrss_sf_tbu_clk = true,
-	.has_aggre1_clk = true,
-};
-
-static const struct qcom_pcie_cfg sc7280_cfg = {
-	.ops = &ops_1_9_0,
-	.has_tbu_clk = true,
-};
-
-static const struct qcom_pcie_cfg sc8180x_cfg = {
-	.ops = &ops_1_9_0,
-	.has_tbu_clk = true,
-};
-
-static const struct qcom_pcie_cfg ipq6018_cfg = {
+static const struct qcom_pcie_cfg cfg_2_9_0 = {
 	.ops = &ops_2_9_0,
 };
 
@@ -1670,6 +1640,74 @@ static const struct dw_pcie_ops dw_pcie_ops = {
 	.link_up = qcom_pcie_link_up,
 	.start_link = qcom_pcie_start_link,
 };
+
+static int qcom_pcie_icc_init(struct qcom_pcie *pcie)
+{
+	struct dw_pcie *pci = pcie->pci;
+	int ret;
+
+	pcie->icc_mem = devm_of_icc_get(pci->dev, "pcie-mem");
+	if (IS_ERR(pcie->icc_mem))
+		return PTR_ERR(pcie->icc_mem);
+
+	/*
+	 * Some Qualcomm platforms require interconnect bandwidth constraints
+	 * to be set before enabling interconnect clocks.
+	 *
+	 * Set an initial peak bandwidth corresponding to single-lane Gen 1
+	 * for the pcie-mem path.
+	 */
+	ret = icc_set_bw(pcie->icc_mem, 0, MBps_to_icc(250));
+	if (ret) {
+		dev_err(pci->dev, "failed to set interconnect bandwidth: %d\n",
+			ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static void qcom_pcie_icc_update(struct qcom_pcie *pcie)
+{
+	struct dw_pcie *pci = pcie->pci;
+	u32 offset, status, bw;
+	int speed, width;
+	int ret;
+
+	if (!pcie->icc_mem)
+		return;
+
+	offset = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
+	status = readw(pci->dbi_base + offset + PCI_EXP_LNKSTA);
+
+	/* Only update constraints if link is up. */
+	if (!(status & PCI_EXP_LNKSTA_DLLLA))
+		return;
+
+	speed = FIELD_GET(PCI_EXP_LNKSTA_CLS, status);
+	width = FIELD_GET(PCI_EXP_LNKSTA_NLW, status);
+
+	switch (speed) {
+	case 1:
+		bw = MBps_to_icc(250);
+		break;
+	case 2:
+		bw = MBps_to_icc(500);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		fallthrough;
+	case 3:
+		bw = MBps_to_icc(985);
+		break;
+	}
+
+	ret = icc_set_bw(pcie->icc_mem, 0, width * bw);
+	if (ret) {
+		dev_err(pci->dev, "failed to set interconnect bandwidth: %d\n",
+			ret);
+	}
+}
 
 static int qcom_pcie_probe(struct platform_device *pdev)
 {
@@ -1731,6 +1769,10 @@ static int qcom_pcie_probe(struct platform_device *pdev)
 		goto err_pm_runtime_put;
 	}
 
+	ret = qcom_pcie_icc_init(pcie);
+	if (ret)
+		goto err_pm_runtime_put;
+
 	ret = pcie->cfg->ops->get_resources(pcie);
 	if (ret)
 		goto err_pm_runtime_put;
@@ -1749,6 +1791,8 @@ static int qcom_pcie_probe(struct platform_device *pdev)
 		goto err_phy_exit;
 	}
 
+	qcom_pcie_icc_update(pcie);
+
 	return 0;
 
 err_phy_exit:
@@ -1761,22 +1805,24 @@ err_pm_runtime_put:
 }
 
 static const struct of_device_id qcom_pcie_match[] = {
-	{ .compatible = "qcom,pcie-apq8084", .data = &apq8084_cfg },
-	{ .compatible = "qcom,pcie-ipq8064", .data = &ipq8064_cfg },
-	{ .compatible = "qcom,pcie-ipq8064-v2", .data = &ipq8064_cfg },
-	{ .compatible = "qcom,pcie-apq8064", .data = &ipq8064_cfg },
-	{ .compatible = "qcom,pcie-msm8996", .data = &msm8996_cfg },
-	{ .compatible = "qcom,pcie-ipq8074", .data = &ipq8074_cfg },
-	{ .compatible = "qcom,pcie-ipq4019", .data = &ipq4019_cfg },
-	{ .compatible = "qcom,pcie-qcs404", .data = &ipq4019_cfg },
-	{ .compatible = "qcom,pcie-sdm845", .data = &sdm845_cfg },
-	{ .compatible = "qcom,pcie-sm8150", .data = &sm8150_cfg },
-	{ .compatible = "qcom,pcie-sm8250", .data = &sm8250_cfg },
-	{ .compatible = "qcom,pcie-sc8180x", .data = &sc8180x_cfg },
-	{ .compatible = "qcom,pcie-sm8450-pcie0", .data = &sm8450_pcie0_cfg },
-	{ .compatible = "qcom,pcie-sm8450-pcie1", .data = &sm8450_pcie1_cfg },
-	{ .compatible = "qcom,pcie-sc7280", .data = &sc7280_cfg },
-	{ .compatible = "qcom,pcie-ipq6018", .data = &ipq6018_cfg },
+	{ .compatible = "qcom,pcie-apq8064", .data = &cfg_2_1_0 },
+	{ .compatible = "qcom,pcie-apq8084", .data = &cfg_1_0_0 },
+	{ .compatible = "qcom,pcie-ipq4019", .data = &cfg_2_4_0 },
+	{ .compatible = "qcom,pcie-ipq6018", .data = &cfg_2_9_0 },
+	{ .compatible = "qcom,pcie-ipq8064", .data = &cfg_2_1_0 },
+	{ .compatible = "qcom,pcie-ipq8064-v2", .data = &cfg_2_1_0 },
+	{ .compatible = "qcom,pcie-ipq8074", .data = &cfg_2_3_3 },
+	{ .compatible = "qcom,pcie-msm8996", .data = &cfg_2_3_2 },
+	{ .compatible = "qcom,pcie-qcs404", .data = &cfg_2_4_0 },
+	{ .compatible = "qcom,pcie-sa8540p", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sc7280", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sc8180x", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sc8280xp", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sdm845", .data = &cfg_2_7_0 },
+	{ .compatible = "qcom,pcie-sm8150", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sm8250", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sm8450-pcie0", .data = &cfg_1_9_0 },
+	{ .compatible = "qcom,pcie-sm8450-pcie1", .data = &cfg_1_9_0 },
 	{ }
 };
 

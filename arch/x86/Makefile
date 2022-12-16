@@ -208,6 +208,12 @@ ifdef CONFIG_SLS
   KBUILD_CFLAGS += -mharden-sls=all
 endif
 
+ifdef CONFIG_CALL_PADDING
+PADDING_CFLAGS := -fpatchable-function-entry=$(CONFIG_FUNCTION_PADDING_BYTES),$(CONFIG_FUNCTION_PADDING_BYTES)
+KBUILD_CFLAGS += $(PADDING_CFLAGS)
+export PADDING_CFLAGS
+endif
+
 KBUILD_LDFLAGS += -m elf_$(UTS_MACHINE)
 
 ifdef CONFIG_LTO_CLANG
@@ -243,11 +249,6 @@ archheaders:
 
 ###
 # Kernel objects
-
-head-y := arch/x86/kernel/head_$(BITS).o
-head-y += arch/x86/kernel/head$(BITS).o
-head-y += arch/x86/kernel/ebda.o
-head-y += arch/x86/kernel/platform-quirks.o
 
 libs-y  += arch/x86/lib/
 

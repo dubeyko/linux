@@ -22,7 +22,7 @@
 #include <linux/pfn.h>
 #include <linux/hardirq.h>
 #include <linux/gfp.h>
-#include <linux/initrd.h>
+#include <linux/hugetlb.h>
 #include <linux/mmzone.h>
 
 #include <asm/asm-offsets.h>
@@ -151,6 +151,109 @@ int memory_add_physaddr_to_nid(u64 start)
 EXPORT_SYMBOL_GPL(memory_add_physaddr_to_nid);
 #endif
 #endif
+
+#ifdef CONFIG_SPARSEMEM_VMEMMAP
+void __meminit vmemmap_set_pmd(pmd_t *pmd, void *p, int node,
+			       unsigned long addr, unsigned long next)
+{
+	pmd_t entry;
+
+	entry = pfn_pmd(virt_to_pfn(p), PAGE_KERNEL);
+	pmd_val(entry) |= _PAGE_HUGE | _PAGE_HGLOBAL;
+	set_pmd_at(&init_mm, addr, pmd, entry);
+}
+
+int __meminit vmemmap_check_pmd(pmd_t *pmd, int node,
+				unsigned long addr, unsigned long next)
+{
+	int huge = pmd_val(*pmd) & _PAGE_HUGE;
+
+	if (huge)
+		vmemmap_verify((pte_t *)pmd, node, addr, next);
+
+	return huge;
+}
+
+int __meminit vmemmap_populate(unsigned long start, unsigned long end,
+			       int node, struct vmem_altmap *altmap)
+{
+#if CONFIG_PGTABLE_LEVELS == 2
+	return vmemmap_populate_basepages(start, end, node, NULL);
+#else
+	return vmemmap_populate_hugepages(start, end, node, NULL);
+#endif
+}
+
+#ifdef CONFIG_MEMORY_HOTPLUG
+void vmemmap_free(unsigned long start, unsigned long end, struct vmem_altmap *altmap)
+{
+}
+#endif
+#endif
+
+static pte_t *fixmap_pte(unsigned long addr)
+{
+	pgd_t *pgd;
+	p4d_t *p4d;
+	pud_t *pud;
+	pmd_t *pmd;
+
+	pgd = pgd_offset_k(addr);
+	p4d = p4d_offset(pgd, addr);
+
+	if (pgd_none(*pgd)) {
+		pud_t *new __maybe_unused;
+
+		new = memblock_alloc_low(PAGE_SIZE, PAGE_SIZE);
+		pgd_populate(&init_mm, pgd, new);
+#ifndef __PAGETABLE_PUD_FOLDED
+		pud_init(new);
+#endif
+	}
+
+	pud = pud_offset(p4d, addr);
+	if (pud_none(*pud)) {
+		pmd_t *new __maybe_unused;
+
+		new = memblock_alloc_low(PAGE_SIZE, PAGE_SIZE);
+		pud_populate(&init_mm, pud, new);
+#ifndef __PAGETABLE_PMD_FOLDED
+		pmd_init(new);
+#endif
+	}
+
+	pmd = pmd_offset(pud, addr);
+	if (pmd_none(*pmd)) {
+		pte_t *new __maybe_unused;
+
+		new = memblock_alloc_low(PAGE_SIZE, PAGE_SIZE);
+		pmd_populate_kernel(&init_mm, pmd, new);
+	}
+
+	return pte_offset_kernel(pmd, addr);
+}
+
+void __init __set_fixmap(enum fixed_addresses idx,
+			       phys_addr_t phys, pgprot_t flags)
+{
+	unsigned long addr = __fix_to_virt(idx);
+	pte_t *ptep;
+
+	BUG_ON(idx <= FIX_HOLE || idx >= __end_of_fixed_addresses);
+
+	ptep = fixmap_pte(addr);
+	if (!pte_none(*ptep)) {
+		pte_ERROR(*ptep);
+		return;
+	}
+
+	if (pgprot_val(flags))
+		set_pte(ptep, pfn_pte(phys >> PAGE_SHIFT, flags));
+	else {
+		pte_clear(&init_mm, addr, ptep);
+		flush_tlb_kernel_range(addr, addr + PAGE_SIZE);
+	}
+}
 
 /*
  * Align swapper_pg_dir in to 64K, allows its address to be loaded

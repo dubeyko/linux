@@ -222,46 +222,6 @@ void get_rate_set(struct adapter *padapter, unsigned char *pbssrate, int *bssrat
 	memcpy(pbssrate, supportedrates, *bssrate_len);
 }
 
-void UpdateBrateTbl(struct adapter *Adapter, u8 *mbrate)
-{
-	u8	i;
-	u8	rate;
-
-	/*  1M, 2M, 5.5M, 11M, 6M, 12M, 24M are mandatory. */
-	for (i = 0; i < NDIS_802_11_LENGTH_RATES_EX; i++) {
-		rate = mbrate[i] & 0x7f;
-		switch (rate) {
-		case IEEE80211_CCK_RATE_1MB:
-		case IEEE80211_CCK_RATE_2MB:
-		case IEEE80211_CCK_RATE_5MB:
-		case IEEE80211_CCK_RATE_11MB:
-		case IEEE80211_OFDM_RATE_6MB:
-		case IEEE80211_OFDM_RATE_12MB:
-		case IEEE80211_OFDM_RATE_24MB:
-			mbrate[i] |= IEEE80211_BASIC_RATE_MASK;
-			break;
-		}
-	}
-}
-
-void UpdateBrateTblForSoftAP(u8 *bssrateset, u32 bssratelen)
-{
-	u8	i;
-	u8	rate;
-
-	for (i = 0; i < bssratelen; i++) {
-		rate = bssrateset[i] & 0x7f;
-		switch (rate) {
-		case IEEE80211_CCK_RATE_1MB:
-		case IEEE80211_CCK_RATE_2MB:
-		case IEEE80211_CCK_RATE_5MB:
-		case IEEE80211_CCK_RATE_11MB:
-			bssrateset[i] |= IEEE80211_BASIC_RATE_MASK;
-			break;
-		}
-	}
-}
-
 void Save_DM_Func_Flag(struct adapter *padapter)
 {
 	struct hal_data_8188e *haldata = &padapter->haldata;
@@ -371,35 +331,35 @@ u16 get_beacon_interval(struct wlan_bssid_ex *bss)
 	return le16_to_cpu(val);
 }
 
-int is_client_associated_to_ap(struct adapter *padapter)
+bool r8188eu_is_client_associated_to_ap(struct adapter *padapter)
 {
 	struct mlme_ext_priv	*pmlmeext;
 	struct mlme_ext_info	*pmlmeinfo;
 
 	if (!padapter)
-		return _FAIL;
+		return false;
 
 	pmlmeext = &padapter->mlmeextpriv;
 	pmlmeinfo = &pmlmeext->mlmext_info;
 
 	if ((pmlmeinfo->state & WIFI_FW_ASSOC_SUCCESS) && ((pmlmeinfo->state & 0x03) == WIFI_FW_STATION_STATE))
 		return true;
-	else
-		return _FAIL;
+
+	return false;
 }
 
-int is_client_associated_to_ibss(struct adapter *padapter)
+bool r8188eu_is_client_associated_to_ibss(struct adapter *padapter)
 {
 	struct mlme_ext_priv	*pmlmeext = &padapter->mlmeextpriv;
 	struct mlme_ext_info	*pmlmeinfo = &pmlmeext->mlmext_info;
 
 	if ((pmlmeinfo->state & WIFI_FW_ASSOC_SUCCESS) && ((pmlmeinfo->state & 0x03) == WIFI_FW_ADHOC_STATE))
 		return true;
-	else
-		return _FAIL;
+
+	return false;
 }
 
-int is_IBSS_empty(struct adapter *padapter)
+bool r8188eu_is_ibss_empty(struct adapter *padapter)
 {
 	unsigned int i;
 	struct mlme_ext_priv	*pmlmeext = &padapter->mlmeextpriv;
@@ -407,7 +367,7 @@ int is_IBSS_empty(struct adapter *padapter)
 
 	for (i = IBSS_START_MAC_ID; i < NUM_STA; i++) {
 		if (pmlmeinfo->FW_sta_info[i].status == 1)
-			return _FAIL;
+			return false;
 	}
 	return true;
 }
@@ -914,9 +874,10 @@ void VCS_update(struct adapter *padapter, struct sta_info *psta)
 
 int rtw_check_bcn_info(struct adapter  *Adapter, u8 *pframe, u32 packet_len)
 {
+	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)pframe;
 	unsigned int		len;
 	unsigned char		*p;
-	unsigned short	val16, subtype;
+	unsigned short	val16;
 	struct wlan_network *cur_network = &Adapter->mlmepriv.cur_network;
 	/* u8 wpa_ie[255], rsn_ie[255]; */
 	u16 wpa_len = 0, rsn_len = 0;
@@ -933,7 +894,7 @@ int rtw_check_bcn_info(struct adapter  *Adapter, u8 *pframe, u32 packet_len)
 	unsigned short	ht_cap_info;
 	unsigned char	ht_info_infos_0;
 
-	if (!is_client_associated_to_ap(Adapter))
+	if (!r8188eu_is_client_associated_to_ap(Adapter))
 		return true;
 
 	len = packet_len - sizeof(struct ieee80211_hdr_3addr);
@@ -948,9 +909,7 @@ int rtw_check_bcn_info(struct adapter  *Adapter, u8 *pframe, u32 packet_len)
 	if (!bssid)
 		return _FAIL;
 
-	subtype = GetFrameSubType(pframe) >> 4;
-
-	if (subtype == WIFI_BEACON)
+	if (ieee80211_is_beacon(mgmt->frame_control))
 		bssid->Reserved[0] = 1;
 
 	bssid->Length = sizeof(struct wlan_bssid_ex) - MAX_IE_SZ + len;
@@ -1075,16 +1034,13 @@ _mismatch:
 	return _FAIL;
 }
 
-void update_beacon_info(struct adapter *padapter, u8 *pframe, uint pkt_len, struct sta_info *psta)
+void update_beacon_info(struct adapter *padapter, u8 *ie_ptr, uint ie_len, struct sta_info *psta)
 {
 	unsigned int i;
-	unsigned int len;
 	struct ndis_802_11_var_ie *pIE;
 
-	len = pkt_len - (_BEACON_IE_OFFSET_ + WLAN_HDR_A3_LEN);
-
-	for (i = 0; i < len;) {
-		pIE = (struct ndis_802_11_var_ie *)(pframe + (_BEACON_IE_OFFSET_ + WLAN_HDR_A3_LEN) + i);
+	for (i = 0; i < ie_len;) {
+		pIE = (struct ndis_802_11_var_ie *)(ie_ptr + i);
 
 		switch (pIE->ElementID) {
 		case _HT_EXTRA_INFO_IE_:	/* HT info */
@@ -1578,10 +1534,8 @@ void beacon_timing_control(struct adapter *padapter)
 
 static struct adapter *pbuddy_padapter;
 
-int rtw_handle_dualmac(struct adapter *adapter, bool init)
+void rtw_handle_dualmac(struct adapter *adapter, bool init)
 {
-	int status = _SUCCESS;
-
 	if (init) {
 		if (!pbuddy_padapter) {
 			pbuddy_padapter = adapter;
@@ -1594,5 +1548,4 @@ int rtw_handle_dualmac(struct adapter *adapter, bool init)
 	} else {
 		pbuddy_padapter = NULL;
 	}
-	return status;
 }

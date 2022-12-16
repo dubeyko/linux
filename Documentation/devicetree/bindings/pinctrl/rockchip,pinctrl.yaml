@@ -47,6 +47,7 @@ properties:
       - rockchip,rk3568-pinctrl
       - rockchip,rk3588-pinctrl
       - rockchip,rv1108-pinctrl
+      - rockchip,rv1126-pinctrl
 
   rockchip,grf:
     $ref: "/schemas/types.yaml#/definitions/phandle"
@@ -131,7 +132,7 @@ additionalProperties:
               description:
                 Pin bank index.
             - minimum: 0
-              maximum: 10
+              maximum: 13
               description:
                 Mux 0 means GPIO and mux 1 to N means
                 the specific device function.

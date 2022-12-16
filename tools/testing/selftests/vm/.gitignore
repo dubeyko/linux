@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
+cow
 hugepage-mmap
 hugepage-mremap
 hugepage-shm
@@ -30,7 +31,8 @@ map_fixed_noreplace
 write_to_hugetlbfs
 hmm-tests
 memfd_secret
-local_config.*
 soft-dirty
 split_huge_page_test
 ksm_tests
+local_config.h
+local_config.mk

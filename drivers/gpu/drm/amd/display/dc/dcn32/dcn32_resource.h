@@ -70,6 +70,9 @@ bool dcn32_release_post_bldn_3dlut(
 		struct dc_transfer_func **shaper);
 
 bool dcn32_remove_phantom_pipes(struct dc *dc,
+		struct dc_state *context, bool fast_update);
+
+void dcn32_retain_phantom_pipes(struct dc *dc,
 		struct dc_state *context);
 
 void dcn32_add_phantom_pipes(struct dc *dc,
@@ -108,6 +111,8 @@ bool dcn32_subvp_in_use(struct dc *dc,
 
 bool dcn32_mpo_in_use(struct dc_state *context);
 
+bool dcn32_any_surfaces_rotated(struct dc *dc, struct dc_state *context);
+
 struct pipe_ctx *dcn32_acquire_idle_pipe_for_head_pipe_in_layer(
 		struct dc_state *state,
 		const struct resource_pool *pool,
@@ -120,6 +125,15 @@ void dcn32_determine_det_override(struct dc *dc,
 
 void dcn32_set_det_allocations(struct dc *dc, struct dc_state *context,
 	display_e2e_pipe_params_st *pipes);
+
+void dcn32_save_mall_state(struct dc *dc,
+		struct dc_state *context,
+		struct mall_temp_config *temp_config);
+
+void dcn32_restore_mall_state(struct dc *dc,
+		struct dc_state *context,
+		struct mall_temp_config *temp_config);
+
 /* definitions for run time init of reg offsets */
 
 /* CLK SRC */
@@ -1222,7 +1236,8 @@ void dcn32_set_det_allocations(struct dc *dc, struct dc_state *context,
       SR(DCHUBBUB_ARB_FCLK_PSTATE_CHANGE_WATERMARK_C),                         \
       SR(DCHUBBUB_ARB_FCLK_PSTATE_CHANGE_WATERMARK_D),                         \
       SR(DCN_VM_FAULT_ADDR_MSB), SR(DCN_VM_FAULT_ADDR_LSB),                    \
-      SR(DCN_VM_FAULT_CNTL), SR(DCN_VM_FAULT_STATUS)                           \
+      SR(DCN_VM_FAULT_CNTL), SR(DCN_VM_FAULT_STATUS),                          \
+      SR(SDPIF_REQUEST_RATE_LIMIT)                                             \
   )
 
 /* DCCG */

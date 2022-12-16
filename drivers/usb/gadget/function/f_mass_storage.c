@@ -176,6 +176,7 @@
 #include <linux/fcntl.h>
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/kstrtox.h>
 #include <linux/kthread.h>
 #include <linux/sched/signal.h>
 #include <linux/limits.h>
@@ -2662,10 +2663,15 @@ static ssize_t forced_eject_store(struct device *dev,
 }
 
 static DEVICE_ATTR_RW(nofua);
-/* mode wil be set in fsg_lun_attr_is_visible() */
-static DEVICE_ATTR(ro, 0, ro_show, ro_store);
-static DEVICE_ATTR(file, 0, file_show, file_store);
 static DEVICE_ATTR_WO(forced_eject);
+
+/*
+ * Mode of the ro and file attribute files will be overridden in
+ * fsg_lun_dev_is_visible() depending on if this is a cdrom, or if it is a
+ * removable device.
+ */
+static DEVICE_ATTR_RW(ro);
+static DEVICE_ATTR_RW(file);
 
 /****************************** FSG COMMON ******************************/
 
@@ -3382,7 +3388,7 @@ static ssize_t fsg_opts_stall_store(struct config_item *item, const char *page,
 		return -EBUSY;
 	}
 
-	ret = strtobool(page, &stall);
+	ret = kstrtobool(page, &stall);
 	if (!ret) {
 		opts->common->can_stall = stall;
 		ret = len;

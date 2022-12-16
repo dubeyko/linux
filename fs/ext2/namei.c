@@ -120,7 +120,7 @@ static int ext2_create (struct user_namespace * mnt_userns,
 }
 
 static int ext2_tmpfile(struct user_namespace *mnt_userns, struct inode *dir,
-			struct dentry *dentry, umode_t mode)
+			struct file *file, umode_t mode)
 {
 	struct inode *inode = ext2_new_inode(dir, mode, NULL);
 	if (IS_ERR(inode))
@@ -128,9 +128,9 @@ static int ext2_tmpfile(struct user_namespace *mnt_userns, struct inode *dir,
 
 	ext2_set_file_ops(inode);
 	mark_inode_dirty(inode);
-	d_tmpfile(dentry, inode);
+	d_tmpfile(file, inode);
 	unlock_new_inode(inode);
-	return 0;
+	return finish_open_simple(file, 0);
 }
 
 static int ext2_mknod (struct user_namespace * mnt_userns, struct inode * dir,
@@ -427,7 +427,7 @@ const struct inode_operations ext2_dir_inode_operations = {
 	.listxattr	= ext2_listxattr,
 	.getattr	= ext2_getattr,
 	.setattr	= ext2_setattr,
-	.get_acl	= ext2_get_acl,
+	.get_inode_acl	= ext2_get_acl,
 	.set_acl	= ext2_set_acl,
 	.tmpfile	= ext2_tmpfile,
 	.fileattr_get	= ext2_fileattr_get,
@@ -438,6 +438,6 @@ const struct inode_operations ext2_special_inode_operations = {
 	.listxattr	= ext2_listxattr,
 	.getattr	= ext2_getattr,
 	.setattr	= ext2_setattr,
-	.get_acl	= ext2_get_acl,
+	.get_inode_acl	= ext2_get_acl,
 	.set_acl	= ext2_set_acl,
 };

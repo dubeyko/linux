@@ -130,50 +130,6 @@ static int of_thermal_get_crit_temp(struct thermal_zone_device *tz,
 	return -EINVAL;
 }
 
-/**
- * thermal_zone_of_get_sensor_id - get sensor ID from a DT thermal zone
- * @tz_np: a valid thermal zone device node.
- * @sensor_np: a sensor node of a valid sensor device.
- * @id: the sensor ID returned if success.
- *
- * This function will get sensor ID from a given thermal zone node and
- * the sensor node must match the temperature provider @sensor_np.
- *
- * Return: 0 on success, proper error code otherwise.
- */
-
-int thermal_zone_of_get_sensor_id(struct device_node *tz_np,
-				  struct device_node *sensor_np,
-				  u32 *id)
-{
-	struct of_phandle_args sensor_specs;
-	int ret;
-
-	ret = of_parse_phandle_with_args(tz_np,
-					 "thermal-sensors",
-					 "#thermal-sensor-cells",
-					 0,
-					 &sensor_specs);
-	if (ret)
-		return ret;
-
-	if (sensor_specs.np != sensor_np) {
-		of_node_put(sensor_specs.np);
-		return -ENODEV;
-	}
-
-	if (sensor_specs.args_count > 1)
-		pr_warn("%pOFn: too many cells in sensor specifier %d\n",
-		     sensor_specs.np, sensor_specs.args_count);
-
-	*id = sensor_specs.args_count ? sensor_specs.args[0] : 0;
-
-	of_node_put(sensor_specs.np);
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(thermal_zone_of_get_sensor_id);
-
 /***   functions parsing device tree nodes   ***/
 
 static int of_find_trip_id(struct device_node *np, struct device_node *trip)
@@ -648,13 +604,15 @@ struct thermal_zone_device *thermal_of_zone_register(struct device_node *sensor,
 	if (IS_ERR(np)) {
 		if (PTR_ERR(np) != -ENODEV)
 			pr_err("Failed to find thermal zone for %pOFn id=%d\n", sensor, id);
-		return ERR_CAST(np);
+		ret = PTR_ERR(np);
+		goto out_kfree_of_ops;
 	}
 
 	trips = thermal_of_trips_init(np, &ntrips);
 	if (IS_ERR(trips)) {
 		pr_err("Failed to find trip points for %pOFn id=%d\n", sensor, id);
-		return ERR_CAST(trips);
+		ret = PTR_ERR(trips);
+		goto out_kfree_of_ops;
 	}
 
 	ret = thermal_of_monitor_init(np, &delay, &pdelay);
@@ -703,6 +661,8 @@ out_kfree_tzp:
 	kfree(tzp);
 out_kfree_trips:
 	kfree(trips);
+out_kfree_of_ops:
+	kfree(of_ops);
 
 	return ERR_PTR(ret);
 }

@@ -47,15 +47,20 @@ struct mtk_fixed_factor {
 	const char *parent_name;
 	int mult;
 	int div;
+	unsigned long flags;
 };
 
-#define FACTOR(_id, _name, _parent, _mult, _div) {	\
+#define FACTOR_FLAGS(_id, _name, _parent, _mult, _div, _fl) {	\
 		.id = _id,				\
 		.name = _name,				\
 		.parent_name = _parent,			\
 		.mult = _mult,				\
 		.div = _div,				\
+		.flags = _fl,				\
 	}
+
+#define FACTOR(_id, _name, _parent, _mult, _div)	\
+	FACTOR_FLAGS(_id, _name, _parent, _mult, _div, CLK_SET_RATE_PARENT)
 
 int mtk_clk_register_factors(const struct mtk_fixed_factor *clks, int num,
 			     struct clk_hw_onecell_data *clk_data);
@@ -184,10 +189,13 @@ void mtk_clk_unregister_dividers(const struct mtk_clk_divider *mcds, int num,
 				 struct clk_hw_onecell_data *clk_data);
 
 struct clk_hw_onecell_data *mtk_alloc_clk_data(unsigned int clk_num);
+struct clk_hw_onecell_data *mtk_devm_alloc_clk_data(struct device *dev,
+						    unsigned int clk_num);
 void mtk_free_clk_data(struct clk_hw_onecell_data *clk_data);
 
 struct clk_hw *mtk_clk_register_ref2usb_tx(const char *name,
 			const char *parent_name, void __iomem *reg);
+void mtk_clk_unregister_ref2usb_tx(struct clk_hw *hw);
 
 struct mtk_clk_desc {
 	const struct mtk_gate *clks;

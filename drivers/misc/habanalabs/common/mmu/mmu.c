@@ -9,6 +9,8 @@
 
 #include "../habanalabs.h"
 
+#include <trace/events/habanalabs.h>
+
 /**
  * hl_mmu_get_funcs() - get MMU functions structure
  * @hdev: habanalabs device structure.
@@ -44,6 +46,8 @@ int hl_mmu_init(struct hl_device *hdev)
 
 	if (!hdev->mmu_enable)
 		return 0;
+
+	mutex_init(&hdev->mmu_lock);
 
 	if (hdev->mmu_func[MMU_DR_PGT].init != NULL) {
 		rc = hdev->mmu_func[MMU_DR_PGT].init(hdev);
@@ -86,6 +90,8 @@ void hl_mmu_fini(struct hl_device *hdev)
 
 	if (hdev->mmu_func[MMU_HR_PGT].fini != NULL)
 		hdev->mmu_func[MMU_HR_PGT].fini(hdev);
+
+	mutex_destroy(&hdev->mmu_lock);
 }
 
 /**
@@ -103,8 +109,6 @@ int hl_mmu_ctx_init(struct hl_ctx *ctx)
 
 	if (!hdev->mmu_enable)
 		return 0;
-
-	mutex_init(&ctx->mmu_lock);
 
 	if (hdev->mmu_func[MMU_DR_PGT].ctx_init != NULL) {
 		rc = hdev->mmu_func[MMU_DR_PGT].ctx_init(ctx);
@@ -149,8 +153,6 @@ void hl_mmu_ctx_fini(struct hl_ctx *ctx)
 
 	if (hdev->mmu_func[MMU_HR_PGT].ctx_fini != NULL)
 		hdev->mmu_func[MMU_HR_PGT].ctx_fini(ctx);
-
-	mutex_destroy(&ctx->mmu_lock);
 }
 
 /*
@@ -259,6 +261,9 @@ int hl_mmu_unmap_page(struct hl_ctx *ctx, u64 virt_addr, u32 page_size, bool flu
 	if (flush_pte)
 		mmu_funcs->flush(ctx);
 
+	if (trace_habanalabs_mmu_unmap_enabled() && !rc)
+		trace_habanalabs_mmu_unmap(hdev->dev, virt_addr, 0, page_size, flush_pte);
+
 	return rc;
 }
 
@@ -344,6 +349,8 @@ int hl_mmu_map_page(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr, u32 page_s
 	if (flush_pte)
 		mmu_funcs->flush(ctx);
 
+	trace_habanalabs_mmu_map(hdev->dev, virt_addr, phys_addr, page_size, flush_pte);
+
 	return 0;
 
 err:
@@ -403,6 +410,8 @@ int hl_mmu_map_contiguous(struct hl_ctx *ctx, u64 virt_addr,
 			dev_err(hdev->dev,
 				"Map failed for va 0x%llx to pa 0x%llx\n",
 				curr_va, curr_pa);
+			/* last mapping failed so don't try to unmap it - reduce off by page_size */
+			off -= page_size;
 			goto unmap;
 		}
 	}
@@ -600,9 +609,9 @@ int hl_mmu_get_tlb_info(struct hl_ctx *ctx, u64 virt_addr,
 	pgt_residency = mmu_prop->host_resident ? MMU_HR_PGT : MMU_DR_PGT;
 	mmu_funcs = hl_mmu_get_funcs(hdev, pgt_residency, is_dram_addr);
 
-	mutex_lock(&ctx->mmu_lock);
+	mutex_lock(&hdev->mmu_lock);
 	rc = mmu_funcs->get_tlb_info(ctx, virt_addr, hops);
-	mutex_unlock(&ctx->mmu_lock);
+	mutex_unlock(&hdev->mmu_lock);
 
 	if (rc)
 		return rc;
@@ -626,7 +635,7 @@ int hl_mmu_if_set_funcs(struct hl_device *hdev)
 		hl_mmu_v1_set_funcs(hdev, &hdev->mmu_func[MMU_DR_PGT]);
 		break;
 	case ASIC_GAUDI2:
-	case ASIC_GAUDI2_SEC:
+	case ASIC_GAUDI2B:
 		/* MMUs in Gaudi2 are always host resident */
 		hl_mmu_v2_hr_set_funcs(hdev, &hdev->mmu_func[MMU_HR_PGT]);
 		break;
@@ -690,18 +699,18 @@ int hl_mmu_invalidate_cache_range(struct hl_device *hdev, bool is_hard,
 
 static void hl_mmu_prefetch_work_function(struct work_struct *work)
 {
-	struct hl_prefetch_work *pfw = container_of(work, struct hl_prefetch_work, pf_work);
+	struct hl_prefetch_work *pfw = container_of(work, struct hl_prefetch_work, prefetch_work);
 	struct hl_ctx *ctx = pfw->ctx;
+	struct hl_device *hdev = ctx->hdev;
 
-	if (!hl_device_operational(ctx->hdev, NULL))
+	if (!hl_device_operational(hdev, NULL))
 		goto put_ctx;
 
-	mutex_lock(&ctx->mmu_lock);
+	mutex_lock(&hdev->mmu_lock);
 
-	ctx->hdev->asic_funcs->mmu_prefetch_cache_range(ctx, pfw->flags, pfw->asid,
-								pfw->va, pfw->size);
+	hdev->asic_funcs->mmu_prefetch_cache_range(ctx, pfw->flags, pfw->asid, pfw->va, pfw->size);
 
-	mutex_unlock(&ctx->mmu_lock);
+	mutex_unlock(&hdev->mmu_lock);
 
 put_ctx:
 	/*
@@ -714,25 +723,25 @@ put_ctx:
 
 int hl_mmu_prefetch_cache_range(struct hl_ctx *ctx, u32 flags, u32 asid, u64 va, u64 size)
 {
-	struct hl_prefetch_work *handle_pf_work;
+	struct hl_prefetch_work *handle_prefetch_work;
 
-	handle_pf_work = kmalloc(sizeof(*handle_pf_work), GFP_KERNEL);
-	if (!handle_pf_work)
+	handle_prefetch_work = kmalloc(sizeof(*handle_prefetch_work), GFP_KERNEL);
+	if (!handle_prefetch_work)
 		return -ENOMEM;
 
-	INIT_WORK(&handle_pf_work->pf_work, hl_mmu_prefetch_work_function);
-	handle_pf_work->ctx = ctx;
-	handle_pf_work->va = va;
-	handle_pf_work->size = size;
-	handle_pf_work->flags = flags;
-	handle_pf_work->asid = asid;
+	INIT_WORK(&handle_prefetch_work->prefetch_work, hl_mmu_prefetch_work_function);
+	handle_prefetch_work->ctx = ctx;
+	handle_prefetch_work->va = va;
+	handle_prefetch_work->size = size;
+	handle_prefetch_work->flags = flags;
+	handle_prefetch_work->asid = asid;
 
 	/*
 	 * as actual prefetch is done in a WQ we must get the context (and put it
 	 * at the end of the work function)
 	 */
 	hl_ctx_get(ctx);
-	queue_work(ctx->hdev->pf_wq, &handle_pf_work->pf_work);
+	queue_work(ctx->hdev->prefetch_wq, &handle_prefetch_work->prefetch_work);
 
 	return 0;
 }

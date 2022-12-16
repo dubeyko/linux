@@ -477,11 +477,8 @@ int qnoc_probe(struct platform_device *pdev)
 		}
 
 		mmio = devm_ioremap_resource(dev, res);
-
-		if (IS_ERR(mmio)) {
-			dev_err(dev, "Cannot ioremap interconnect bus resource\n");
+		if (IS_ERR(mmio))
 			return PTR_ERR(mmio);
-		}
 
 		qp->regmap = devm_regmap_init_mmio(dev, mmio, desc->regmap_cfg);
 		if (IS_ERR(qp->regmap)) {
@@ -563,6 +560,8 @@ int qnoc_remove(struct platform_device *pdev)
 
 	icc_nodes_remove(&qp->provider);
 	clk_bulk_disable_unprepare(qp->num_clks, qp->bus_clks);
-	return icc_provider_del(&qp->provider);
+	icc_provider_del(&qp->provider);
+
+	return 0;
 }
 EXPORT_SYMBOL(qnoc_remove);

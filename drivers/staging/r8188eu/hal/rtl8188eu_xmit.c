@@ -149,7 +149,6 @@ static void fill_txdesc_phy(struct pkt_attrib *pattrib, __le32 *pdw)
 
 static s32 update_txdesc(struct xmit_frame *pxmitframe, u8 *pmem, s32 sz, u8 bagg_pkt)
 {
-	int	pull = 0;
 	uint	qsel;
 	u8 data_rate, pwr_status, offset;
 	struct adapter		*adapt = pxmitframe->padapter;
@@ -295,7 +294,7 @@ static s32 update_txdesc(struct xmit_frame *pxmitframe, u8 *pmem, s32 sz, u8 bag
 	ODM_SetTxAntByTxInfo_88E(&haldata->odmpriv, pmem, pattrib->mac_id);
 
 	rtl8188eu_cal_txdesc_chksum(ptxdesc);
-	return pull;
+	return 0;
 }
 
 /* for non-agg data frame or  management frame */
@@ -431,7 +430,7 @@ bool rtl8188eu_xmitframe_complete(struct adapter *adapt, struct xmit_priv *pxmit
 	rtw_xmitframe_coalesce(adapt, pxmitframe->pkt, pxmitframe);
 
 	/*  always return ndis_packet after rtw_xmitframe_coalesce */
-	rtw_os_xmit_complete(adapt, pxmitframe);
+	rtw_xmit_complete(adapt, pxmitframe);
 
 	/* 3 2. aggregate same priority and same DA(AP or STA) frames */
 	pfirstframe = pxmitframe;
@@ -501,7 +500,7 @@ bool rtl8188eu_xmitframe_complete(struct adapter *adapt, struct xmit_priv *pxmit
 
 		rtw_xmitframe_coalesce(adapt, pxmitframe->pkt, pxmitframe);
 		/*  always return ndis_packet after rtw_xmitframe_coalesce */
-		rtw_os_xmit_complete(adapt, pxmitframe);
+		rtw_xmit_complete(adapt, pxmitframe);
 
 		/*  (len - TXDESC_SIZE) == pxmitframe->attrib.last_txcmdsz */
 		update_txdesc(pxmitframe, pxmitframe->buf_addr, pxmitframe->attrib.last_txcmdsz, true);

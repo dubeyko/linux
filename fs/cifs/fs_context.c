@@ -791,6 +791,13 @@ do {									\
 	cifs_sb->ctx->field = NULL;					\
 } while (0)
 
+#define STEAL_STRING_SENSITIVE(cifs_sb, ctx, field)			\
+do {									\
+	kfree_sensitive(ctx->field);					\
+	ctx->field = cifs_sb->ctx->field;				\
+	cifs_sb->ctx->field = NULL;					\
+} while (0)
+
 static int smb3_reconfigure(struct fs_context *fc)
 {
 	struct smb3_fs_context *ctx = smb3_fc2context(fc);
@@ -811,7 +818,7 @@ static int smb3_reconfigure(struct fs_context *fc)
 	STEAL_STRING(cifs_sb, ctx, UNC);
 	STEAL_STRING(cifs_sb, ctx, source);
 	STEAL_STRING(cifs_sb, ctx, username);
-	STEAL_STRING(cifs_sb, ctx, password);
+	STEAL_STRING_SENSITIVE(cifs_sb, ctx, password);
 	STEAL_STRING(cifs_sb, ctx, domainname);
 	STEAL_STRING(cifs_sb, ctx, nodename);
 	STEAL_STRING(cifs_sb, ctx, iocharset);
@@ -877,16 +884,21 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		ctx->nodfs = 1;
 		break;
 	case Opt_hard:
-		if (result.negated)
+		if (result.negated) {
+			if (ctx->retry == 1)
+				cifs_dbg(VFS, "conflicting hard vs. soft mount options\n");
 			ctx->retry = 0;
-		else
+		} else
 			ctx->retry = 1;
 		break;
 	case Opt_soft:
 		if (result.negated)
 			ctx->retry = 1;
-		else
+		else {
+			if (ctx->retry == 1)
+				cifs_dbg(VFS, "conflicting hard vs soft mount options\n");
 			ctx->retry = 0;
+		}
 		break;
 	case Opt_mapposix:
 		if (result.negated)
@@ -1162,7 +1174,7 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 		}
 		break;
 	case Opt_pass:
-		kfree(ctx->password);
+		kfree_sensitive(ctx->password);
 		ctx->password = NULL;
 		if (strlen(param->string) == 0)
 			break;
@@ -1470,6 +1482,7 @@ static int smb3_fs_context_parse_param(struct fs_context *fc,
 	return 0;
 
  cifs_parse_mount_err:
+	kfree_sensitive(ctx->password);
 	return -EINVAL;
 }
 

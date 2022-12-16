@@ -48,6 +48,8 @@ TRACE_DEFINE_ENUM(CP_DISCARD);
 TRACE_DEFINE_ENUM(CP_TRIMMED);
 TRACE_DEFINE_ENUM(CP_PAUSE);
 TRACE_DEFINE_ENUM(CP_RESIZE);
+TRACE_DEFINE_ENUM(EX_READ);
+TRACE_DEFINE_ENUM(EX_BLOCK_AGE);
 
 #define show_block_type(type)						\
 	__print_symbolic(type,						\
@@ -153,6 +155,11 @@ TRACE_DEFINE_ENUM(CP_RESIZE);
 		{ COMPRESS_LZ4,		"LZ4" },			\
 		{ COMPRESS_ZSTD,	"ZSTD" },			\
 		{ COMPRESS_LZORLE,	"LZO-RLE" })
+
+#define show_extent_type(type)						\
+	__print_symbolic(type,						\
+		{ EX_READ,	"Read" },				\
+		{ EX_BLOCK_AGE,	"Block Age" })
 
 struct f2fs_sb_info;
 struct f2fs_io_info;
@@ -322,7 +329,7 @@ TRACE_EVENT(f2fs_unlink_enter,
 		__field(ino_t,	ino)
 		__field(loff_t,	size)
 		__field(blkcnt_t, blocks)
-		__field(const char *,	name)
+		__string(name,  dentry->d_name.name)
 	),
 
 	TP_fast_assign(
@@ -330,7 +337,7 @@ TRACE_EVENT(f2fs_unlink_enter,
 		__entry->ino	= dir->i_ino;
 		__entry->size	= dir->i_size;
 		__entry->blocks	= dir->i_blocks;
-		__entry->name	= dentry->d_name.name;
+		__assign_str(name, dentry->d_name.name);
 	),
 
 	TP_printk("dev = (%d,%d), dir ino = %lu, i_size = %lld, "
@@ -338,7 +345,7 @@ TRACE_EVENT(f2fs_unlink_enter,
 		show_dev_ino(__entry),
 		__entry->size,
 		(unsigned long long)__entry->blocks,
-		__entry->name)
+		__get_str(name))
 );
 
 DEFINE_EVENT(f2fs__inode_exit, f2fs_unlink_exit,
@@ -940,25 +947,29 @@ TRACE_EVENT(f2fs_direct_IO_enter,
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(ino_t,	ino)
-		__field(struct kiocb *,	iocb)
+		__field(loff_t,	ki_pos)
+		__field(int,	ki_flags)
+		__field(u16,	ki_ioprio)
 		__field(unsigned long,	len)
 		__field(int,	rw)
 	),
 
 	TP_fast_assign(
-		__entry->dev	= inode->i_sb->s_dev;
-		__entry->ino	= inode->i_ino;
-		__entry->iocb	= iocb;
-		__entry->len	= len;
-		__entry->rw	= rw;
+		__entry->dev		= inode->i_sb->s_dev;
+		__entry->ino		= inode->i_ino;
+		__entry->ki_pos		= iocb->ki_pos;
+		__entry->ki_flags	= iocb->ki_flags;
+		__entry->ki_ioprio	= iocb->ki_ioprio;
+		__entry->len		= len;
+		__entry->rw		= rw;
 	),
 
 	TP_printk("dev = (%d,%d), ino = %lu pos = %lld len = %lu ki_flags = %x ki_ioprio = %x rw = %d",
 		show_dev_ino(__entry),
-		__entry->iocb->ki_pos,
+		__entry->ki_pos,
 		__entry->len,
-		__entry->iocb->ki_flags,
-		__entry->iocb->ki_ioprio,
+		__entry->ki_flags,
+		__entry->ki_ioprio,
 		__entry->rw)
 );
 
@@ -1400,26 +1411,26 @@ TRACE_EVENT(f2fs_readpages,
 
 TRACE_EVENT(f2fs_write_checkpoint,
 
-	TP_PROTO(struct super_block *sb, int reason, char *msg),
+	TP_PROTO(struct super_block *sb, int reason, const char *msg),
 
 	TP_ARGS(sb, reason, msg),
 
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(int,	reason)
-		__field(char *,	msg)
+		__string(dest_msg, msg)
 	),
 
 	TP_fast_assign(
 		__entry->dev		= sb->s_dev;
 		__entry->reason		= reason;
-		__entry->msg		= msg;
+		__assign_str(dest_msg, msg);
 	),
 
 	TP_printk("dev = (%d,%d), checkpoint for %s, state = %s",
 		show_dev(__entry->dev),
 		show_cpreason(__entry->reason),
-		__entry->msg)
+		__get_str(dest_msg))
 );
 
 DECLARE_EVENT_CLASS(f2fs_discard,
@@ -1518,28 +1529,31 @@ TRACE_EVENT(f2fs_issue_flush,
 
 TRACE_EVENT(f2fs_lookup_extent_tree_start,
 
-	TP_PROTO(struct inode *inode, unsigned int pgofs),
+	TP_PROTO(struct inode *inode, unsigned int pgofs, enum extent_type type),
 
-	TP_ARGS(inode, pgofs),
+	TP_ARGS(inode, pgofs, type),
 
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(ino_t,	ino)
 		__field(unsigned int, pgofs)
+		__field(enum extent_type, type)
 	),
 
 	TP_fast_assign(
 		__entry->dev = inode->i_sb->s_dev;
 		__entry->ino = inode->i_ino;
 		__entry->pgofs = pgofs;
+		__entry->type = type;
 	),
 
-	TP_printk("dev = (%d,%d), ino = %lu, pgofs = %u",
+	TP_printk("dev = (%d,%d), ino = %lu, pgofs = %u, type = %s",
 		show_dev_ino(__entry),
-		__entry->pgofs)
+		__entry->pgofs,
+		show_extent_type(__entry->type))
 );
 
-TRACE_EVENT_CONDITION(f2fs_lookup_extent_tree_end,
+TRACE_EVENT_CONDITION(f2fs_lookup_read_extent_tree_end,
 
 	TP_PROTO(struct inode *inode, unsigned int pgofs,
 						struct extent_info *ei),
@@ -1553,8 +1567,8 @@ TRACE_EVENT_CONDITION(f2fs_lookup_extent_tree_end,
 		__field(ino_t,	ino)
 		__field(unsigned int, pgofs)
 		__field(unsigned int, fofs)
-		__field(u32, blk)
 		__field(unsigned int, len)
+		__field(u32, blk)
 	),
 
 	TP_fast_assign(
@@ -1562,25 +1576,65 @@ TRACE_EVENT_CONDITION(f2fs_lookup_extent_tree_end,
 		__entry->ino = inode->i_ino;
 		__entry->pgofs = pgofs;
 		__entry->fofs = ei->fofs;
-		__entry->blk = ei->blk;
 		__entry->len = ei->len;
+		__entry->blk = ei->blk;
 	),
 
 	TP_printk("dev = (%d,%d), ino = %lu, pgofs = %u, "
-		"ext_info(fofs: %u, blk: %u, len: %u)",
+		"read_ext_info(fofs: %u, len: %u, blk: %u)",
 		show_dev_ino(__entry),
 		__entry->pgofs,
 		__entry->fofs,
-		__entry->blk,
-		__entry->len)
+		__entry->len,
+		__entry->blk)
 );
 
-TRACE_EVENT(f2fs_update_extent_tree_range,
+TRACE_EVENT_CONDITION(f2fs_lookup_age_extent_tree_end,
 
-	TP_PROTO(struct inode *inode, unsigned int pgofs, block_t blkaddr,
-						unsigned int len),
+	TP_PROTO(struct inode *inode, unsigned int pgofs,
+						struct extent_info *ei),
 
-	TP_ARGS(inode, pgofs, blkaddr, len),
+	TP_ARGS(inode, pgofs, ei),
+
+	TP_CONDITION(ei),
+
+	TP_STRUCT__entry(
+		__field(dev_t,	dev)
+		__field(ino_t,	ino)
+		__field(unsigned int, pgofs)
+		__field(unsigned int, fofs)
+		__field(unsigned int, len)
+		__field(unsigned long long, age)
+		__field(unsigned long long, blocks)
+	),
+
+	TP_fast_assign(
+		__entry->dev = inode->i_sb->s_dev;
+		__entry->ino = inode->i_ino;
+		__entry->pgofs = pgofs;
+		__entry->fofs = ei->fofs;
+		__entry->len = ei->len;
+		__entry->age = ei->age;
+		__entry->blocks = ei->last_blocks;
+	),
+
+	TP_printk("dev = (%d,%d), ino = %lu, pgofs = %u, "
+		"age_ext_info(fofs: %u, len: %u, age: %llu, blocks: %llu)",
+		show_dev_ino(__entry),
+		__entry->pgofs,
+		__entry->fofs,
+		__entry->len,
+		__entry->age,
+		__entry->blocks)
+);
+
+TRACE_EVENT(f2fs_update_read_extent_tree_range,
+
+	TP_PROTO(struct inode *inode, unsigned int pgofs, unsigned int len,
+						block_t blkaddr,
+						unsigned int c_len),
+
+	TP_ARGS(inode, pgofs, len, blkaddr, c_len),
 
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
@@ -1588,70 +1642,115 @@ TRACE_EVENT(f2fs_update_extent_tree_range,
 		__field(unsigned int, pgofs)
 		__field(u32, blk)
 		__field(unsigned int, len)
+		__field(unsigned int, c_len)
 	),
 
 	TP_fast_assign(
 		__entry->dev = inode->i_sb->s_dev;
 		__entry->ino = inode->i_ino;
 		__entry->pgofs = pgofs;
-		__entry->blk = blkaddr;
 		__entry->len = len;
+		__entry->blk = blkaddr;
+		__entry->c_len = c_len;
 	),
 
 	TP_printk("dev = (%d,%d), ino = %lu, pgofs = %u, "
-					"blkaddr = %u, len = %u",
+				"len = %u, blkaddr = %u, c_len = %u",
 		show_dev_ino(__entry),
 		__entry->pgofs,
+		__entry->len,
 		__entry->blk,
-		__entry->len)
+		__entry->c_len)
+);
+
+TRACE_EVENT(f2fs_update_age_extent_tree_range,
+
+	TP_PROTO(struct inode *inode, unsigned int pgofs, unsigned int len,
+					unsigned long long age,
+					unsigned long long last_blks),
+
+	TP_ARGS(inode, pgofs, len, age, last_blks),
+
+	TP_STRUCT__entry(
+		__field(dev_t,	dev)
+		__field(ino_t,	ino)
+		__field(unsigned int, pgofs)
+		__field(unsigned int, len)
+		__field(unsigned long long, age)
+		__field(unsigned long long, blocks)
+	),
+
+	TP_fast_assign(
+		__entry->dev = inode->i_sb->s_dev;
+		__entry->ino = inode->i_ino;
+		__entry->pgofs = pgofs;
+		__entry->len = len;
+		__entry->age = age;
+		__entry->blocks = last_blks;
+	),
+
+	TP_printk("dev = (%d,%d), ino = %lu, pgofs = %u, "
+				"len = %u, age = %llu, blocks = %llu",
+		show_dev_ino(__entry),
+		__entry->pgofs,
+		__entry->len,
+		__entry->age,
+		__entry->blocks)
 );
 
 TRACE_EVENT(f2fs_shrink_extent_tree,
 
 	TP_PROTO(struct f2fs_sb_info *sbi, unsigned int node_cnt,
-						unsigned int tree_cnt),
+			unsigned int tree_cnt, enum extent_type type),
 
-	TP_ARGS(sbi, node_cnt, tree_cnt),
+	TP_ARGS(sbi, node_cnt, tree_cnt, type),
 
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(unsigned int, node_cnt)
 		__field(unsigned int, tree_cnt)
+		__field(enum extent_type, type)
 	),
 
 	TP_fast_assign(
 		__entry->dev = sbi->sb->s_dev;
 		__entry->node_cnt = node_cnt;
 		__entry->tree_cnt = tree_cnt;
+		__entry->type = type;
 	),
 
-	TP_printk("dev = (%d,%d), shrunk: node_cnt = %u, tree_cnt = %u",
+	TP_printk("dev = (%d,%d), shrunk: node_cnt = %u, tree_cnt = %u, type = %s",
 		show_dev(__entry->dev),
 		__entry->node_cnt,
-		__entry->tree_cnt)
+		__entry->tree_cnt,
+		show_extent_type(__entry->type))
 );
 
 TRACE_EVENT(f2fs_destroy_extent_tree,
 
-	TP_PROTO(struct inode *inode, unsigned int node_cnt),
+	TP_PROTO(struct inode *inode, unsigned int node_cnt,
+				enum extent_type type),
 
-	TP_ARGS(inode, node_cnt),
+	TP_ARGS(inode, node_cnt, type),
 
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(ino_t,	ino)
 		__field(unsigned int, node_cnt)
+		__field(enum extent_type, type)
 	),
 
 	TP_fast_assign(
 		__entry->dev = inode->i_sb->s_dev;
 		__entry->ino = inode->i_ino;
 		__entry->node_cnt = node_cnt;
+		__entry->type = type;
 	),
 
-	TP_printk("dev = (%d,%d), ino = %lu, destroyed: node_cnt = %u",
+	TP_printk("dev = (%d,%d), ino = %lu, destroyed: node_cnt = %u, type = %s",
 		show_dev_ino(__entry),
-		__entry->node_cnt)
+		__entry->node_cnt,
+		show_extent_type(__entry->type))
 );
 
 DECLARE_EVENT_CLASS(f2fs_sync_dirty_inodes,
@@ -1823,7 +1922,10 @@ TRACE_EVENT(f2fs_iostat,
 		__field(unsigned long long,	app_bio)
 		__field(unsigned long long,	app_wio)
 		__field(unsigned long long,	app_mio)
+		__field(unsigned long long,	app_bcdio)
+		__field(unsigned long long,	app_mcdio)
 		__field(unsigned long long,	fs_dio)
+		__field(unsigned long long,	fs_cdio)
 		__field(unsigned long long,	fs_nio)
 		__field(unsigned long long,	fs_mio)
 		__field(unsigned long long,	fs_gc_dio)
@@ -1835,6 +1937,8 @@ TRACE_EVENT(f2fs_iostat,
 		__field(unsigned long long,	app_brio)
 		__field(unsigned long long,	app_rio)
 		__field(unsigned long long,	app_mrio)
+		__field(unsigned long long,	app_bcrio)
+		__field(unsigned long long,	app_mcrio)
 		__field(unsigned long long,	fs_drio)
 		__field(unsigned long long,	fs_gdrio)
 		__field(unsigned long long,	fs_cdrio)
@@ -1849,7 +1953,10 @@ TRACE_EVENT(f2fs_iostat,
 		__entry->app_bio	= iostat[APP_BUFFERED_IO];
 		__entry->app_wio	= iostat[APP_WRITE_IO];
 		__entry->app_mio	= iostat[APP_MAPPED_IO];
+		__entry->app_bcdio	= iostat[APP_BUFFERED_CDATA_IO];
+		__entry->app_mcdio	= iostat[APP_MAPPED_CDATA_IO];
 		__entry->fs_dio		= iostat[FS_DATA_IO];
+		__entry->fs_cdio	= iostat[FS_CDATA_IO];
 		__entry->fs_nio		= iostat[FS_NODE_IO];
 		__entry->fs_mio		= iostat[FS_META_IO];
 		__entry->fs_gc_dio	= iostat[FS_GC_DATA_IO];
@@ -1861,6 +1968,8 @@ TRACE_EVENT(f2fs_iostat,
 		__entry->app_brio	= iostat[APP_BUFFERED_READ_IO];
 		__entry->app_rio	= iostat[APP_READ_IO];
 		__entry->app_mrio	= iostat[APP_MAPPED_READ_IO];
+		__entry->app_bcrio	= iostat[APP_BUFFERED_CDATA_READ_IO];
+		__entry->app_mcrio	= iostat[APP_MAPPED_CDATA_READ_IO];
 		__entry->fs_drio	= iostat[FS_DATA_READ_IO];
 		__entry->fs_gdrio	= iostat[FS_GDATA_READ_IO];
 		__entry->fs_cdrio	= iostat[FS_CDATA_READ_IO];
@@ -1870,20 +1979,24 @@ TRACE_EVENT(f2fs_iostat,
 	),
 
 	TP_printk("dev = (%d,%d), "
-		"app [write=%llu (direct=%llu, buffered=%llu), mapped=%llu], "
-		"fs [data=%llu, node=%llu, meta=%llu, discard=%llu], "
+		"app [write=%llu (direct=%llu, buffered=%llu), mapped=%llu, "
+		"compr(buffered=%llu, mapped=%llu)], "
+		"fs [data=%llu, cdata=%llu, node=%llu, meta=%llu, discard=%llu], "
 		"gc [data=%llu, node=%llu], "
 		"cp [data=%llu, node=%llu, meta=%llu], "
 		"app [read=%llu (direct=%llu, buffered=%llu), mapped=%llu], "
-		"fs [data=%llu, (gc_data=%llu, compr_data=%llu), "
+		"compr(buffered=%llu, mapped=%llu)], "
+		"fs [data=%llu, (gc_data=%llu, cdata=%llu), "
 		"node=%llu, meta=%llu]",
 		show_dev(__entry->dev), __entry->app_wio, __entry->app_dio,
-		__entry->app_bio, __entry->app_mio, __entry->fs_dio,
+		__entry->app_bio, __entry->app_mio, __entry->app_bcdio,
+		__entry->app_mcdio, __entry->fs_dio, __entry->fs_cdio,
 		__entry->fs_nio, __entry->fs_mio, __entry->fs_discard,
 		__entry->fs_gc_dio, __entry->fs_gc_nio, __entry->fs_cp_dio,
 		__entry->fs_cp_nio, __entry->fs_cp_mio,
 		__entry->app_rio, __entry->app_drio, __entry->app_brio,
-		__entry->app_mrio, __entry->fs_drio, __entry->fs_gdrio,
+		__entry->app_mrio, __entry->app_bcrio, __entry->app_mcrio,
+		__entry->fs_drio, __entry->fs_gdrio,
 		__entry->fs_cdrio, __entry->fs_nrio, __entry->fs_mrio)
 );
 

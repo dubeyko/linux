@@ -26,7 +26,6 @@
 #include <linux/random.h>
 #include <linux/rcupdate.h>
 #include <linux/sched/clock.h>
-#include <linux/sched/sysctl.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
@@ -360,9 +359,9 @@ static void *kfence_guarded_alloc(struct kmem_cache *cache, size_t size, gfp_t g
 	unsigned long flags;
 	struct slab *slab;
 	void *addr;
-	const bool random_right_allocate = prandom_u32_max(2);
+	const bool random_right_allocate = get_random_u32_below(2);
 	const bool random_fault = CONFIG_KFENCE_STRESS_TEST_FAULTS &&
-				  !prandom_u32_max(CONFIG_KFENCE_STRESS_TEST_FAULTS);
+				  !get_random_u32_below(CONFIG_KFENCE_STRESS_TEST_FAULTS);
 
 	/* Try to obtain a free object. */
 	raw_spin_lock_irqsave(&kfence_freelist_lock, flags);
@@ -719,24 +718,13 @@ static int show_object(struct seq_file *seq, void *v)
 	return 0;
 }
 
-static const struct seq_operations object_seqops = {
+static const struct seq_operations objects_sops = {
 	.start = start_object,
 	.next = next_object,
 	.stop = stop_object,
 	.show = show_object,
 };
-
-static int open_objects(struct inode *inode, struct file *file)
-{
-	return seq_open(file, &object_seqops);
-}
-
-static const struct file_operations objects_fops = {
-	.open = open_objects,
-	.read = seq_read,
-	.llseek = seq_lseek,
-	.release = seq_release,
-};
+DEFINE_SEQ_ATTRIBUTE(objects);
 
 static int __init kfence_debugfs_init(void)
 {
@@ -810,16 +798,7 @@ static void toggle_allocation_gate(struct work_struct *work)
 	/* Enable static key, and await allocation to happen. */
 	static_branch_enable(&kfence_allocation_key);
 
-	if (sysctl_hung_task_timeout_secs) {
-		/*
-		 * During low activity with no allocations we might wait a
-		 * while; let's avoid the hung task warning.
-		 */
-		wait_event_idle_timeout(allocation_wait, atomic_read(&kfence_allocation_gate),
-					sysctl_hung_task_timeout_secs * HZ / 2);
-	} else {
-		wait_event_idle(allocation_wait, atomic_read(&kfence_allocation_gate));
-	}
+	wait_event_idle(allocation_wait, atomic_read(&kfence_allocation_gate));
 
 	/* Disable static key and reset timer. */
 	static_branch_disable(&kfence_allocation_key);
@@ -864,7 +843,7 @@ static void kfence_init_enable(void)
 
 void __init kfence_init(void)
 {
-	stack_hash_seed = (u32)random_get_entropy();
+	stack_hash_seed = get_random_u32();
 
 	/* Setting kfence_sample_interval to 0 on boot disables KFENCE. */
 	if (!kfence_sample_interval)
@@ -1002,6 +981,13 @@ void *__kfence_alloc(struct kmem_cache *s, size_t size, gfp_t flags)
 		atomic_long_inc(&counters[KFENCE_COUNTER_SKIP_INCOMPAT]);
 		return NULL;
 	}
+
+	/*
+	 * Skip allocations for this slab, if KFENCE has been disabled for
+	 * this slab.
+	 */
+	if (s->flags & SLAB_SKIP_KFENCE)
+		return NULL;
 
 	if (atomic_inc_return(&kfence_allocation_gate) > 1)
 		return NULL;

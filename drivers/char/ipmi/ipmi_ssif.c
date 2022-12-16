@@ -74,7 +74,7 @@
 /*
  * Timer values
  */
-#define SSIF_MSG_USEC		20000	/* 20ms between message tries. */
+#define SSIF_MSG_USEC		60000	/* 60ms between message tries. */
 #define SSIF_MSG_PART_USEC	5000	/* 5ms for a message part */
 
 /* How many times to we retry sending/receiving the message. */
@@ -2098,7 +2098,7 @@ static struct platform_driver ipmi_driver = {
 	.id_table       = ssif_plat_ids
 };
 
-static int init_ipmi_ssif(void)
+static int __init init_ipmi_ssif(void)
 {
 	int i;
 	int rv;
@@ -2140,7 +2140,7 @@ static int init_ipmi_ssif(void)
 }
 module_init(init_ipmi_ssif);
 
-static void cleanup_ipmi_ssif(void)
+static void __exit cleanup_ipmi_ssif(void)
 {
 	if (!initialized)
 		return;

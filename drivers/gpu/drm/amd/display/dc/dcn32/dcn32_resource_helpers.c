@@ -97,21 +97,21 @@ uint32_t dcn32_helper_calculate_num_ways_for_subvp(struct dc *dc, struct dc_stat
 			 * FLOOR(vp_x_start, blk_width)
 			 */
 			full_vp_width_blk_aligned = ((pipe->plane_res.scl_data.viewport.x +
-					pipe->plane_res.scl_data.viewport.width + mblk_width - 1) / mblk_width * mblk_width) +
+					pipe->plane_res.scl_data.viewport.width + mblk_width - 1) / mblk_width * mblk_width) -
 					(pipe->plane_res.scl_data.viewport.x / mblk_width * mblk_width);
 
 			/* full_vp_height_blk_aligned = FLOOR(vp_y_start + full_vp_height + blk_height - 1, blk_height) -
 			 * FLOOR(vp_y_start, blk_height)
 			 */
 			full_vp_height_blk_aligned = ((pipe->plane_res.scl_data.viewport.y +
-					full_vp_height + mblk_height - 1) / mblk_height * mblk_height) +
+					full_vp_height + mblk_height - 1) / mblk_height * mblk_height) -
 					(pipe->plane_res.scl_data.viewport.y / mblk_height * mblk_height);
 
 			/* mall_alloc_width_blk_aligned_l/c = full_vp_width_blk_aligned_l/c */
 			mall_alloc_width_blk_aligned = full_vp_width_blk_aligned;
 
 			/* mall_alloc_height_blk_aligned_l/c = CEILING(sub_vp_height_l/c - 1, blk_height_l/c) + blk_height_l/c */
-			mall_alloc_height_blk_aligned = (pipe->stream->timing.v_addressable - 1 + mblk_height - 1) /
+			mall_alloc_height_blk_aligned = (pipe->plane_res.scl_data.viewport.height - 1 + mblk_height - 1) /
 					mblk_height * mblk_height + mblk_height;
 
 			/* full_mblk_width_ub_l/c = mall_alloc_width_blk_aligned_l/c;
@@ -121,14 +121,19 @@ uint32_t dcn32_helper_calculate_num_ways_for_subvp(struct dc *dc, struct dc_stat
 			 */
 			num_mblks = ((mall_alloc_width_blk_aligned + mblk_width - 1) / mblk_width) *
 					((mall_alloc_height_blk_aligned + mblk_height - 1) / mblk_height);
+
+			/*For DCC:
+			 * meta_num_mblk = CEILING(meta_pitch*full_vp_height*Bpe/256/mblk_bytes, 1)
+			 */
+			if (pipe->plane_state->dcc.enable)
+				num_mblks += (pipe->plane_state->dcc.meta_pitch * pipe->plane_res.scl_data.viewport.height * bytes_per_pixel +
+								(256 * DCN3_2_MALL_MBLK_SIZE_BYTES) - 1) / (256 * DCN3_2_MALL_MBLK_SIZE_BYTES);
+
 			bytes_in_mall = num_mblks * DCN3_2_MALL_MBLK_SIZE_BYTES;
 			// cache lines used is total bytes / cache_line size. Add +2 for worst case alignment
 			// (MALL is 64-byte aligned)
 			cache_lines_per_plane = bytes_in_mall / dc->caps.cache_line_size + 2;
 
-			/* For DCC divide by 256 */
-			if (pipe->plane_state->dcc.enable)
-				cache_lines_per_plane = cache_lines_per_plane + (cache_lines_per_plane / 256) + 1;
 			cache_lines_used += cache_lines_per_plane;
 		}
 	}
@@ -200,7 +205,7 @@ bool dcn32_all_pipes_have_stream_and_plane(struct dc *dc,
 		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
 
 		if (!pipe->stream)
-			return false;
+			continue;
 
 		if (!pipe->plane_state)
 			return false;
@@ -228,6 +233,23 @@ bool dcn32_mpo_in_use(struct dc_state *context)
 
 	for (i = 0; i < context->stream_count; i++) {
 		if (context->stream_status[i].plane_count > 1)
+			return true;
+	}
+	return false;
+}
+
+
+bool dcn32_any_surfaces_rotated(struct dc *dc, struct dc_state *context)
+{
+	uint32_t i;
+
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
+
+		if (!pipe->stream)
+			continue;
+
+		if (pipe->plane_state && pipe->plane_state->rotation != ROTATION_ANGLE_0)
 			return true;
 	}
 	return false;
@@ -362,4 +384,75 @@ void dcn32_set_det_allocations(struct dc *dc, struct dc_state *context,
 		}
 	} else
 		dcn32_determine_det_override(dc, context, pipes);
+}
+
+/**
+ * *******************************************************************************************
+ * dcn32_save_mall_state: Save MALL (SubVP) state for fast validation cases
+ *
+ * This function saves the MALL (SubVP) case for fast validation cases. For fast validation,
+ * there are situations where a shallow copy of the dc->current_state is created for the
+ * validation. In this case we want to save and restore the mall config because we always
+ * teardown subvp at the beginning of validation (and don't attempt to add it back if it's
+ * fast validation). If we don't restore the subvp config in cases of fast validation +
+ * shallow copy of the dc->current_state, the dc->current_state will have a partially
+ * removed subvp state when we did not intend to remove it.
+ *
+ * NOTE: This function ONLY works if the streams are not moved to a different pipe in the
+ *       validation. We don't expect this to happen in fast_validation=1 cases.
+ *
+ * @param [in]: dc: Current DC state
+ * @param [in]: context: New DC state to be programmed
+ * @param [out]: temp_config: struct used to cache the existing MALL state
+ *
+ * @return: void
+ *
+ * *******************************************************************************************
+ */
+void dcn32_save_mall_state(struct dc *dc,
+		struct dc_state *context,
+		struct mall_temp_config *temp_config)
+{
+	uint32_t i;
+
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
+
+		if (pipe->stream)
+			temp_config->mall_stream_config[i] = pipe->stream->mall_stream_config;
+
+		if (pipe->plane_state)
+			temp_config->is_phantom_plane[i] = pipe->plane_state->is_phantom;
+	}
+}
+
+/**
+ * *******************************************************************************************
+ * dcn32_restore_mall_state: Restore MALL (SubVP) state for fast validation cases
+ *
+ * Restore the MALL state based on the previously saved state from dcn32_save_mall_state
+ *
+ * @param [in]: dc: Current DC state
+ * @param [in/out]: context: New DC state to be programmed, restore MALL state into here
+ * @param [in]: temp_config: struct that has the cached MALL state
+ *
+ * @return: void
+ *
+ * *******************************************************************************************
+ */
+void dcn32_restore_mall_state(struct dc *dc,
+		struct dc_state *context,
+		struct mall_temp_config *temp_config)
+{
+	uint32_t i;
+
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
+
+		if (pipe->stream)
+			pipe->stream->mall_stream_config = temp_config->mall_stream_config[i];
+
+		if (pipe->plane_state)
+			pipe->plane_state->is_phantom = temp_config->is_phantom_plane[i];
+	}
 }

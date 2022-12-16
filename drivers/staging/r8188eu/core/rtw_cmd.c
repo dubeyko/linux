@@ -5,8 +5,6 @@
 
 #include "../include/osdep_service.h"
 #include "../include/drv_types.h"
-#include "../include/recv_osdep.h"
-#include "../include/mlme_osdep.h"
 #include "../include/rtw_br_ext.h"
 #include "../include/rtw_mlme_ext.h"
 #include "../include/rtl8188e_dm.h"
@@ -56,10 +54,8 @@ exit:
 	return _SUCCESS;
 }
 
-u32	rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
+int rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 {
-	u32 res = _SUCCESS;
-
 	init_completion(&pcmdpriv->enqueue_cmd);
 	/* sema_init(&(pcmdpriv->cmd_done_sema), 0); */
 	init_completion(&pcmdpriv->start_cmd_thread);
@@ -74,33 +70,28 @@ u32	rtw_init_cmd_priv(struct cmd_priv *pcmdpriv)
 	pcmdpriv->cmd_allocated_buf = kzalloc(MAX_CMDSZ + CMDBUFF_ALIGN_SZ,
 					      GFP_KERNEL);
 
-	if (!pcmdpriv->cmd_allocated_buf) {
-		res = _FAIL;
-		goto exit;
-	}
+	if (!pcmdpriv->cmd_allocated_buf)
+		return -ENOMEM;
 
 	pcmdpriv->cmd_buf = pcmdpriv->cmd_allocated_buf  +  CMDBUFF_ALIGN_SZ - ((size_t)(pcmdpriv->cmd_allocated_buf) & (CMDBUFF_ALIGN_SZ - 1));
 
 	pcmdpriv->rsp_allocated_buf = kzalloc(MAX_RSPSZ + 4, GFP_KERNEL);
 
 	if (!pcmdpriv->rsp_allocated_buf) {
-		res = _FAIL;
-		goto exit;
+		kfree(pcmdpriv->cmd_allocated_buf);
+		return -ENOMEM;
 	}
 
 	pcmdpriv->rsp_buf = pcmdpriv->rsp_allocated_buf  +  4 - ((size_t)(pcmdpriv->rsp_allocated_buf) & 3);
 
 	pcmdpriv->cmd_done_cnt = 0;
 	pcmdpriv->rsp_cnt = 0;
-exit:
 
-	return res;
+	return 0;
 }
 
-u32 rtw_init_evt_priv(struct evt_priv *pevtpriv)
+int rtw_init_evt_priv(struct evt_priv *pevtpriv)
 {
-	u32 res = _SUCCESS;
-
 	/* allocate DMA-able/Non-Page memory for cmd_buf and rsp_buf */
 	atomic_set(&pevtpriv->event_seq, 0);
 
@@ -108,9 +99,9 @@ u32 rtw_init_evt_priv(struct evt_priv *pevtpriv)
 	pevtpriv->c2h_wk_alive = false;
 	pevtpriv->c2h_queue = rtw_cbuf_alloc(C2H_QUEUE_MAX_LEN + 1);
 	if (!pevtpriv->c2h_queue)
-		res = _FAIL;
+		return -ENOMEM;
 
-	return res;
+	return 0;
 }
 
 void rtw_free_cmd_priv(struct	cmd_priv *pcmdpriv)
@@ -288,8 +279,7 @@ post_process:
  *	### NOTE:#### (!!!!)
  *	MUST TAKE CARE THAT BEFORE CALLING THIS FUNC, YOU SHOULD HAVE LOCKED pmlmepriv->lock
  */
-u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, int ssid_num,
-	struct rtw_ieee80211_channel *ch, int ch_num)
+u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, int ssid_num)
 {
 	u8 res = _FAIL;
 	struct cmd_obj		*ph2c;
@@ -331,17 +321,6 @@ u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, 
 		}
 	}
 
-	/* prepare channel list */
-	if (ch) {
-		int i;
-		for (i = 0; i < ch_num && i < RTW_CHANNEL_SCAN_AMOUNT; i++) {
-			if (ch[i].hw_value && !(ch[i].flags & RTW_IEEE80211_CHAN_DISABLED)) {
-				memcpy(&psurveyPara->ch[i], &ch[i], sizeof(struct rtw_ieee80211_channel));
-				psurveyPara->ch_num++;
-			}
-		}
-	}
-
 	set_fwstate(pmlmepriv, _FW_UNDER_SURVEY);
 
 	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
@@ -361,33 +340,29 @@ u8 rtw_sitesurvey_cmd(struct adapter  *padapter, struct ndis_802_11_ssid *ssid, 
 	return res;
 }
 
-u8 rtw_setdatarate_cmd(struct adapter *padapter, u8 *rateset)
+int rtw_setdatarate_cmd(struct adapter *padapter, u8 *rateset)
 {
 	struct cmd_obj *ph2c;
 	struct setdatarate_parm *pbsetdataratepara;
 	struct cmd_priv *pcmdpriv = &padapter->cmdpriv;
-	u8	res = _SUCCESS;
 
 	ph2c = kzalloc(sizeof(*ph2c), GFP_ATOMIC);
-	if (!ph2c) {
-		res = _FAIL;
-		goto exit;
-	}
+	if (!ph2c)
+		return -ENOMEM;
 
 	pbsetdataratepara = kzalloc(sizeof(*pbsetdataratepara), GFP_ATOMIC);
 	if (!pbsetdataratepara) {
 		kfree(ph2c);
-		res = _FAIL;
-		goto exit;
+		return -ENOMEM;
 	}
 
 	init_h2fwcmd_w_parm_no_rsp(ph2c, pbsetdataratepara, GEN_CMD_CODE(_SetDataRate));
 	pbsetdataratepara->mac_id = 5;
 	memcpy(pbsetdataratepara->datarates, rateset, NumRates);
-	res = rtw_enqueue_cmd(pcmdpriv, ph2c);
-exit:
+	if (rtw_enqueue_cmd(pcmdpriv, ph2c) == _FAIL)
+		return -EPERM;
 
-	return res;
+	return 0;
 }
 
 void rtw_getbbrfreg_cmdrsp_callback(struct adapter *padapter,  struct cmd_obj *pcmd)
@@ -1288,6 +1263,66 @@ u8 rtw_c2h_wk_cmd(struct adapter *padapter, u8 *c2h_evt)
 exit:
 
 	return res;
+}
+
+/* C2H event format:
+ * Field    TRIGGER      CONTENT     CMD_SEQ    CMD_LEN    CMD_ID
+ * BITS     [127:120]    [119:16]    [15:8]     [7:4]      [3:0]
+ */
+static s32 c2h_evt_read(struct adapter *adapter, u8 *buf)
+{
+	s32 ret = _FAIL;
+	struct c2h_evt_hdr *c2h_evt;
+	int i;
+	u8 trigger;
+
+	if (!buf)
+		goto exit;
+
+	ret = rtw_read8(adapter, REG_C2HEVT_CLEAR, &trigger);
+	if (ret)
+		return _FAIL;
+
+	if (trigger == C2H_EVT_HOST_CLOSE)
+		goto exit; /* Not ready */
+	else if (trigger != C2H_EVT_FW_CLOSE)
+		goto clear_evt; /* Not a valid value */
+
+	c2h_evt = (struct c2h_evt_hdr *)buf;
+
+	memset(c2h_evt, 0, 16);
+
+	ret = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL, buf);
+	if (ret) {
+		ret = _FAIL;
+		goto clear_evt;
+	}
+
+	ret = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL + 1, buf + 1);
+	if (ret) {
+		ret = _FAIL;
+		goto clear_evt;
+	}
+	/* Read the content */
+	for (i = 0; i < c2h_evt->plen; i++) {
+		ret = rtw_read8(adapter, REG_C2HEVT_MSG_NORMAL +
+				sizeof(*c2h_evt) + i, c2h_evt->payload + i);
+		if (ret) {
+			ret = _FAIL;
+			goto clear_evt;
+		}
+	}
+
+	ret = _SUCCESS;
+
+clear_evt:
+	/* Clear event to notify FW we have read the command.
+	 * If this field isn't clear, the FW won't update the next
+	 * command message.
+	 */
+	rtw_write8(adapter, REG_C2HEVT_CLEAR, C2H_EVT_HOST_CLOSE);
+exit:
+	return ret;
 }
 
 static void c2h_evt_hdl(struct adapter *adapter, struct c2h_evt_hdr *c2h_evt, c2h_id_filter filter)
