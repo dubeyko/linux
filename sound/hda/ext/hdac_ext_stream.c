@@ -10,10 +10,46 @@
  */
 
 #include <linux/delay.h>
+#include <linux/pci.h>
+#include <linux/pci_ids.h>
 #include <linux/slab.h>
 #include <sound/pcm.h>
 #include <sound/hda_register.h>
 #include <sound/hdaudio_ext.h>
+#include <sound/compress_driver.h>
+
+/**
+ * snd_hdac_ext_host_stream_setup - Setup a HOST stream.
+ * @hext_stream: HDAudio stream to set up.
+ * @code_loading: Whether the stream is for PCM or code-loading.
+ *
+ * Return: Zero on success or negative error code.
+ */
+int snd_hdac_ext_host_stream_setup(struct hdac_ext_stream *hext_stream, bool code_loading)
+{
+	return hext_stream->host_setup(hdac_stream(hext_stream), code_loading);
+}
+EXPORT_SYMBOL_GPL(snd_hdac_ext_host_stream_setup);
+
+/**
+ * snd_hdac_apl_host_stream_setup - Setup a HOST stream following procedure
+ *                                  recommended for ApolloLake devices.
+ * @hstream: HDAudio stream to set up.
+ * @code_loading: Whether the stream is for PCM or code-loading.
+ *
+ * Return: Zero on success or negative error code.
+ */
+static int snd_hdac_apl_host_stream_setup(struct hdac_stream *hstream, bool code_loading)
+{
+	struct hdac_ext_stream *hext_stream = stream_to_hdac_ext_stream(hstream);
+	int ret;
+
+	snd_hdac_ext_stream_decouple(hstream->bus, hext_stream, false);
+	ret = snd_hdac_stream_setup(hstream, code_loading);
+	snd_hdac_ext_stream_decouple(hstream->bus, hext_stream, true);
+
+	return ret;
+}
 
 /**
  * snd_hdac_ext_stream_init - initialize each stream (aka device)
@@ -54,8 +90,15 @@ static void snd_hdac_ext_stream_init(struct hdac_bus *bus,
 int snd_hdac_ext_stream_init_all(struct hdac_bus *bus, int start_idx,
 				 int num_stream, int dir)
 {
+	struct pci_dev *pci = to_pci_dev(bus->dev);
+	int (*setup_op)(struct hdac_stream *, bool);
 	int stream_tag = 0;
 	int i, tag, idx = start_idx;
+
+	if (pci->device == PCI_DEVICE_ID_INTEL_HDA_APL)
+		setup_op = snd_hdac_apl_host_stream_setup;
+	else
+		setup_op = snd_hdac_stream_setup;
 
 	for (i = 0; i < num_stream; i++) {
 		struct hdac_ext_stream *hext_stream =
@@ -65,6 +108,7 @@ int snd_hdac_ext_stream_init_all(struct hdac_bus *bus, int start_idx,
 		tag = ++stream_tag;
 		snd_hdac_ext_stream_init(bus, hext_stream, idx, dir, tag);
 		idx++;
+		hext_stream->host_setup = setup_op;
 	}
 
 	return 0;
@@ -367,3 +411,43 @@ void snd_hdac_ext_stream_release(struct hdac_ext_stream *hext_stream, int type)
 
 }
 EXPORT_SYMBOL_GPL(snd_hdac_ext_stream_release);
+
+/**
+ * snd_hdac_ext_cstream_assign - assign a host stream for compress
+ * @bus: HD-audio core bus
+ * @cstream: Compress stream to assign
+ *
+ * Assign an unused host stream for the given compress stream.
+ * If no stream is free, NULL is returned. Stream is decoupled
+ * before assignment.
+ */
+struct hdac_ext_stream *snd_hdac_ext_cstream_assign(struct hdac_bus *bus,
+						    struct snd_compr_stream *cstream)
+{
+	struct hdac_ext_stream *res = NULL;
+	struct hdac_stream *hstream;
+
+	spin_lock_irq(&bus->reg_lock);
+	list_for_each_entry(hstream, &bus->stream_list, list) {
+		struct hdac_ext_stream *hext_stream = stream_to_hdac_ext_stream(hstream);
+
+		if (hstream->direction != cstream->direction)
+			continue;
+
+		if (!hstream->opened) {
+			res = hext_stream;
+			break;
+		}
+	}
+
+	if (res) {
+		snd_hdac_ext_stream_decouple_locked(bus, res, true);
+		res->hstream.opened = 1;
+		res->hstream.running = 0;
+		res->hstream.cstream = cstream;
+	}
+	spin_unlock_irq(&bus->reg_lock);
+
+	return res;
+}
+EXPORT_SYMBOL_GPL(snd_hdac_ext_cstream_assign);

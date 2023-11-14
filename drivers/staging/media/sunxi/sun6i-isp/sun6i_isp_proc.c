@@ -173,8 +173,7 @@ static int sun6i_isp_proc_s_stream(struct v4l2_subdev *subdev, int on)
 	struct sun6i_isp_proc_source *source;
 	struct v4l2_subdev *source_subdev;
 	struct media_pad *remote_pad;
-	/* Initialize to 0 to use both in disable label (ret != 0) and off. */
-	int ret = 0;
+	int ret;
 
 	/* Source */
 
@@ -195,6 +194,7 @@ static int sun6i_isp_proc_s_stream(struct v4l2_subdev *subdev, int on)
 	if (!on) {
 		sun6i_isp_proc_irq_disable(isp_dev);
 		v4l2_subdev_call(source_subdev, video, s_stream, 0);
+		ret = 0;
 		goto disable;
 	}
 
@@ -342,7 +342,7 @@ static const struct v4l2_subdev_pad_ops sun6i_isp_proc_pad_ops = {
 	.set_fmt	= sun6i_isp_proc_set_fmt,
 };
 
-const struct v4l2_subdev_ops sun6i_isp_proc_subdev_ops = {
+static const struct v4l2_subdev_ops sun6i_isp_proc_subdev_ops = {
 	.video	= &sun6i_isp_proc_video_ops,
 	.pad	= &sun6i_isp_proc_pad_ops,
 };
@@ -395,7 +395,7 @@ static int sun6i_isp_proc_link(struct sun6i_isp_device *isp_dev,
 
 static int sun6i_isp_proc_notifier_bound(struct v4l2_async_notifier *notifier,
 					 struct v4l2_subdev *remote_subdev,
-					 struct v4l2_async_subdev *async_subdev)
+					 struct v4l2_async_connection *async_subdev)
 {
 	struct sun6i_isp_device *isp_dev =
 		container_of(notifier, struct sun6i_isp_device, proc.notifier);
@@ -416,7 +416,7 @@ static int sun6i_isp_proc_notifier_bound(struct v4l2_async_notifier *notifier,
 		enabled = !proc->source_csi0.expected;
 		break;
 	default:
-		break;
+		return -EINVAL;
 	}
 
 	source->subdev = remote_subdev;
@@ -536,7 +536,7 @@ int sun6i_isp_proc_setup(struct sun6i_isp_device *isp_dev)
 
 	/* V4L2 Async */
 
-	v4l2_async_nf_init(notifier);
+	v4l2_async_nf_init(notifier, v4l2_dev);
 	notifier->ops = &sun6i_isp_proc_notifier_ops;
 
 	sun6i_isp_proc_source_setup(isp_dev, &proc->source_csi0,
@@ -544,7 +544,7 @@ int sun6i_isp_proc_setup(struct sun6i_isp_device *isp_dev)
 	sun6i_isp_proc_source_setup(isp_dev, &proc->source_csi1,
 				    SUN6I_ISP_PORT_CSI1);
 
-	ret = v4l2_async_nf_register(v4l2_dev, notifier);
+	ret = v4l2_async_nf_register(notifier);
 	if (ret) {
 		v4l2_err(v4l2_dev,
 			 "failed to register v4l2 async notifier: %d\n", ret);

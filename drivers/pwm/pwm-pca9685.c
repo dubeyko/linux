@@ -431,8 +431,8 @@ static int pca9685_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	return ret;
 }
 
-static void pca9685_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
-				  struct pwm_state *state)
+static int pca9685_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+				 struct pwm_state *state)
 {
 	struct pca9685 *pca = to_pca(chip);
 	unsigned long long duty;
@@ -458,12 +458,14 @@ static void pca9685_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 		 */
 		state->duty_cycle = 0;
 		state->enabled = false;
-		return;
+		return 0;
 	}
 
 	state->enabled = true;
 	duty = pca9685_pwm_get_duty(pca, pwm->hwpwm);
 	state->duty_cycle = DIV_ROUND_DOWN_ULL(duty * state->period, PCA9685_COUNTER_RANGE);
+
+	return 0;
 }
 
 static int pca9685_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
@@ -503,7 +505,6 @@ static const struct pwm_ops pca9685_pwm_ops = {
 	.get_state = pca9685_pwm_get_state,
 	.request = pca9685_pwm_request,
 	.free = pca9685_pwm_free,
-	.owner = THIS_MODULE,
 };
 
 static const struct regmap_config pca9685_regmap_i2c_config = {
@@ -513,8 +514,7 @@ static const struct regmap_config pca9685_regmap_i2c_config = {
 	.cache_type = REGCACHE_NONE,
 };
 
-static int pca9685_pwm_probe(struct i2c_client *client,
-				const struct i2c_device_id *id)
+static int pca9685_pwm_probe(struct i2c_client *client)
 {
 	struct pca9685 *pca;
 	unsigned int reg;

@@ -42,8 +42,8 @@
 	hubbub2->shifts->field_name, hubbub2->masks->field_name
 
 /**
- * @DCN32_CRB_SEGMENT_SIZE_KB: Maximum Configurable Return Buffer size for
- * DCN32
+ * DCN32_CRB_SEGMENT_SIZE_KB: Maximum Configurable Return Buffer size for
+ *                            DCN32
  */
 #define DCN32_CRB_SEGMENT_SIZE_KB 64
 
@@ -865,7 +865,7 @@ static void hubbub32_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_A, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_A,
-			 DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_A, &s->dram_clk_chanage);
+			 DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_A, &s->dram_clk_change);
 
 	REG_GET(DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_A,
 			 DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_A, &s->usr_retrain);
@@ -885,7 +885,7 @@ static void hubbub32_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_B, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_B,
-			DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_B, &s->dram_clk_chanage);
+			DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_B, &s->dram_clk_change);
 
 	REG_GET(DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_B,
 			 DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_B, &s->usr_retrain);
@@ -905,7 +905,7 @@ static void hubbub32_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_C, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_C,
-			DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_C, &s->dram_clk_chanage);
+			DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_C, &s->dram_clk_change);
 
 	REG_GET(DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_C,
 			 DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_C, &s->usr_retrain);
@@ -925,7 +925,7 @@ static void hubbub32_wm_read_state(struct hubbub *hubbub,
 			DCHUBBUB_ARB_ALLOW_SR_EXIT_WATERMARK_D, &s->sr_exit);
 
 	REG_GET(DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_D,
-			DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_D, &s->dram_clk_chanage);
+			DCHUBBUB_ARB_UCLK_PSTATE_CHANGE_WATERMARK_D, &s->dram_clk_change);
 
 	REG_GET(DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_D,
 			 DCHUBBUB_ARB_USR_RETRAINING_WATERMARK_D, &s->usr_retrain);
@@ -943,6 +943,46 @@ void hubbub32_force_wm_propagate_to_pipes(struct hubbub *hubbub)
 
 	REG_SET(DCHUBBUB_ARB_DATA_URGENCY_WATERMARK_A, 0,
 			DCHUBBUB_ARB_DATA_URGENCY_WATERMARK_A, prog_wm_value);
+}
+
+void hubbub32_get_mall_en(struct hubbub *hubbub, unsigned int *mall_in_use)
+{
+	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
+	uint32_t prefetch_complete, mall_en;
+
+	REG_GET_2(DCHUBBUB_ARB_MALL_CNTL, MALL_IN_USE, &mall_en,
+			  MALL_PREFETCH_COMPLETE, &prefetch_complete);
+
+	*mall_in_use = prefetch_complete && mall_en;
+}
+
+void hubbub32_init(struct hubbub *hubbub)
+{
+	struct dcn20_hubbub *hubbub2 = TO_DCN20_HUBBUB(hubbub);
+
+	/* Enable clock gate*/
+	if (hubbub->ctx->dc->debug.disable_clock_gate) {
+		/*done in hwseq*/
+		/*REG_UPDATE(DCFCLK_CNTL, DCFCLK_GATE_DIS, 0);*/
+
+		REG_UPDATE_2(DCHUBBUB_CLOCK_CNTL,
+			DISPCLK_R_DCHUBBUB_GATE_DIS, 1,
+			DCFCLK_R_DCHUBBUB_GATE_DIS, 1);
+	}
+	/*
+	ignore the "df_pre_cstate_req" from the SDP port control.
+	only the DCN will determine when to connect the SDP port
+	*/
+	REG_UPDATE(DCHUBBUB_SDPIF_CFG0,
+			SDPIF_PORT_CONTROL, 1);
+	/*Set SDP's max outstanding request to 512
+	must set the register back to 0 (max outstanding = 256) in zero frame buffer mode*/
+	REG_UPDATE(DCHUBBUB_SDPIF_CFG1,
+			SDPIF_MAX_NUM_OUTSTANDING, 1);
+	/*must set the registers back to 256 in zero frame buffer mode*/
+	REG_UPDATE_2(DCHUBBUB_ARB_DF_REQ_OUTSTAND,
+			DCHUBBUB_ARB_MAX_REQ_OUTSTAND, 512,
+			DCHUBBUB_ARB_MIN_REQ_OUTSTAND, 512);
 }
 
 static const struct hubbub_funcs hubbub32_funcs = {
@@ -966,7 +1006,8 @@ static const struct hubbub_funcs hubbub32_funcs = {
 	.init_crb = dcn32_init_crb,
 	.hubbub_read_state = hubbub2_read_state,
 	.force_usr_retraining_allow = hubbub32_force_usr_retraining_allow,
-	.set_request_limit = hubbub32_set_request_limit
+	.set_request_limit = hubbub32_set_request_limit,
+	.get_mall_en = hubbub32_get_mall_en,
 };
 
 void hubbub32_construct(struct dcn20_hubbub *hubbub2,

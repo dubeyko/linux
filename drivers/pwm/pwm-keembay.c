@@ -89,8 +89,8 @@ static void keembay_pwm_disable(struct keembay_pwm *priv, int ch)
 				KMB_PWM_LEADIN_OFFSET(ch));
 }
 
-static void keembay_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
-				  struct pwm_state *state)
+static int keembay_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+				 struct pwm_state *state)
 {
 	struct keembay_pwm *priv = to_keembay_pwm_dev(chip);
 	unsigned long long high, low;
@@ -113,6 +113,8 @@ static void keembay_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 	state->duty_cycle = DIV_ROUND_UP_ULL(high, clk_rate);
 	state->period = DIV_ROUND_UP_ULL(high + low, clk_rate);
 	state->polarity = PWM_POLARITY_NORMAL;
+
+	return 0;
 }
 
 static int keembay_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
@@ -176,7 +178,6 @@ static int keembay_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 }
 
 static const struct pwm_ops keembay_pwm_ops = {
-	.owner = THIS_MODULE,
 	.apply = keembay_pwm_apply,
 	.get_state = keembay_pwm_get_state,
 };

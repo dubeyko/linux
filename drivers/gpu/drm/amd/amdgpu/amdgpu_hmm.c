@@ -105,17 +105,11 @@ static bool amdgpu_hmm_invalidate_hsa(struct mmu_interval_notifier *mni,
 				      unsigned long cur_seq)
 {
 	struct amdgpu_bo *bo = container_of(mni, struct amdgpu_bo, notifier);
-	struct amdgpu_device *adev = amdgpu_ttm_adev(bo->tbo.bdev);
 
 	if (!mmu_notifier_range_blockable(range))
 		return false;
 
-	mutex_lock(&adev->notifier_lock);
-
-	mmu_interval_set_seq(mni, cur_seq);
-
-	amdgpu_amdkfd_evict_userptr(bo->kfd_bo, bo->notifier.mm);
-	mutex_unlock(&adev->notifier_lock);
+	amdgpu_amdkfd_evict_userptr(mni, cur_seq, bo->kfd_bo);
 
 	return true;
 }
@@ -196,8 +190,8 @@ int amdgpu_hmm_range_get_pages(struct mmu_interval_notifier *notifier,
 		pr_debug("hmm range: start = 0x%lx, end = 0x%lx",
 			hmm_range->start, hmm_range->end);
 
-		/* Assuming 512MB takes maxmium 1 second to fault page address */
-		timeout = max((hmm_range->end - hmm_range->start) >> 29, 1UL);
+		/* Assuming 128MB takes maximum 1 second to fault page address */
+		timeout = max((hmm_range->end - hmm_range->start) >> 27, 1UL);
 		timeout *= HMM_RANGE_DEFAULT_TIMEOUT;
 		timeout = jiffies + msecs_to_jiffies(timeout);
 
@@ -244,9 +238,9 @@ out_free_range:
 	return r;
 }
 
-int amdgpu_hmm_range_get_pages_done(struct hmm_range *hmm_range)
+bool amdgpu_hmm_range_get_pages_done(struct hmm_range *hmm_range)
 {
-	int r;
+	bool r;
 
 	r = mmu_interval_read_retry(hmm_range->notifier,
 				    hmm_range->notifier_seq);

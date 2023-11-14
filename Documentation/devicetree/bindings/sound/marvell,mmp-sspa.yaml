@@ -4,7 +4,7 @@
 $id: http://devicetree.org/schemas/sound/marvell,mmp-sspa.yaml#
 $schema: http://devicetree.org/meta-schemas/core.yaml#
 
-title: Marvel SSPA Digital Audio Interface Bindings
+title: Marvel SSPA Digital Audio Interface
 
 maintainers:
   - Lubomir Rintel <lkundrak@v3.sk>
@@ -60,6 +60,7 @@ properties:
     properties:
       endpoint:
         type: object
+        additionalProperties: true
 
         properties:
           dai-format:

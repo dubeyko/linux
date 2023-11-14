@@ -3,11 +3,20 @@ from subprocess import Popen, PIPE
 from re import sub
 
 cc = getenv("CC")
-cc_is_clang = b"clang version" in Popen([cc.split()[0], "-v"], stderr=PIPE).stderr.readline()
+
+# Check if CC has options, as is the case in yocto, where it uses CC="cc --sysroot..."
+cc_tokens = cc.split()
+if len(cc_tokens) > 1:
+    cc = cc_tokens[0]
+    cc_options = " ".join([str(e) for e in cc_tokens[1:]]) + " "
+else:
+    cc_options = ""
+
+cc_is_clang = b"clang version" in Popen([cc, "-v"], stderr=PIPE).stderr.readline()
 src_feature_tests  = getenv('srctree') + '/tools/build/feature'
 
 def clang_has_option(option):
-    cc_output = Popen([cc.split()[0], str(cc.split()[1:]) + option, path.join(src_feature_tests, "test-hello.c") ], stderr=PIPE).stderr.readlines()
+    cc_output = Popen([cc, cc_options + option, path.join(src_feature_tests, "test-hello.c") ], stderr=PIPE).stderr.readlines()
     return [o for o in cc_output if ((b"unknown argument" in o) or (b"is not supported" in o))] == [ ]
 
 if cc_is_clang:
@@ -27,6 +36,10 @@ if cc_is_clang:
             vars[var] = sub("-fno-semantic-interposition", "", vars[var])
         if not clang_has_option("-ffat-lto-objects"):
             vars[var] = sub("-ffat-lto-objects", "", vars[var])
+        if not clang_has_option("-ftree-loop-distribute-patterns"):
+            vars[var] = sub("-ftree-loop-distribute-patterns", "", vars[var])
+        if not clang_has_option("-gno-variable-location-views"):
+            vars[var] = sub("-gno-variable-location-views", "", vars[var])
 
 from setuptools import setup, Extension
 
@@ -52,6 +65,9 @@ if cc_is_clang:
     cflags += ["-Wno-unused-command-line-argument" ]
 else:
     cflags += ['-Wno-cast-function-type' ]
+
+# The python headers have mixed code with declarations (decls after asserts, for instance)
+cflags += [ "-Wno-declaration-after-statement" ]
 
 src_perf  = getenv('srctree') + '/tools/perf'
 build_lib = getenv('PYTHON_EXTBUILD_LIB')

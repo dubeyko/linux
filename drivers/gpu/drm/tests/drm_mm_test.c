@@ -298,9 +298,9 @@ static bool expect_reserve_fail(struct kunit *test, struct drm_mm *mm, struct dr
 	return false;
 }
 
-static bool check_reserve_boundaries(struct kunit *test, struct drm_mm *mm,
-				     unsigned int count,
-				     u64 size)
+static bool noinline_for_stack check_reserve_boundaries(struct kunit *test, struct drm_mm *mm,
+							unsigned int count,
+							u64 size)
 {
 	const struct boundary {
 		u64 start, size;
@@ -939,7 +939,7 @@ static void drm_test_mm_insert_range(struct kunit *test)
 		KUNIT_ASSERT_FALSE(test, __drm_test_mm_insert_range(test, count, size, 0, max - 1));
 		KUNIT_ASSERT_FALSE(test, __drm_test_mm_insert_range(test, count, size, 0, max / 2));
 		KUNIT_ASSERT_FALSE(test, __drm_test_mm_insert_range(test, count, size,
-								    max / 2, max / 2));
+								    max / 2, max));
 		KUNIT_ASSERT_FALSE(test, __drm_test_mm_insert_range(test, count, size,
 								    max / 4 + 1, 3 * max / 4 - 1));
 
