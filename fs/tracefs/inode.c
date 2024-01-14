@@ -199,26 +199,32 @@ static void change_gid(struct dentry *dentry, kgid_t gid)
  */
 static void set_gid(struct dentry *parent, kgid_t gid)
 {
-	struct dentry *this_parent;
-	struct list_head *next;
+	struct dentry *this_parent, *dentry;
 
 	this_parent = parent;
 	spin_lock(&this_parent->d_lock);
 
 	change_gid(this_parent, gid);
 repeat:
-	next = this_parent->d_subdirs.next;
+	dentry = d_first_child(this_parent);
 resume:
-	while (next != &this_parent->d_subdirs) {
-		struct list_head *tmp = next;
-		struct dentry *dentry = list_entry(tmp, struct dentry, d_child);
-		next = tmp->next;
+	hlist_for_each_entry_from(dentry, d_sib) {
+		struct tracefs_inode *ti;
+
+		/* Note, getdents() can add a cursor dentry with no inode */
+		if (!dentry->d_inode)
+			continue;
 
 		spin_lock_nested(&dentry->d_lock, DENTRY_D_LOCK_NESTED);
 
 		change_gid(dentry, gid);
 
-		if (!list_empty(&dentry->d_subdirs)) {
+		/* If this is the events directory, update that too */
+		ti = get_tracefs(dentry->d_inode);
+		if (ti && (ti->flags & TRACEFS_EVENT_INODE))
+			eventfs_update_gid(dentry, gid);
+
+		if (!hlist_empty(&dentry->d_children)) {
 			spin_unlock(&this_parent->d_lock);
 			spin_release(&dentry->d_lock.dep_map, _RET_IP_);
 			this_parent = dentry;
@@ -233,21 +239,20 @@ resume:
 	rcu_read_lock();
 ascend:
 	if (this_parent != parent) {
-		struct dentry *child = this_parent;
-		this_parent = child->d_parent;
+		dentry = this_parent;
+		this_parent = dentry->d_parent;
 
-		spin_unlock(&child->d_lock);
+		spin_unlock(&dentry->d_lock);
 		spin_lock(&this_parent->d_lock);
 
 		/* go into the first sibling still alive */
-		do {
-			next = child->d_child.next;
-			if (next == &this_parent->d_subdirs)
-				goto ascend;
-			child = list_entry(next, struct dentry, d_child);
-		} while (unlikely(child->d_flags & DCACHE_DENTRY_KILLED));
-		rcu_read_unlock();
-		goto resume;
+		hlist_for_each_entry_continue(dentry, d_sib) {
+			if (likely(!(dentry->d_flags & DCACHE_DENTRY_KILLED))) {
+				rcu_read_unlock();
+				goto resume;
+			}
+		}
+		goto ascend;
 	}
 	rcu_read_unlock();
 	spin_unlock(&this_parent->d_lock);
@@ -509,19 +514,14 @@ struct dentry *eventfs_start_creating(const char *name, struct dentry *parent)
 	struct dentry *dentry;
 	int error;
 
+	/* Must always have a parent. */
+	if (WARN_ON_ONCE(!parent))
+		return ERR_PTR(-EINVAL);
+
 	error = simple_pin_fs(&trace_fs_type, &tracefs_mount,
 			      &tracefs_mount_count);
 	if (error)
 		return ERR_PTR(error);
-
-	/*
-	 * If the parent is not specified, we create it in the root.
-	 * We need the root dentry to do this, which is in the super
-	 * block. A pointer to that is in the struct vfsmount that we
-	 * have around.
-	 */
-	if (!parent)
-		parent = tracefs_mount->mnt_root;
 
 	if (unlikely(IS_DEADDIR(parent->d_inode)))
 		dentry = ERR_PTR(-ENOENT);
