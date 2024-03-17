@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "bcachefs.h"
+#include "bbpos.h"
 #include "bkey_buf.h"
 #include "btree_cache.h"
 #include "btree_io.h"
@@ -60,7 +61,7 @@ static void btree_node_data_free(struct bch_fs *c, struct btree *b)
 
 	clear_btree_node_just_written(b);
 
-	kvpfree(b->data, btree_bytes(c));
+	kvfree(b->data);
 	b->data = NULL;
 #ifdef __KERNEL__
 	kvfree(b->aux_data);
@@ -94,7 +95,7 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp)
 {
 	BUG_ON(b->data || b->aux_data);
 
-	b->data = kvpmalloc(btree_bytes(c), gfp);
+	b->data = kvmalloc(btree_buf_bytes(b), gfp);
 	if (!b->data)
 		return -BCH_ERR_ENOMEM_btree_node_mem_alloc;
 #ifdef __KERNEL__
@@ -107,7 +108,7 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp)
 		b->aux_data = NULL;
 #endif
 	if (!b->aux_data) {
-		kvpfree(b->data, btree_bytes(c));
+		kvfree(b->data);
 		b->data = NULL;
 		return -BCH_ERR_ENOMEM_btree_node_mem_alloc;
 	}
@@ -126,7 +127,7 @@ static struct btree *__btree_node_mem_alloc(struct bch_fs *c, gfp_t gfp)
 	bkey_btree_ptr_init(&b->key);
 	INIT_LIST_HEAD(&b->list);
 	INIT_LIST_HEAD(&b->write_blocked);
-	b->byte_order = ilog2(btree_bytes(c));
+	b->byte_order = ilog2(c->opts.btree_node_size);
 	return b;
 }
 
@@ -208,6 +209,18 @@ static int __btree_node_reclaim(struct bch_fs *c, struct btree *b, bool flush)
 	int ret = 0;
 
 	lockdep_assert_held(&bc->lock);
+
+	struct bbpos pos = BBPOS(b->c.btree_id, b->key.k.p);
+
+	u64 mask = b->c.level
+		? bc->pinned_nodes_interior_mask
+		: bc->pinned_nodes_leaf_mask;
+
+	if ((mask & BIT_ULL(b->c.btree_id)) &&
+	    bbpos_cmp(bc->pinned_nodes_start, pos) < 0 &&
+	    bbpos_cmp(bc->pinned_nodes_end, pos) >= 0)
+		return -BCH_ERR_ENOMEM_btree_node_reclaim;
+
 wait_on_io:
 	if (b->flags & ((1U << BTREE_NODE_dirty)|
 			(1U << BTREE_NODE_read_in_flight)|
@@ -408,7 +421,7 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 	if (c->verify_data)
 		list_move(&c->verify_data->list, &bc->live);
 
-	kvpfree(c->verify_ondisk, btree_bytes(c));
+	kvfree(c->verify_ondisk);
 
 	for (i = 0; i < btree_id_nr_alive(c); i++) {
 		struct btree_root *r = bch2_btree_id_root(c, i);
@@ -711,6 +724,9 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 	b = bch2_btree_node_mem_alloc(trans, level != 0);
 
 	if (bch2_err_matches(PTR_ERR_OR_ZERO(b), ENOMEM)) {
+		if (!path)
+			return b;
+
 		trans->memory_allocation_failure = true;
 		trace_and_count(c, trans_restart_memory_allocation_failure, trans, _THIS_IP_, path);
 		return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_fill_mem_alloc_fail));
@@ -760,8 +776,9 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 	}
 
 	if (!six_relock_type(&b->c.lock, lock_type, seq)) {
-		if (path)
-			trace_and_count(c, trans_restart_relock_after_fill, trans, _THIS_IP_, path);
+		BUG_ON(!path);
+
+		trace_and_count(c, trans_restart_relock_after_fill, trans, _THIS_IP_, path);
 		return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_relock_after_fill));
 	}
 
@@ -901,7 +918,7 @@ retry:
 
 	if (unlikely(btree_node_read_error(b))) {
 		six_unlock_type(&b->c.lock, lock_type);
-		return ERR_PTR(-EIO);
+		return ERR_PTR(-BCH_ERR_btree_node_read_error);
 	}
 
 	EBUG_ON(b->c.btree_id != path->btree_id);
@@ -992,7 +1009,7 @@ struct btree *bch2_btree_node_get(struct btree_trans *trans, struct btree_path *
 
 	if (unlikely(btree_node_read_error(b))) {
 		six_unlock_type(&b->c.lock, lock_type);
-		return ERR_PTR(-EIO);
+		return ERR_PTR(-BCH_ERR_btree_node_read_error);
 	}
 
 	EBUG_ON(b->c.btree_id != path->btree_id);
@@ -1075,7 +1092,7 @@ lock_node:
 
 	if (unlikely(btree_node_read_error(b))) {
 		six_unlock_read(&b->c.lock);
-		b = ERR_PTR(-EIO);
+		b = ERR_PTR(-BCH_ERR_btree_node_read_error);
 		goto out;
 	}
 
@@ -1096,7 +1113,7 @@ int bch2_btree_node_prefetch(struct btree_trans *trans,
 	struct btree_cache *bc = &c->btree_cache;
 	struct btree *b;
 
-	BUG_ON(trans && !btree_node_locked(path, level + 1));
+	BUG_ON(path && !btree_node_locked(path, level + 1));
 	BUG_ON(level >= BTREE_MAX_DEPTH);
 
 	b = btree_cache_find(bc, k);
@@ -1192,7 +1209,7 @@ void bch2_btree_node_to_text(struct printbuf *out, struct bch_fs *c, const struc
 	       "    failed unpacked %zu\n",
 	       b->unpack_fn_len,
 	       b->nr.live_u64s * sizeof(u64),
-	       btree_bytes(c) - sizeof(struct btree_node),
+	       btree_buf_bytes(b) - sizeof(struct btree_node),
 	       b->nr.live_u64s * 100 / btree_max_u64s(c),
 	       b->sib_u64s[0],
 	       b->sib_u64s[1],

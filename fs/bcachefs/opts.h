@@ -18,11 +18,11 @@ extern const char * const bch2_sb_compat[];
 extern const char * const __bch2_btree_ids[];
 extern const char * const bch2_csum_types[];
 extern const char * const bch2_csum_opts[];
-extern const char * const bch2_compression_types[];
+extern const char * const __bch2_compression_types[];
 extern const char * const bch2_compression_opts[];
 extern const char * const bch2_str_hash_types[];
 extern const char * const bch2_str_hash_opts[];
-extern const char * const bch2_data_types[];
+extern const char * const __bch2_data_types[];
 extern const char * const bch2_member_states[];
 extern const char * const bch2_jset_entry_types[];
 extern const char * const bch2_fs_usage_types[];
@@ -290,6 +290,11 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\
 	  NULL,		"Allow mounting in when data will be missing")	\
+	x(no_splitbrain_check,		u8,				\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		false,				\
+	  NULL,		"Don't kick drives out when splitbrain detected")\
 	x(discard,			u8,				\
 	  OPT_FS|OPT_MOUNT|OPT_DEVICE,					\
 	  OPT_BOOL(),							\
@@ -332,6 +337,11 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\
 	  NULL,		"Run fsck on mount")				\
+	x(fsck_memory_usage_percent,	u8,				\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_UINT(20, 70),						\
+	  BCH2_NO_SB_OPT,		50,				\
+	  NULL,		"Maximum percentage of system ram fsck is allowed to pin")\
 	x(fix_errors,			u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_FN(bch2_opt_fix_errors),					\
@@ -563,6 +573,11 @@ struct bch_io_opts {
 	BCH_INODE_OPTS()
 #undef x
 };
+
+static inline unsigned background_compression(struct bch_io_opts opts)
+{
+	return opts.background_compression ?: opts.compression;
+}
 
 struct bch_io_opts bch2_opts_to_inode_opts(struct bch_opts);
 bool bch2_opt_is_inode_opt(enum bch_opt_id);

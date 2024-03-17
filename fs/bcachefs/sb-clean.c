@@ -171,22 +171,6 @@ fsck_err:
 	return ERR_PTR(ret);
 }
 
-static struct jset_entry *jset_entry_init(struct jset_entry **end, size_t size)
-{
-	struct jset_entry *entry = *end;
-	unsigned u64s = DIV_ROUND_UP(size, sizeof(u64));
-
-	memset(entry, 0, u64s * sizeof(u64));
-	/*
-	 * The u64s field counts from the start of data, ignoring the shared
-	 * fields.
-	 */
-	entry->u64s = cpu_to_le16(u64s - 1);
-
-	*end = vstruct_next(*end);
-	return entry;
-}
-
 void bch2_journal_super_entries_add_common(struct bch_fs *c,
 					   struct jset_entry **end,
 					   u64 journal_seq)
@@ -207,7 +191,7 @@ void bch2_journal_super_entries_add_common(struct bch_fs *c,
 
 		u->entry.type	= BCH_JSET_ENTRY_usage;
 		u->entry.btree_id = BCH_FS_USAGE_inodes;
-		u->v		= cpu_to_le64(c->usage_base->nr_inodes);
+		u->v		= cpu_to_le64(c->usage_base->b.nr_inodes);
 	}
 
 	{

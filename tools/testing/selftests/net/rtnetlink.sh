@@ -28,6 +28,7 @@ ALL_TESTS="
 	kci_test_neigh_get
 	kci_test_bridge_parent_id
 	kci_test_address_proto
+	kci_test_enslave_bonding
 "
 
 devdummy="test-dummy0"
@@ -439,7 +440,6 @@ kci_test_encap_vxlan()
 	local ret=0
 	vxlan="test-vxlan0"
 	vlan="test-vlan0"
-	testns="$1"
 	run_cmd ip -netns "$testns" link add "$vxlan" type vxlan id 42 group 239.1.1.1 \
 		dev "$devdummy" dstport 4789
 	if [ $? -ne 0 ]; then
@@ -484,7 +484,6 @@ kci_test_encap_fou()
 {
 	local ret=0
 	name="test-fou"
-	testns="$1"
 	run_cmd_grep 'Usage: ip fou' ip fou help
 	if [ $? -ne 0 ];then
 		end_test "SKIP: fou: iproute2 too old"
@@ -525,8 +524,8 @@ kci_test_encap()
 	run_cmd ip -netns "$testns" link set lo up
 	run_cmd ip -netns "$testns" link add name "$devdummy" type dummy
 	run_cmd ip -netns "$testns" link set "$devdummy" up
-	run_cmd kci_test_encap_vxlan "$testns"
-	run_cmd kci_test_encap_fou "$testns"
+	run_cmd kci_test_encap_vxlan
+	run_cmd kci_test_encap_fou
 
 	ip netns del "$testns"
 	return $ret
@@ -802,6 +801,8 @@ kci_test_ipsec_offload()
 		end_test "FAIL: ipsec_offload SA offload missing from list output"
 	fi
 
+	# we didn't create a peer, make sure we can Tx
+	ip neigh add $dstip dev $dev lladdr 00:11:22:33:44:55
 	# use ping to exercise the Tx path
 	ping -I $dev -c 3 -W 1 -i 0 $dstip >/dev/null
 
@@ -1239,6 +1240,31 @@ kci_test_address_proto()
 	check_err $?
 
 	return $ret
+}
+
+kci_test_enslave_bonding()
+{
+	local bond="bond123"
+	local ret=0
+
+	setup_ns testns
+	if [ $? -ne 0 ]; then
+		end_test "SKIP bonding tests: cannot add net namespace $testns"
+		return $ksft_skip
+	fi
+
+	run_cmd ip -netns $testns link add dev $bond type bond mode balance-rr
+	run_cmd ip -netns $testns link add dev $devdummy type dummy
+	run_cmd ip -netns $testns link set dev $devdummy up
+	run_cmd ip -netns $testns link set dev $devdummy master $bond down
+	if [ $ret -ne 0 ]; then
+		end_test "FAIL: initially up interface added to a bond and set down"
+		ip netns del "$testns"
+		return 1
+	fi
+
+	end_test "PASS: enslave interface in a bond"
+	ip netns del "$testns"
 }
 
 kci_test_rtnl()

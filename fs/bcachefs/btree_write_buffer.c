@@ -125,13 +125,12 @@ static inline int wb_flush_one(struct btree_trans *trans, struct btree_iter *ite
 			       struct btree_write_buffered_key *wb,
 			       bool *write_locked, size_t *fast)
 {
-	struct bch_fs *c = trans->c;
 	struct btree_path *path;
 	int ret;
 
 	EBUG_ON(!wb->journal_seq);
-	EBUG_ON(!c->btree_write_buffer.flushing.pin.seq);
-	EBUG_ON(c->btree_write_buffer.flushing.pin.seq > wb->journal_seq);
+	EBUG_ON(!trans->c->btree_write_buffer.flushing.pin.seq);
+	EBUG_ON(trans->c->btree_write_buffer.flushing.pin.seq > wb->journal_seq);
 
 	ret = bch2_btree_iter_traverse(iter);
 	if (ret)
@@ -155,7 +154,7 @@ static inline int wb_flush_one(struct btree_trans *trans, struct btree_iter *ite
 		*write_locked = true;
 	}
 
-	if (unlikely(!bch2_btree_node_insert_fits(c, path->l[0].b, wb->k.k.u64s))) {
+	if (unlikely(!bch2_btree_node_insert_fits(path->l[0].b, wb->k.k.u64s))) {
 		*write_locked = false;
 		return wb_flush_one_slowpath(trans, iter, wb);
 	}
@@ -575,8 +574,6 @@ void bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys
 static int bch2_journal_keys_to_write_buffer(struct bch_fs *c, struct journal_buf *buf)
 {
 	struct journal_keys_to_wb dst;
-	struct jset_entry *entry;
-	struct bkey_i *k;
 	int ret = 0;
 
 	bch2_journal_keys_to_write_buffer_start(c, &dst, le64_to_cpu(buf->data->seq));
@@ -591,7 +588,9 @@ static int bch2_journal_keys_to_write_buffer(struct bch_fs *c, struct journal_bu
 		entry->type = BCH_JSET_ENTRY_btree_keys;
 	}
 
+	spin_lock(&c->journal.lock);
 	buf->need_flush_to_write_buffer = false;
+	spin_unlock(&c->journal.lock);
 out:
 	bch2_journal_keys_to_write_buffer_end(c, &dst);
 	return ret;

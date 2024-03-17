@@ -337,11 +337,12 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 	if (arg.flags & BCH_SUBVOL_SNAPSHOT_RO)
 		create_flags |= BCH_CREATE_SNAPSHOT_RO;
 
-	/* why do we need this lock? */
-	down_read(&c->vfs_sb->s_umount);
-
-	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE)
+	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE) {
+		/* sync_inodes_sb enforce s_umount is locked */
+		down_read(&c->vfs_sb->s_umount);
 		sync_inodes_sb(c->vfs_sb);
+		up_read(&c->vfs_sb->s_umount);
+	}
 retry:
 	if (arg.src_ptr) {
 		error = user_path_at(arg.dirfd,
@@ -425,8 +426,6 @@ err2:
 		goto retry;
 	}
 err1:
-	up_read(&c->vfs_sb->s_umount);
-
 	return error;
 }
 
@@ -456,6 +455,7 @@ static long bch2_ioctl_subvolume_destroy(struct bch_fs *c, struct file *filp,
 	if (IS_ERR(victim))
 		return PTR_ERR(victim);
 
+	dir = d_inode(path.dentry);
 	if (victim->d_sb->s_fs_info != c) {
 		ret = -EXDEV;
 		goto err;
@@ -464,14 +464,13 @@ static long bch2_ioctl_subvolume_destroy(struct bch_fs *c, struct file *filp,
 		ret = -ENOENT;
 		goto err;
 	}
-	dir = d_inode(path.dentry);
 	ret = __bch2_unlink(dir, victim, true);
 	if (!ret) {
 		fsnotify_rmdir(dir, victim);
 		d_delete(victim);
 	}
-	inode_unlock(dir);
 err:
+	inode_unlock(dir);
 	dput(victim);
 	path_put(&path);
 	return ret;

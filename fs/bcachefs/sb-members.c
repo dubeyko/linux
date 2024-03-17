@@ -251,7 +251,7 @@ static void member_to_text(struct printbuf *out,
 	prt_printf(out, "Data allowed:");
 	prt_tab(out);
 	if (BCH_MEMBER_DATA_ALLOWED(&m))
-		prt_bitflags(out, bch2_data_types, BCH_MEMBER_DATA_ALLOWED(&m));
+		prt_bitflags(out, __bch2_data_types, BCH_MEMBER_DATA_ALLOWED(&m));
 	else
 		prt_printf(out, "(none)");
 	prt_newline(out);
@@ -259,7 +259,7 @@ static void member_to_text(struct printbuf *out,
 	prt_printf(out, "Has data:");
 	prt_tab(out);
 	if (data_have)
-		prt_bitflags(out, bch2_data_types, data_have);
+		prt_bitflags(out, __bch2_data_types, data_have);
 	else
 		prt_printf(out, "(none)");
 	prt_newline(out);
@@ -421,7 +421,7 @@ void bch2_dev_errors_reset(struct bch_dev *ca)
 	m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 	for (unsigned i = 0; i < ARRAY_SIZE(m->errors_at_reset); i++)
 		m->errors_at_reset[i] = cpu_to_le64(atomic64_read(&ca->errors[i]));
-	m->errors_reset_time = ktime_get_real_seconds();
+	m->errors_reset_time = cpu_to_le64(ktime_get_real_seconds());
 
 	bch2_write_super(c);
 	mutex_unlock(&c->sb_lock);
