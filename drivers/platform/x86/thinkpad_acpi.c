@@ -7416,10 +7416,8 @@ static int __init volume_create_alsa_mixer(void)
 	data = card->private_data;
 	data->card = card;
 
-	strscpy(card->driver, TPACPI_ALSA_DRVNAME,
-		sizeof(card->driver));
-	strscpy(card->shortname, TPACPI_ALSA_SHRTNAME,
-		sizeof(card->shortname));
+	strscpy(card->driver, TPACPI_ALSA_DRVNAME);
+	strscpy(card->shortname, TPACPI_ALSA_SHRTNAME);
 	snprintf(card->mixername, sizeof(card->mixername), "ThinkPad EC %s",
 		 (thinkpad_id.ec_version_str) ?
 			thinkpad_id.ec_version_str : "(unknown)");
@@ -10828,13 +10826,7 @@ static struct ibm_struct auxmac_data = {
 	.name = "auxmac",
 };
 
-static ssize_t auxmac_show(struct device *dev,
-			   struct device_attribute *attr,
-			   char *buf)
-{
-	return sysfs_emit(buf, "%s\n", auxmac);
-}
-static DEVICE_ATTR_RO(auxmac);
+static DEVICE_STRING_ATTR_RO(auxmac, 0444, auxmac);
 
 static umode_t auxmac_attr_is_visible(struct kobject *kobj,
 				      struct attribute *attr, int n)
@@ -10843,7 +10835,7 @@ static umode_t auxmac_attr_is_visible(struct kobject *kobj,
 }
 
 static struct attribute *auxmac_attributes[] = {
-	&dev_attr_auxmac.attr,
+	&dev_attr_auxmac.attr.attr,
 	NULL
 };
 

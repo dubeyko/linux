@@ -11,6 +11,7 @@
 #include <linux/device.h>
 #include <linux/slab.h>
 #include <linux/kobject.h>
+#include <linux/vmalloc.h>
 #include <asm/uv/bios.h>
 #include <asm/uv/uv.h>
 #include <asm/uv/uv_hub.h>
@@ -928,4 +929,5 @@ module_init(uv_sysfs_init);
 module_exit(uv_sysfs_exit);
 
 MODULE_AUTHOR("Hewlett Packard Enterprise");
+MODULE_DESCRIPTION("Sysfs structure for HPE UV systems");
 MODULE_LICENSE("GPL");
