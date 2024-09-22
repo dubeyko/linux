@@ -350,6 +350,8 @@ int xe_guc_init(struct xe_guc *guc)
 	if (ret)
 		goto out;
 
+	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_LOADABLE);
+
 	ret = devm_add_action_or_reset(xe->drm.dev, guc_fini_hw, guc);
 	if (ret)
 		goto out;
@@ -357,8 +359,6 @@ int xe_guc_init(struct xe_guc *guc)
 	guc_init_params(guc);
 
 	xe_guc_comm_init_early(guc);
-
-	xe_uc_fw_change_status(&guc->fw, XE_UC_FIRMWARE_LOADABLE);
 
 	return 0;
 
@@ -1177,4 +1177,20 @@ void xe_guc_print_info(struct xe_guc *guc, struct drm_printer *p)
 
 	xe_guc_ct_print(&guc->ct, p, false);
 	xe_guc_submit_print(guc, p);
+}
+
+/**
+ * xe_guc_declare_wedged() - Declare GuC wedged
+ * @guc: the GuC object
+ *
+ * Wedge the GuC which stops all submission, saves desired debug state, and
+ * cleans up anything which could timeout.
+ */
+void xe_guc_declare_wedged(struct xe_guc *guc)
+{
+	xe_gt_assert(guc_to_gt(guc), guc_to_xe(guc)->wedged.mode);
+
+	xe_guc_reset_prepare(guc);
+	xe_guc_ct_stop(&guc->ct);
+	xe_guc_submit_wedge(guc);
 }

@@ -380,6 +380,7 @@ static void mana_gd_process_eqe(struct gdma_queue *eq)
 	case GDMA_EQE_HWC_INIT_EQ_ID_DB:
 	case GDMA_EQE_HWC_INIT_DATA:
 	case GDMA_EQE_HWC_INIT_DONE:
+	case GDMA_EQE_RNIC_QP_FATAL:
 		if (!eq->eq.callback)
 			break;
 
@@ -1495,11 +1496,7 @@ static int mana_gd_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	if (err)
 		goto release_region;
 
-	err = dma_set_max_seg_size(&pdev->dev, UINT_MAX);
-	if (err) {
-		dev_err(&pdev->dev, "Failed to set dma device segment size\n");
-		goto release_region;
-	}
+	dma_set_max_seg_size(&pdev->dev, UINT_MAX);
 
 	err = -ENOMEM;
 	gc = vzalloc(sizeof(*gc));

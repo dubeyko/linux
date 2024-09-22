@@ -159,6 +159,8 @@ enum {
 	MLX5_REG_MSECQ		 = 0x9155,
 	MLX5_REG_MSEES		 = 0x9156,
 	MLX5_REG_MIRC		 = 0x9162,
+	MLX5_REG_MTPTM		 = 0x9180,
+	MLX5_REG_MTCTR		 = 0x9181,
 	MLX5_REG_SBCAM		 = 0xB01F,
 	MLX5_REG_RESOURCE_DUMP   = 0xC000,
 	MLX5_REG_DTOR            = 0xC00E,
@@ -917,6 +919,7 @@ struct mlx5_hca_vport_context {
 	u16			qkey_violation_counter;
 	u16			pkey_violation_counter;
 	bool			grh_required;
+	u8			num_plane;
 };
 
 #define STRUCT_FIELD(header, field) \

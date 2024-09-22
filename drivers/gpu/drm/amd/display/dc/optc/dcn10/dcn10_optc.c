@@ -65,7 +65,8 @@ void optc1_program_global_sync(
 		int vready_offset,
 		int vstartup_start,
 		int vupdate_offset,
-		int vupdate_width)
+		int vupdate_width,
+		int pstate_keepout)
 {
 	struct optc *optc1 = DCN10TG_FROM_TG(optc);
 
@@ -73,6 +74,7 @@ void optc1_program_global_sync(
 	optc1->vstartup_start = vstartup_start;
 	optc1->vupdate_offset = vupdate_offset;
 	optc1->vupdate_width = vupdate_width;
+	optc1->pstate_keepout = pstate_keepout;
 
 	if (optc1->vstartup_start == 0) {
 		BREAK_TO_DEBUGGER();
@@ -146,6 +148,7 @@ void optc1_setup_vertical_interrupt2(
  * @vstartup_start: Vstartup period.
  * @vupdate_offset: Vupdate starting position.
  * @vupdate_width: Vupdate duration.
+ * @pstate_keepout: determines low power mode timing during refresh
  * @signal: DC signal types.
  * @use_vbios: to program timings from BIOS command table.
  *
@@ -157,6 +160,7 @@ void optc1_program_timing(
 	int vstartup_start,
 	int vupdate_offset,
 	int vupdate_width,
+	int pstate_keepout,
 	const enum signal_type signal,
 	bool use_vbios)
 {
@@ -177,6 +181,7 @@ void optc1_program_timing(
 	optc1->vstartup_start = vstartup_start;
 	optc1->vupdate_offset = vupdate_offset;
 	optc1->vupdate_width = vupdate_width;
+	optc1->pstate_keepout = pstate_keepout;
 	patched_crtc_timing = *dc_crtc_timing;
 	apply_front_porch_workaround(&patched_crtc_timing);
 	optc1->orginal_patched_timing = patched_crtc_timing;
@@ -282,7 +287,8 @@ void optc1_program_timing(
 			vready_offset,
 			vstartup_start,
 			vupdate_offset,
-			vupdate_width);
+			vupdate_width,
+			pstate_keepout);
 
 	optc->funcs->set_vtg_params(optc, dc_crtc_timing, true);
 
@@ -945,19 +951,10 @@ void optc1_set_drr(
 				OTG_FORCE_LOCK_ON_EVENT, 0,
 				OTG_SET_V_TOTAL_MIN_MASK_EN, 0,
 				OTG_SET_V_TOTAL_MIN_MASK, 0);
-
-		// Setup manual flow control for EOF via TRIG_A
-		optc->funcs->setup_manual_trigger(optc);
-
-	} else {
-		REG_UPDATE_4(OTG_V_TOTAL_CONTROL,
-				OTG_SET_V_TOTAL_MIN_MASK, 0,
-				OTG_V_TOTAL_MIN_SEL, 0,
-				OTG_V_TOTAL_MAX_SEL, 0,
-				OTG_FORCE_LOCK_ON_EVENT, 0);
-
-		optc->funcs->set_vtotal_min_max(optc, 0, 0);
 	}
+
+	// Setup manual flow control for EOF via TRIG_A
+	optc->funcs->setup_manual_trigger(optc);
 }
 
 void optc1_set_vtotal_min_max(struct timing_generator *optc, int vtotal_min, int vtotal_max)
