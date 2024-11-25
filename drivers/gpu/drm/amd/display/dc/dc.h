@@ -55,7 +55,7 @@ struct aux_payload;
 struct set_config_cmd_payload;
 struct dmub_notification;
 
-#define DC_VER "3.2.299"
+#define DC_VER "3.2.309"
 
 #define MAX_SURFACES 3
 #define MAX_PLANES 6
@@ -225,6 +225,11 @@ struct dc_dmub_caps {
 	bool subvp_psr;
 	bool gecc_enable;
 	uint8_t fams_ver;
+	bool aux_backlight_support;
+};
+
+struct dc_scl_caps {
+	bool sharpener_support;
 };
 
 struct dc_caps {
@@ -292,6 +297,7 @@ struct dc_caps {
 	bool sequential_ono;
 	/* Conservative limit for DCC cases which require ODM4:1 to support*/
 	uint32_t dcc_plane_width_limit;
+	struct dc_scl_caps scl_caps;
 };
 
 struct dc_bug_wa {
@@ -462,6 +468,8 @@ struct dc_config {
 	bool support_edp0_on_dp1;
 	unsigned int enable_fpo_flicker_detection;
 	bool disable_hbr_audio_dp2;
+	bool consolidated_dpia_dp_lt;
+	bool set_pipe_unlock_order;
 };
 
 enum visual_confirm {
@@ -762,7 +770,8 @@ union dpia_debug_options {
 		uint32_t disable_mst_dsc_work_around:1; /* bit 3 */
 		uint32_t enable_force_tbt3_work_around:1; /* bit 4 */
 		uint32_t disable_usb4_pm_support:1; /* bit 5 */
-		uint32_t reserved:26;
+		uint32_t enable_consolidated_dpia_dp_lt:1; /* bit 6 */
+		uint32_t reserved:25;
 	} bits;
 	uint32_t raw;
 };
@@ -860,7 +869,6 @@ struct dc_debug_options {
 	bool sanity_checks;
 	bool max_disp_clk;
 	bool surface_trace;
-	bool timing_trace;
 	bool clock_trace;
 	bool validation_trace;
 	bool bandwidth_calcs_trace;
@@ -1056,6 +1064,10 @@ struct dc_debug_options {
 	unsigned int force_lls;
 	bool notify_dpia_hr_bw;
 	bool enable_ips_visual_confirm;
+	unsigned int sharpen_policy;
+	unsigned int scale_to_sharpness_policy;
+	bool skip_full_updated_if_possible;
+	unsigned int enable_oled_edp_power_up_opt;
 };
 
 
@@ -1248,7 +1260,6 @@ union surface_update_flags {
 		uint32_t rotation_change:1;
 		uint32_t swizzle_change:1;
 		uint32_t scaling_change:1;
-		uint32_t clip_size_change: 1;
 		uint32_t position_change:1;
 		uint32_t in_transfer_func_change:1;
 		uint32_t input_csc_change:1;
@@ -1269,6 +1280,7 @@ union surface_update_flags {
 		uint32_t tmz_changed:1;
 		uint32_t mcm_transfer_function_enable_change:1; /* disable or enable MCM transfer func */
 		uint32_t full_update:1;
+		uint32_t sdr_white_level_nits:1;
 	} bits;
 
 	uint32_t raw;
@@ -1349,8 +1361,10 @@ struct dc_plane_state {
 	enum mpcc_movable_cm_location mcm_location;
 	struct dc_csc_transform cursor_csc_color_matrix;
 	bool adaptive_sharpness_en;
+	int adaptive_sharpness_policy;
 	int sharpness_level;
 	enum linear_light_scaling linear_light_scaling;
+	unsigned int sdr_white_level_nits;
 };
 
 struct dc_plane_info {
@@ -1454,6 +1468,7 @@ struct dc {
 		struct dc_scratch_space current_state;
 		struct dc_scratch_space new_state;
 		struct dc_stream_state temp_stream; // Used so we don't need to allocate stream on the stack
+		bool pipes_to_unlock_first[MAX_PIPES]; /* Any of the pipes indicated here should be unlocked first */
 	} scratch;
 
 	struct dml2_configuration_options dml2_options;
@@ -1506,8 +1521,9 @@ struct dc_surface_update {
 	 * change cm2_params.component_settings: Full update
 	 * change cm2_params.cm2_luts: Fast update
 	 */
-	struct dc_cm2_parameters *cm2_params;
+	const struct dc_cm2_parameters *cm2_params;
 	const struct dc_csc_transform *cursor_csc_color_matrix;
+	unsigned int sdr_white_level_nits;
 };
 
 /*
@@ -1762,7 +1778,6 @@ struct dc_link {
 		bool dongle_mode_timing_override;
 		bool blank_stream_on_ocs_change;
 		bool read_dpcd204h_on_irq_hpd;
-		bool disable_assr_for_uhbr;
 	} wa_flags;
 	struct link_mst_stream_allocation_table mst_stream_alloc_table;
 
@@ -1778,6 +1793,7 @@ struct dc_link {
 	// BW ALLOCATON USB4 ONLY
 	struct dc_dpia_bw_alloc dpia_bw_alloc_config;
 	bool skip_implict_edp_power_control;
+	enum backlight_control_type backlight_control_type;
 };
 
 /* Return an enumerated dc_link.
@@ -2195,8 +2211,7 @@ void dc_link_edp_panel_backlight_power_on(struct dc_link *link,
  * and 16 bit fractional, where 1.0 is max backlight value.
  */
 bool dc_link_set_backlight_level(const struct dc_link *dc_link,
-		uint32_t backlight_pwm_u16_16,
-		uint32_t frame_ramp);
+		struct set_backlight_level_params *backlight_level_params);
 
 /* Set/get nits-based backlight level of an embedded panel (eDP, LVDS). */
 bool dc_link_set_backlight_level_nits(struct dc_link *link,
@@ -2519,6 +2534,8 @@ enum dc_status dc_process_dmub_set_mst_slots(const struct dc *dc,
 				uint32_t link_index,
 				uint8_t mst_alloc_slots,
 				uint8_t *mst_slots_in_use);
+
+void dc_process_dmub_dpia_set_tps_notification(const struct dc *dc, uint32_t link_index, uint8_t tps);
 
 void dc_process_dmub_dpia_hpd_int_enable(const struct dc *dc,
 				uint32_t hpd_int_enable);

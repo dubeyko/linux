@@ -49,7 +49,10 @@
 /*
  * Maximum amount of retries to find a valid cgroup.
  */
-#define CGROUP_MAX_RETRIES 1024
+enum {
+	FALLBACK_DSQ		= 0,
+	CGROUP_MAX_RETRIES	= 1024,
+};
 
 char _license[] SEC("license") = "GPL";
 
@@ -225,7 +228,7 @@ static void cgrp_refresh_hweight(struct cgroup *cgrp, struct fcg_cgrp_ctx *cgc)
 				break;
 
 			/*
-			 * We can be oppotunistic here and not grab the
+			 * We can be opportunistic here and not grab the
 			 * cgv_tree_lock and deal with the occasional races.
 			 * However, hweight updates are already cached and
 			 * relatively low-frequency. Let's just do the
@@ -258,8 +261,7 @@ static void cgrp_cap_budget(struct cgv_node *cgv_node, struct fcg_cgrp_ctx *cgc)
 	 * and thus can't be updated and repositioned. Instead, we collect the
 	 * vtime deltas separately and apply it asynchronously here.
 	 */
-	delta = cgc->cvtime_delta;
-	__sync_fetch_and_sub(&cgc->cvtime_delta, delta);
+	delta = __sync_fetch_and_sub(&cgc->cvtime_delta, cgc->cvtime_delta);
 	cvtime = cgv_node->cvtime + delta;
 
 	/*
@@ -339,7 +341,7 @@ s32 BPF_STRUCT_OPS(fcg_select_cpu, struct task_struct *p, s32 prev_cpu, u64 wake
 	if (is_idle) {
 		set_bypassed_at(p, taskc);
 		stat_inc(FCG_STAT_LOCAL);
-		scx_bpf_dispatch(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
+		scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, 0);
 	}
 
 	return cpu;
@@ -375,21 +377,23 @@ void BPF_STRUCT_OPS(fcg_enqueue, struct task_struct *p, u64 enq_flags)
 		 */
 		if (p->nr_cpus_allowed == 1 && (p->flags & PF_KTHREAD)) {
 			stat_inc(FCG_STAT_LOCAL);
-			scx_bpf_dispatch(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL, enq_flags);
+			scx_bpf_dsq_insert(p, SCX_DSQ_LOCAL, SCX_SLICE_DFL,
+					   enq_flags);
 		} else {
 			stat_inc(FCG_STAT_GLOBAL);
-			scx_bpf_dispatch(p, SCX_DSQ_GLOBAL, SCX_SLICE_DFL, enq_flags);
+			scx_bpf_dsq_insert(p, FALLBACK_DSQ, SCX_SLICE_DFL,
+					   enq_flags);
 		}
 		return;
 	}
 
-	cgrp = scx_bpf_task_cgroup(p);
+	cgrp = __COMPAT_scx_bpf_task_cgroup(p);
 	cgc = find_cgrp_ctx(cgrp);
 	if (!cgc)
 		goto out_release;
 
 	if (fifo_sched) {
-		scx_bpf_dispatch(p, cgrp->kn->id, SCX_SLICE_DFL, enq_flags);
+		scx_bpf_dsq_insert(p, cgrp->kn->id, SCX_SLICE_DFL, enq_flags);
 	} else {
 		u64 tvtime = p->scx.dsq_vtime;
 
@@ -400,8 +404,8 @@ void BPF_STRUCT_OPS(fcg_enqueue, struct task_struct *p, u64 enq_flags)
 		if (vtime_before(tvtime, cgc->tvtime_now - SCX_SLICE_DFL))
 			tvtime = cgc->tvtime_now - SCX_SLICE_DFL;
 
-		scx_bpf_dispatch_vtime(p, cgrp->kn->id, SCX_SLICE_DFL,
-				       tvtime, enq_flags);
+		scx_bpf_dsq_insert_vtime(p, cgrp->kn->id, SCX_SLICE_DFL,
+					 tvtime, enq_flags);
 	}
 
 	cgrp_enqueued(cgrp, cgc);
@@ -509,7 +513,7 @@ void BPF_STRUCT_OPS(fcg_runnable, struct task_struct *p, u64 enq_flags)
 {
 	struct cgroup *cgrp;
 
-	cgrp = scx_bpf_task_cgroup(p);
+	cgrp = __COMPAT_scx_bpf_task_cgroup(p);
 	update_active_weight_sums(cgrp, true);
 	bpf_cgroup_release(cgrp);
 }
@@ -522,7 +526,7 @@ void BPF_STRUCT_OPS(fcg_running, struct task_struct *p)
 	if (fifo_sched)
 		return;
 
-	cgrp = scx_bpf_task_cgroup(p);
+	cgrp = __COMPAT_scx_bpf_task_cgroup(p);
 	cgc = find_cgrp_ctx(cgrp);
 	if (cgc) {
 		/*
@@ -565,7 +569,7 @@ void BPF_STRUCT_OPS(fcg_stopping, struct task_struct *p, bool runnable)
 	if (!taskc->bypassed_at)
 		return;
 
-	cgrp = scx_bpf_task_cgroup(p);
+	cgrp = __COMPAT_scx_bpf_task_cgroup(p);
 	cgc = find_cgrp_ctx(cgrp);
 	if (cgc) {
 		__sync_fetch_and_add(&cgc->cvtime_delta,
@@ -579,7 +583,7 @@ void BPF_STRUCT_OPS(fcg_quiescent, struct task_struct *p, u64 deq_flags)
 {
 	struct cgroup *cgrp;
 
-	cgrp = scx_bpf_task_cgroup(p);
+	cgrp = __COMPAT_scx_bpf_task_cgroup(p);
 	update_active_weight_sums(cgrp, false);
 	bpf_cgroup_release(cgrp);
 }
@@ -661,7 +665,7 @@ static bool try_pick_next_cgroup(u64 *cgidp)
 		goto out_free;
 	}
 
-	if (!scx_bpf_consume(cgid)) {
+	if (!scx_bpf_dsq_move_to_local(cgid)) {
 		bpf_cgroup_release(cgrp);
 		stat_inc(FCG_STAT_PNC_EMPTY);
 		goto out_stash;
@@ -741,7 +745,7 @@ void BPF_STRUCT_OPS(fcg_dispatch, s32 cpu, struct task_struct *prev)
 		goto pick_next_cgroup;
 
 	if (vtime_before(now, cpuc->cur_at + cgrp_slice_ns)) {
-		if (scx_bpf_consume(cpuc->cur_cgid)) {
+		if (scx_bpf_dsq_move_to_local(cpuc->cur_cgid)) {
 			stat_inc(FCG_STAT_CNS_KEEP);
 			return;
 		}
@@ -781,7 +785,7 @@ void BPF_STRUCT_OPS(fcg_dispatch, s32 cpu, struct task_struct *prev)
 pick_next_cgroup:
 	cpuc->cur_at = now;
 
-	if (scx_bpf_consume(SCX_DSQ_GLOBAL)) {
+	if (scx_bpf_dsq_move_to_local(FALLBACK_DSQ)) {
 		cpuc->cur_cgid = 0;
 		return;
 	}
@@ -838,7 +842,7 @@ int BPF_STRUCT_OPS_SLEEPABLE(fcg_cgroup_init, struct cgroup *cgrp,
 	int ret;
 
 	/*
-	 * Technically incorrect as cgroup ID is full 64bit while dq ID is
+	 * Technically incorrect as cgroup ID is full 64bit while dsq ID is
 	 * 63bit. Should not be a problem in practice and easy to spot in the
 	 * unlikely case that it breaks.
 	 */
@@ -926,6 +930,11 @@ void BPF_STRUCT_OPS(fcg_cgroup_move, struct task_struct *p,
 	p->scx.dsq_vtime = to_cgc->tvtime_now + vtime_delta;
 }
 
+s32 BPF_STRUCT_OPS_SLEEPABLE(fcg_init)
+{
+	return scx_bpf_create_dsq(FALLBACK_DSQ, -1);
+}
+
 void BPF_STRUCT_OPS(fcg_exit, struct scx_exit_info *ei)
 {
 	UEI_RECORD(uei, ei);
@@ -944,6 +953,7 @@ SCX_OPS_DEFINE(flatcg_ops,
 	       .cgroup_init		= (void *)fcg_cgroup_init,
 	       .cgroup_exit		= (void *)fcg_cgroup_exit,
 	       .cgroup_move		= (void *)fcg_cgroup_move,
+	       .init			= (void *)fcg_init,
 	       .exit			= (void *)fcg_exit,
 	       .flags			= SCX_OPS_HAS_CGROUP_WEIGHT | SCX_OPS_ENQ_EXITING,
 	       .name			= "flatcg");

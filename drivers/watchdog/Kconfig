@@ -953,6 +953,15 @@ config RENESAS_RZG2LWDT
 	  This driver adds watchdog support for the integrated watchdogs in the
 	  Renesas RZ/G2L SoCs. These watchdogs can be used to reset a system.
 
+config RENESAS_RZV2HWDT
+	tristate "Renesas RZ/V2H(P) WDT Watchdog"
+	depends on ARCH_R9A09G057 || COMPILE_TEST
+	depends on PM || COMPILE_TEST
+	select WATCHDOG_CORE
+	help
+	  This driver adds watchdog support for the integrated watchdogs in the
+	  Renesas RZ/V2H(P) SoCs. These watchdogs can be used to reset a system.
+
 config ASPEED_WATCHDOG
 	tristate "Aspeed BMC watchdog support"
 	depends on ARCH_ASPEED || COMPILE_TEST
@@ -1141,6 +1150,16 @@ config ALIM7101_WDT
 	  module will be called alim7101_wdt.
 
 	  Most people will say N.
+
+config CGBC_WDT
+	tristate "Congatec Board Controller Watchdog Timer"
+	depends on MFD_CGBC
+	select WATCHDOG_CORE
+	help
+	  Enables watchdog timer support for the Congatec Board Controller.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called cgbc_wdt.
 
 config EBC_C384_WDT
 	tristate "WinSystems EBC-C384 Watchdog Timer"
@@ -1500,7 +1519,7 @@ config 60XX_WDT
 
 config SBC8360_WDT
 	tristate "SBC8360 Watchdog Timer"
-	depends on X86_32
+	depends on X86_32 && HAS_IOPORT
 	help
 
 	  This is the driver for the hardware watchdog on the SBC8360 Single
@@ -1513,7 +1532,7 @@ config SBC8360_WDT
 
 config SBC7240_WDT
 	tristate "SBC Nano 7240 Watchdog Timer"
-	depends on X86_32 && !UML
+	depends on X86_32 && HAS_IOPORT
 	help
 	  This is the driver for the hardware watchdog found on the IEI
 	  single board computers EPIC Nano 7240 (and likely others). This

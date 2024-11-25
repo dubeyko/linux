@@ -15,7 +15,9 @@ SHARED_DEPS = Makefile ../shared/shared.mk ../shared/*.h generated/map-shift.h \
 	../../../include/linux/maple_tree.h \
 	../../../include/linux/radix-tree.h \
 	../../../lib/radix-tree.h \
-	../../../include/linux/idr.h
+	../../../include/linux/idr.h \
+	../../../lib/maple_tree.c \
+	../../../lib/test_maple_tree.c
 
 ifndef SHIFT
 	SHIFT=3
@@ -67,6 +69,7 @@ generated/bit-length.h: FORCE
 	@if ! grep -qws CONFIG_$(LONG_BIT)BIT generated/bit-length.h; then   \
 		echo "Generating $@";                                        \
 		echo "#define CONFIG_$(LONG_BIT)BIT 1" > $@;                 \
+		echo "#define CONFIG_PHYS_ADDR_T_$(LONG_BIT)BIT 1" >> $@;    \
 	fi
 
 FORCE: ;

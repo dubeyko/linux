@@ -14,7 +14,7 @@
 
 #include <memory/renesas-rpc-if.h>
 
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 static void rpcif_spi_mem_prepare(struct spi_device *spi_dev,
 				  const struct spi_mem_op *spi_op,
@@ -206,7 +206,7 @@ MODULE_DEVICE_TABLE(platform, rpc_if_spi_id_table);
 
 static struct platform_driver rpcif_spi_driver = {
 	.probe	= rpcif_spi_probe,
-	.remove_new = rpcif_spi_remove,
+	.remove = rpcif_spi_remove,
 	.id_table = rpc_if_spi_id_table,
 	.driver = {
 		.name	= "rpc-if-spi",

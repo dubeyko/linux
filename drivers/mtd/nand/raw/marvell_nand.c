@@ -84,7 +84,7 @@
 #include <linux/slab.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
-#include <asm/unaligned.h>
+#include <linux/unaligned.h>
 
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
@@ -3183,7 +3183,7 @@ static struct platform_driver marvell_nfc_driver = {
 	},
 	.id_table = marvell_nfc_platform_ids,
 	.probe = marvell_nfc_probe,
-	.remove_new = marvell_nfc_remove,
+	.remove = marvell_nfc_remove,
 };
 module_platform_driver(marvell_nfc_driver);
 

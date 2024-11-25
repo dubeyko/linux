@@ -598,6 +598,17 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 				mjr = le64_to_cpu(*(__le64 *)(pbuf+8));
 				mnr = le64_to_cpu(*(__le64 *)(pbuf+16));
 				fattr->cf_rdev = MKDEV(mjr, mnr);
+			} else if (bytes_read == 16) {
+				/*
+				 * Windows NFS server before Windows Server 2012
+				 * stores major and minor number in SFU-modified
+				 * style, just as 32-bit numbers. Recognize it.
+				 */
+				__u32 mjr; /* major */
+				__u32 mnr; /* minor */
+				mjr = le32_to_cpu(*(__le32 *)(pbuf+8));
+				mnr = le32_to_cpu(*(__le32 *)(pbuf+12));
+				fattr->cf_rdev = MKDEV(mjr, mnr);
 			}
 		} else if (memcmp("IntxCHR\0", pbuf, 8) == 0) {
 			cifs_dbg(FYI, "Char device\n");
@@ -609,6 +620,17 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 				__u64 mnr; /* minor */
 				mjr = le64_to_cpu(*(__le64 *)(pbuf+8));
 				mnr = le64_to_cpu(*(__le64 *)(pbuf+16));
+				fattr->cf_rdev = MKDEV(mjr, mnr);
+			} else if (bytes_read == 16) {
+				/*
+				 * Windows NFS server before Windows Server 2012
+				 * stores major and minor number in SFU-modified
+				 * style, just as 32-bit numbers. Recognize it.
+				 */
+				__u32 mjr; /* major */
+				__u32 mnr; /* minor */
+				mjr = le32_to_cpu(*(__le32 *)(pbuf+8));
+				mnr = le32_to_cpu(*(__le32 *)(pbuf+12));
 				fattr->cf_rdev = MKDEV(mjr, mnr);
 			}
 		} else if (memcmp("LnxSOCK", pbuf, 8) == 0) {
@@ -629,10 +651,16 @@ cifs_sfu_type(struct cifs_fattr *fattr, const char *path,
 									       &symlink_len_utf16,
 									       &symlink_buf_utf16,
 									       &buf_type);
+					/*
+					 * Check that read buffer has valid length and does not
+					 * contain UTF-16 null codepoint (via UniStrnlen() call)
+					 * because Linux cannot process symlink with null byte.
+					 */
 					if ((rc == 0) &&
 					    (symlink_len_utf16 > 0) &&
 					    (symlink_len_utf16 < fattr->cf_eof-8 + 1) &&
-					    (symlink_len_utf16 % 2 == 0)) {
+					    (symlink_len_utf16 % 2 == 0) &&
+					    (UniStrnlen((wchar_t *)symlink_buf_utf16, symlink_len_utf16/2) == symlink_len_utf16/2)) {
 						fattr->cf_symlink_target =
 							cifs_strndup_from_utf16(symlink_buf_utf16,
 										symlink_len_utf16,
@@ -834,10 +862,6 @@ static void cifs_open_info_to_fattr(struct cifs_fattr *fattr,
 		fattr->cf_mode = S_IFREG | cifs_sb->ctx->file_mode;
 		fattr->cf_dtype = DT_REG;
 
-		/* clear write bits if ATTR_READONLY is set */
-		if (fattr->cf_cifsattrs & ATTR_READONLY)
-			fattr->cf_mode &= ~(S_IWUGO);
-
 		/*
 		 * Don't accept zero nlink from non-unix servers unless
 		 * delete is pending.  Instead mark it as unknown.
@@ -849,6 +873,10 @@ static void cifs_open_info_to_fattr(struct cifs_fattr *fattr,
 			fattr->cf_flags |= CIFS_FATTR_UNKNOWN_NLINK;
 		}
 	}
+
+	/* clear write bits if ATTR_READONLY is set */
+	if (fattr->cf_cifsattrs & ATTR_READONLY)
+		fattr->cf_mode &= ~(S_IWUGO);
 
 out_reparse:
 	if (S_ISLNK(fattr->cf_mode)) {
@@ -1267,11 +1295,14 @@ handle_mnt_opt:
 				 __func__, rc);
 			goto out;
 		}
-	}
-
-	/* fill in remaining high mode bits e.g. SUID, VTX */
-	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL)
+	} else if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL)
+		/* fill in remaining high mode bits e.g. SUID, VTX */
 		cifs_sfu_mode(fattr, full_path, cifs_sb, xid);
+	else if (!(tcon->posix_extensions))
+		/* clear write bits if ATTR_READONLY is set */
+		if (fattr->cf_cifsattrs & ATTR_READONLY)
+			fattr->cf_mode &= ~(S_IWUGO);
+
 
 	/* check for Minshall+French symlinks */
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MF_SYMLINKS) {
@@ -3053,6 +3084,7 @@ cifs_setattr_nounix(struct dentry *direntry, struct iattr *attrs)
 	int rc = -EACCES;
 	__u32 dosattr = 0;
 	__u64 mode = NO_CHANGE_64;
+	bool posix = cifs_sb_master_tcon(cifs_sb)->posix_extensions;
 
 	xid = get_xid();
 
@@ -3143,7 +3175,8 @@ cifs_setattr_nounix(struct dentry *direntry, struct iattr *attrs)
 		mode = attrs->ia_mode;
 		rc = 0;
 		if ((cifs_sb->mnt_cifs_flags & CIFS_MOUNT_CIFS_ACL) ||
-		    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID)) {
+		    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID) ||
+		    posix) {
 			rc = id_mode_to_cifs_acl(inode, full_path, &mode,
 						INVALID_UID, INVALID_GID);
 			if (rc) {

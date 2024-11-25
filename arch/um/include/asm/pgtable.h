@@ -287,9 +287,7 @@ static inline int pte_same(pte_t pte_a, pte_t pte_b)
  * and a page entry and page directory to the page they refer to.
  */
 
-#define phys_to_page(phys) pfn_to_page(phys_to_pfn(phys))
 #define __virt_to_page(virt) phys_to_page(__pa(virt))
-#define page_to_phys(page) pfn_to_phys(page_to_pfn(page))
 #define virt_to_page(addr) __virt_to_page((const unsigned long) addr)
 
 #define mk_pte(page, pgprot) \
@@ -358,12 +356,5 @@ static inline pte_t pte_swp_clear_exclusive(pte_t pte)
 	pte_clear_bits(pte, _PAGE_SWP_EXCLUSIVE);
 	return pte;
 }
-
-/* Clear a kernel PTE and flush it from the TLB */
-#define kpte_clear_flush(ptep, vaddr)		\
-do {						\
-	pte_clear(&init_mm, (vaddr), (ptep));	\
-	__flush_tlb_one((vaddr));		\
-} while (0)
 
 #endif

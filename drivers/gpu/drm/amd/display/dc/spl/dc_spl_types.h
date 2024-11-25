@@ -5,10 +5,8 @@
 #ifndef __DC_SPL_TYPES_H__
 #define __DC_SPL_TYPES_H__
 
+#include "spl_debug.h"
 #include "spl_os_types.h"   // swap
-#ifndef SPL_ASSERT
-#define SPL_ASSERT(_bool) ((void *)0)
-#endif
 #include "spl_fixpt31_32.h"	// fixed31_32 and related functions
 #include "spl_custom_float.h" // custom float and related functions
 
@@ -252,6 +250,7 @@ enum isharp_en	{
 	ISHARP_DISABLE,
 	ISHARP_ENABLE
 };
+#define ISHARP_LUT_TABLE_SIZE 32
 // Below struct holds values that can be directly used to program
 // hardware registers. No conversion/clamping is required
 struct dscl_prog_data {
@@ -402,7 +401,7 @@ struct dscl_prog_data {
 	uint32_t isharp_nl_en;  //      ISHARP_NL_EN ? TODO:check this
 	struct isharp_lba isharp_lba;   //      ISHARP_LBA
 	struct isharp_fmt isharp_fmt;   //      ISHARP_FMT
-	const uint32_t *isharp_delta;
+	uint32_t isharp_delta[ISHARP_LUT_TABLE_SIZE];
 	struct isharp_nldelta_sclip isharp_nldelta_sclip;       //      ISHARP_NLDELTA_SCLIP
 	/* blur and scale filter */
 	const uint16_t *filter_blur_scale_v;
@@ -487,7 +486,18 @@ enum linear_light_scaling	{	// convert it in translation logic
 	LLS_PREF_YES,
 	LLS_PREF_NO
 };
-struct spl_funcs	{
+enum sharpen_policy {
+	SHARPEN_ALWAYS = 0,
+	SHARPEN_YUV = 1,
+	SHARPEN_RGB_FULLSCREEN_YUV = 2,
+	SHARPEN_FULLSCREEN_ALL = 3
+};
+enum scale_to_sharpness_policy {
+	NO_SCALE_TO_SHARPNESS_ADJ = 0,
+	SCALE_TO_SHARPNESS_ADJ_YUV = 1,
+	SCALE_TO_SHARPNESS_ADJ_ALL = 2
+};
+struct spl_callbacks {
 	void (*spl_calc_lb_num_partitions)
 		(bool alpha_en,
 		const struct spl_scaler_data *scl_data,
@@ -499,6 +509,7 @@ struct spl_funcs	{
 struct spl_debug {
 	int visual_confirm_base_offset;
 	int visual_confirm_dpp_offset;
+	enum scale_to_sharpness_policy scale_to_sharpness_policy;
 };
 
 struct spl_in	{
@@ -507,7 +518,7 @@ struct spl_in	{
 	// Basic slice information
 	int odm_slice_index;	// ODM Slice Index using get_odm_split_index
 	struct spl_taps scaling_quality; // Explicit Scaling Quality
-	struct spl_funcs *funcs;
+	struct spl_callbacks callbacks;
 	// Inputs for isharp and EASF
 	struct adaptive_sharpness adaptive_sharpness;	//	Adaptive Sharpness
 	enum linear_light_scaling lls_pref;	//	Linear Light Scaling
@@ -518,7 +529,8 @@ struct spl_in	{
 	bool is_hdr_on;
 	int h_active;
 	int v_active;
-	int hdr_multx100;
+	int sdr_white_level_nits;
+	enum sharpen_policy sharpen_policy;
 };
 // end of SPL inputs
 

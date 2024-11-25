@@ -1648,7 +1648,7 @@ static void qup_i2c_disable_clocks(struct qup_i2c_dev *qup)
 
 static const struct acpi_device_id qup_i2c_acpi_match[] = {
 	{ "QCOM8010"},
-	{ },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, qup_i2c_acpi_match);
 
@@ -1974,7 +1974,7 @@ MODULE_DEVICE_TABLE(of, qup_i2c_dt_match);
 
 static struct platform_driver qup_i2c_driver = {
 	.probe  = qup_i2c_probe,
-	.remove_new = qup_i2c_remove,
+	.remove = qup_i2c_remove,
 	.driver = {
 		.name = "i2c_qup",
 		.pm = pm_ptr(&qup_i2c_qup_pm_ops),

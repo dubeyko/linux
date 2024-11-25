@@ -26,8 +26,6 @@ if STAGING
 
 source "drivers/staging/olpc_dcon/Kconfig"
 
-source "drivers/staging/rtl8192e/Kconfig"
-
 source "drivers/staging/rtl8723bs/Kconfig"
 
 source "drivers/staging/rtl8712/Kconfig"
@@ -53,8 +51,6 @@ source "drivers/staging/gdm724x/Kconfig"
 source "drivers/staging/fbtft/Kconfig"
 
 source "drivers/staging/most/Kconfig"
-
-source "drivers/staging/ks7010/Kconfig"
 
 source "drivers/staging/greybus/Kconfig"
 

@@ -96,6 +96,7 @@ enum {
  * @features: features supported by ALE
  * @tbl_entries: number of ALE entries
  * @reg_fields: pointer to array of register field configuration
+ * @num_fields: number of fields in the reg_fields array
  * @nu_switch_ale: NU Switch ALE
  * @vlan_entry_tbl: ALE vlan entry fields description tbl
  */
@@ -104,6 +105,7 @@ struct cpsw_ale_dev_id {
 	u32 features;
 	u32 tbl_entries;
 	const struct reg_field *reg_fields;
+	int num_fields;
 	bool nu_switch_ale;
 	const struct ale_entry_fld *vlan_entry_tbl;
 };
@@ -160,26 +162,38 @@ static inline void cpsw_ale_set_field(u32 *ale_entry, u32 start, u32 bits,
 	ale_entry[idx] |=  (value << start);
 }
 
-#define DEFINE_ALE_FIELD(name, start, bits)				\
+#define DEFINE_ALE_FIELD_GET(name, start, bits)				\
 static inline int cpsw_ale_get_##name(u32 *ale_entry)			\
 {									\
 	return cpsw_ale_get_field(ale_entry, start, bits);		\
-}									\
+}
+
+#define DEFINE_ALE_FIELD_SET(name, start, bits)				\
 static inline void cpsw_ale_set_##name(u32 *ale_entry, u32 value)	\
 {									\
 	cpsw_ale_set_field(ale_entry, start, bits, value);		\
 }
 
-#define DEFINE_ALE_FIELD1(name, start)					\
+#define DEFINE_ALE_FIELD(name, start, bits)				\
+DEFINE_ALE_FIELD_GET(name, start, bits)					\
+DEFINE_ALE_FIELD_SET(name, start, bits)
+
+#define DEFINE_ALE_FIELD1_GET(name, start)				\
 static inline int cpsw_ale_get_##name(u32 *ale_entry, u32 bits)		\
 {									\
 	return cpsw_ale_get_field(ale_entry, start, bits);		\
-}									\
+}
+
+#define DEFINE_ALE_FIELD1_SET(name, start)				\
 static inline void cpsw_ale_set_##name(u32 *ale_entry, u32 value,	\
 		u32 bits)						\
 {									\
 	cpsw_ale_set_field(ale_entry, start, bits, value);		\
 }
+
+#define DEFINE_ALE_FIELD1(name, start)					\
+DEFINE_ALE_FIELD1_GET(name, start)					\
+DEFINE_ALE_FIELD1_SET(name, start)
 
 enum {
 	ALE_ENT_VID_MEMBER_LIST = 0,
@@ -236,14 +250,14 @@ static const struct ale_entry_fld vlan_entry_k3_cpswxg[] = {
 
 DEFINE_ALE_FIELD(entry_type,		60,	2)
 DEFINE_ALE_FIELD(vlan_id,		48,	12)
-DEFINE_ALE_FIELD(mcast_state,		62,	2)
+DEFINE_ALE_FIELD_SET(mcast_state,	62,	2)
 DEFINE_ALE_FIELD1(port_mask,		66)
 DEFINE_ALE_FIELD(super,			65,	1)
 DEFINE_ALE_FIELD(ucast_type,		62,     2)
-DEFINE_ALE_FIELD1(port_num,		66)
-DEFINE_ALE_FIELD(blocked,		65,     1)
-DEFINE_ALE_FIELD(secure,		64,     1)
-DEFINE_ALE_FIELD(mcast,			40,	1)
+DEFINE_ALE_FIELD1_SET(port_num,		66)
+DEFINE_ALE_FIELD_SET(blocked,		65,     1)
+DEFINE_ALE_FIELD_SET(secure,		64,     1)
+DEFINE_ALE_FIELD_GET(mcast,		40,	1)
 
 #define NU_VLAN_UNREG_MCAST_IDX	1
 
@@ -1400,6 +1414,7 @@ static const struct cpsw_ale_dev_id cpsw_ale_id_match[] = {
 		.dev_id = "cpsw",
 		.tbl_entries = 1024,
 		.reg_fields = ale_fields_cpsw,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw),
 		.vlan_entry_tbl = vlan_entry_cpsw,
 	},
 	{
@@ -1407,12 +1422,14 @@ static const struct cpsw_ale_dev_id cpsw_ale_id_match[] = {
 		.dev_id = "66ak2h-xgbe",
 		.tbl_entries = 2048,
 		.reg_fields = ale_fields_cpsw,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw),
 		.vlan_entry_tbl = vlan_entry_cpsw,
 	},
 	{
 		.dev_id = "66ak2el",
 		.features = CPSW_ALE_F_STATUS_REG,
 		.reg_fields = ale_fields_cpsw_nu,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw_nu),
 		.nu_switch_ale = true,
 		.vlan_entry_tbl = vlan_entry_nu,
 	},
@@ -1421,6 +1438,7 @@ static const struct cpsw_ale_dev_id cpsw_ale_id_match[] = {
 		.features = CPSW_ALE_F_STATUS_REG,
 		.tbl_entries = 64,
 		.reg_fields = ale_fields_cpsw_nu,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw_nu),
 		.nu_switch_ale = true,
 		.vlan_entry_tbl = vlan_entry_nu,
 	},
@@ -1429,6 +1447,7 @@ static const struct cpsw_ale_dev_id cpsw_ale_id_match[] = {
 		.features = CPSW_ALE_F_STATUS_REG | CPSW_ALE_F_HW_AUTOAGING,
 		.tbl_entries = 64,
 		.reg_fields = ale_fields_cpsw_nu,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw_nu),
 		.nu_switch_ale = true,
 		.vlan_entry_tbl = vlan_entry_nu,
 	},
@@ -1436,12 +1455,14 @@ static const struct cpsw_ale_dev_id cpsw_ale_id_match[] = {
 		.dev_id = "j721e-cpswxg",
 		.features = CPSW_ALE_F_STATUS_REG | CPSW_ALE_F_HW_AUTOAGING,
 		.reg_fields = ale_fields_cpsw_nu,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw_nu),
 		.vlan_entry_tbl = vlan_entry_k3_cpswxg,
 	},
 	{
 		.dev_id = "am64-cpswxg",
 		.features = CPSW_ALE_F_STATUS_REG | CPSW_ALE_F_HW_AUTOAGING,
 		.reg_fields = ale_fields_cpsw_nu,
+		.num_fields = ARRAY_SIZE(ale_fields_cpsw_nu),
 		.vlan_entry_tbl = vlan_entry_k3_cpswxg,
 		.tbl_entries = 512,
 	},
@@ -1477,7 +1498,7 @@ static int cpsw_ale_regfield_init(struct cpsw_ale *ale)
 	struct regmap *regmap = ale->regmap;
 	int i;
 
-	for (i = 0; i < ALE_FIELDS_MAX; i++) {
+	for (i = 0; i < ale->params.num_fields; i++) {
 		ale->fields[i] = devm_regmap_field_alloc(dev, regmap,
 							 reg_fields[i]);
 		if (IS_ERR(ale->fields[i])) {
@@ -1503,6 +1524,7 @@ struct cpsw_ale *cpsw_ale_create(struct cpsw_ale_params *params)
 	params->ale_entries = ale_dev_id->tbl_entries;
 	params->nu_switch_ale = ale_dev_id->nu_switch_ale;
 	params->reg_fields = ale_dev_id->reg_fields;
+	params->num_fields = ale_dev_id->num_fields;
 
 	ale = devm_kzalloc(params->dev, sizeof(*ale), GFP_KERNEL);
 	if (!ale)
@@ -1682,26 +1704,34 @@ static void cpsw_ale_policer_reset(struct cpsw_ale *ale)
 void cpsw_ale_classifier_setup_default(struct cpsw_ale *ale, int num_rx_ch)
 {
 	int pri, idx;
-	/* IEEE802.1D-2004, Standard for Local and metropolitan area networks
-	 *    Table G-2 - Traffic type acronyms
-	 *    Table G-3 - Defining traffic types
-	 * User priority values 1 and 2 effectively communicate a lower
-	 * priority than 0. In the below table 0 is assigned to higher priority
-	 * thread than 1 and 2 wherever possible.
-	 * The below table maps which thread the user priority needs to be
+
+	/* Reference:
+	 * IEEE802.1Q-2014, Standard for Local and metropolitan area networks
+	 *    Table I-2 - Traffic type acronyms
+	 *    Table I-3 - Defining traffic types
+	 * Section I.4 Traffic types and priority values, states:
+	 * "0 is thus used both for default priority and for Best Effort, and
+	 *  Background is associated with a priority value of 1. This means
+	 * that the value 1 effectively communicates a lower priority than 0."
+	 *
+	 * In the table below, Priority Code Point (PCP) 0 is assigned
+	 * to a higher priority thread than PCP 1 wherever possible.
+	 * The table maps which thread the PCP traffic needs to be
 	 * sent to for a given number of threads (RX channels). Upper threads
 	 * have higher priority.
 	 * e.g. if number of threads is 8 then user priority 0 will map to
-	 * pri_thread_map[8-1][0] i.e. thread 2
+	 * pri_thread_map[8-1][0] i.e. thread 1
 	 */
-	int pri_thread_map[8][8] = {	{ 0, 0, 0, 0, 0, 0, 0, 0, },
+
+	int pri_thread_map[8][8] = {   /* BK,BE,EE,CA,VI,VO,IC,NC */
+					{ 0, 0, 0, 0, 0, 0, 0, 0, },
 					{ 0, 0, 0, 0, 1, 1, 1, 1, },
 					{ 0, 0, 0, 0, 1, 1, 2, 2, },
-					{ 1, 0, 0, 1, 2, 2, 3, 3, },
-					{ 1, 0, 0, 1, 2, 3, 4, 4, },
-					{ 1, 0, 0, 2, 3, 4, 5, 5, },
-					{ 1, 0, 0, 2, 3, 4, 5, 6, },
-					{ 2, 0, 1, 3, 4, 5, 6, 7, } };
+					{ 0, 0, 1, 1, 2, 2, 3, 3, },
+					{ 0, 0, 1, 1, 2, 2, 3, 4, },
+					{ 1, 0, 2, 2, 3, 3, 4, 5, },
+					{ 1, 0, 2, 3, 4, 4, 5, 6, },
+					{ 1, 0, 2, 3, 4, 5, 6, 7 } };
 
 	cpsw_ale_policer_reset(ale);
 
