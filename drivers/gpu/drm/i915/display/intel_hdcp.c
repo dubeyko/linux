@@ -31,27 +31,33 @@
 #define KEY_LOAD_TRIES	5
 #define HDCP2_LC_RETRY_CNT			3
 
-/* WA: 16022217614 */
 static void
-intel_hdcp_disable_hdcp_line_rekeying(struct intel_encoder *encoder,
-				      struct intel_hdcp *hdcp)
+intel_hdcp_adjust_hdcp_line_rekeying(struct intel_encoder *encoder,
+				     struct intel_hdcp *hdcp,
+				     bool enable)
 {
 	struct intel_display *display = to_intel_display(encoder);
+	i915_reg_t rekey_reg;
+	u32 rekey_bit = 0;
 
 	/* Here we assume HDMI is in TMDS mode of operation */
 	if (encoder->type != INTEL_OUTPUT_HDMI)
 		return;
 
-	if (DISPLAY_VER(display) >= 14) {
-		if (IS_DISPLAY_VERx100_STEP(display, 1400, STEP_D0, STEP_FOREVER))
-			intel_de_rmw(display, MTL_CHICKEN_TRANS(hdcp->cpu_transcoder),
-				     0, HDCP_LINE_REKEY_DISABLE);
-		else if (IS_DISPLAY_VERx100_STEP(display, 1401, STEP_B0, STEP_FOREVER) ||
-			 IS_DISPLAY_VERx100_STEP(display, 2000, STEP_B0, STEP_FOREVER))
-			intel_de_rmw(display,
-				     TRANS_DDI_FUNC_CTL(display, hdcp->cpu_transcoder),
-				     0, TRANS_DDI_HDCP_LINE_REKEY_DISABLE);
+	if (DISPLAY_VER(display) >= 30) {
+		rekey_reg = TRANS_DDI_FUNC_CTL(display, hdcp->cpu_transcoder);
+		rekey_bit = XE3_TRANS_DDI_HDCP_LINE_REKEY_DISABLE;
+	} else if (IS_DISPLAY_VERx100_STEP(display, 1401, STEP_B0, STEP_FOREVER) ||
+		   IS_DISPLAY_VERx100_STEP(display, 2000, STEP_B0, STEP_FOREVER)) {
+		rekey_reg = TRANS_DDI_FUNC_CTL(display, hdcp->cpu_transcoder);
+		rekey_bit = TRANS_DDI_HDCP_LINE_REKEY_DISABLE;
+	} else if (IS_DISPLAY_VERx100_STEP(display, 1400, STEP_D0, STEP_FOREVER)) {
+		rekey_reg = CHICKEN_TRANS(display, hdcp->cpu_transcoder);
+		rekey_bit = HDCP_LINE_REKEY_DISABLE;
 	}
+
+	if (rekey_bit)
+		intel_de_rmw(display, rekey_reg, rekey_bit, enable ? 0 : rekey_bit);
 }
 
 static int intel_conn_to_vcpi(struct intel_atomic_state *state,
@@ -343,7 +349,7 @@ static bool hdcp_key_loadable(struct intel_display *display)
 
 	/* PG1 (power well #1) needs to be enabled */
 	with_intel_runtime_pm(&i915->runtime_pm, wakeref)
-		enabled = intel_display_power_well_is_enabled(i915, id);
+		enabled = intel_display_power_well_is_enabled(display, id);
 
 	/*
 	 * Another req for hdcp key loadability is enabled state of pll for
@@ -1048,6 +1054,8 @@ static int intel_hdcp1_enable(struct intel_connector *connector)
 		return ret;
 	}
 
+	intel_hdcp_adjust_hdcp_line_rekeying(connector->encoder, hdcp, true);
+
 	/* Incase of authentication failures, HDCP spec expects reauth. */
 	for (i = 0; i < tries; i++) {
 		ret = intel_hdcp_auth(connector);
@@ -1158,9 +1166,15 @@ static int intel_hdcp_check_link(struct intel_connector *connector)
 		goto out;
 	}
 
-	intel_hdcp_update_value(connector,
-				DRM_MODE_CONTENT_PROTECTION_DESIRED,
-				true);
+	ret = intel_hdcp1_enable(connector);
+	if (ret) {
+		drm_err(display->drm, "Failed to enable hdcp (%d)\n", ret);
+		intel_hdcp_update_value(connector,
+					DRM_MODE_CONTENT_PROTECTION_DESIRED,
+					true);
+		goto out;
+	}
+
 out:
 	mutex_unlock(&dig_port->hdcp_mutex);
 	mutex_unlock(&hdcp->mutex);
@@ -1503,6 +1517,8 @@ static int hdcp2_deauthenticate_port(struct intel_connector *connector)
 static int hdcp2_authentication_key_exchange(struct intel_connector *connector)
 {
 	struct intel_display *display = to_intel_display(connector);
+	struct intel_digital_port *dig_port =
+		intel_attached_dig_port(connector);
 	struct intel_hdcp *hdcp = &connector->hdcp;
 	union {
 		struct hdcp2_ake_init ake_init;
@@ -1513,11 +1529,17 @@ static int hdcp2_authentication_key_exchange(struct intel_connector *connector)
 	} msgs;
 	const struct intel_hdcp_shim *shim = hdcp->shim;
 	size_t size;
-	int ret, i;
+	int ret, i, max_retries;
 
 	/* Init for seq_num */
 	hdcp->seq_num_v = 0;
 	hdcp->seq_num_m = 0;
+
+	if (intel_encoder_is_dp(&dig_port->base) ||
+	    intel_encoder_is_mst(&dig_port->base))
+		max_retries = 10;
+	else
+		max_retries = 1;
 
 	ret = hdcp2_prepare_ake_init(connector, &msgs.ake_init);
 	if (ret < 0)
@@ -1525,18 +1547,18 @@ static int hdcp2_authentication_key_exchange(struct intel_connector *connector)
 
 	/*
 	 * Retry the first read and write to downstream at least 10 times
-	 * with a 50ms delay if not hdcp2 capable(dock decides to stop advertising
-	 * hdcp2 capability for some reason). The reason being that
-	 * during suspend resume dock usually keeps the HDCP2 registers inaccesible
-	 * causing AUX error. This wouldn't be a big problem if the userspace
-	 * just kept retrying with some delay while it continues to play low
-	 * value content but most userpace applications end up throwing an error
-	 * when it receives one from KMD. This makes sure we give the dock
-	 * and the sink devices to complete its power cycle and then try HDCP
-	 * authentication. The values of 10 and delay of 50ms was decided based
-	 * on multiple trial and errors.
+	 * with a 50ms delay if not hdcp2 capable for DP/DPMST encoders
+	 * (dock decides to stop advertising hdcp2 capability for some reason).
+	 * The reason being that during suspend resume dock usually keeps the
+	 * HDCP2 registers inaccesible causing AUX error. This wouldn't be a
+	 * big problem if the userspace just kept retrying with some delay while
+	 * it continues to play low value content but most userpace applications
+	 * end up throwing an error when it receives one from KMD. This makes
+	 * sure we give the dock and the sink devices to complete its power cycle
+	 * and then try HDCP authentication. The values of 10 and delay of 50ms
+	 * was decided based on multiple trial and errors.
 	 */
-	for (i = 0; i < 10; i++) {
+	for (i = 0; i < max_retries; i++) {
 		if (!intel_hdcp2_get_capability(connector)) {
 			msleep(50);
 			continue;
@@ -2061,7 +2083,7 @@ static int _intel_hdcp2_enable(struct intel_atomic_state *state,
 		    connector->base.base.id, connector->base.name,
 		    hdcp->content_type);
 
-	intel_hdcp_disable_hdcp_line_rekeying(connector->encoder, hdcp);
+	intel_hdcp_adjust_hdcp_line_rekeying(connector->encoder, hdcp, false);
 
 	ret = hdcp2_authenticate_and_encrypt(state, connector);
 	if (ret) {

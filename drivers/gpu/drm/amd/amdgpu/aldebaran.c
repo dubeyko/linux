@@ -330,8 +330,12 @@ aldebaran_mode2_restore_hwcontext(struct amdgpu_reset_control *reset_ctl,
 	}
 
 	list_for_each_entry(tmp_adev, reset_device_list, reset_list) {
+		amdgpu_set_init_level(tmp_adev,
+				AMDGPU_INIT_LEVEL_RESET_RECOVERY);
 		dev_info(tmp_adev->dev,
 			 "GPU reset succeeded, trying to resume\n");
+		/*TBD: Ideally should clear only GFX, SDMA blocks*/
+		amdgpu_ras_clear_err_state(tmp_adev);
 		r = aldebaran_mode2_restore_ip(tmp_adev);
 		if (r)
 			goto end;
@@ -375,6 +379,8 @@ aldebaran_mode2_restore_hwcontext(struct amdgpu_reset_control *reset_ctl,
 							tmp_adev);
 
 		if (!r) {
+			amdgpu_set_init_level(tmp_adev,
+					      AMDGPU_INIT_LEVEL_DEFAULT);
 			amdgpu_irq_gpu_reset_resume_helper(tmp_adev);
 
 			r = amdgpu_ib_ring_tests(tmp_adev);

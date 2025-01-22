@@ -267,6 +267,7 @@ static int amd_sdw_probe(struct device *dev)
 	sdw_res.acp_lock = &acp_data->acp_lock;
 	sdw_res.count = acp_data->info.count;
 	sdw_res.mmio_base = acp_data->acp63_base;
+	sdw_res.acp_rev = acp_data->acp_rev;
 	sdw_res.link_mask = acp_data->info.link_mask;
 	ret = sdw_amd_probe(&sdw_res, &acp_data->sdw);
 	if (ret)
@@ -374,10 +375,17 @@ static int get_acp63_device_config(struct pci_dev *pci, struct acp63_dev_data *a
 {
 	struct acpi_device *pdm_dev;
 	const union acpi_object *obj;
+	acpi_handle handle;
+	acpi_integer dmic_status;
 	u32 config;
 	bool is_dmic_dev = false;
 	bool is_sdw_dev = false;
+	bool wov_en, dmic_en;
 	int ret;
+
+	/* IF WOV entry not found, enable dmic based on acp-audio-device-type entry*/
+	wov_en = true;
+	dmic_en = false;
 
 	config = readl(acp_data->acp63_base + ACP_PIN_CONFIG);
 	switch (config) {
@@ -411,9 +419,17 @@ static int get_acp63_device_config(struct pci_dev *pci, struct acp63_dev_data *a
 			if (!acpi_dev_get_property(pdm_dev, "acp-audio-device-type",
 						   ACPI_TYPE_INTEGER, &obj) &&
 						   obj->integer.value == ACP_DMIC_DEV)
-				is_dmic_dev = true;
+				dmic_en = true;
 		}
+
+		handle = ACPI_HANDLE(&pci->dev);
+		ret = acpi_evaluate_integer(handle, "_WOV", NULL, &dmic_status);
+		if (!ACPI_FAILURE(ret))
+			wov_en = dmic_status;
 	}
+
+	if (dmic_en && wov_en)
+		is_dmic_dev = true;
 
 	if (acp_data->is_sdw_config) {
 		ret = acp_scan_sdw_devices(&pci->dev, ACP63_SDW_ADDR);
@@ -575,6 +591,7 @@ static int snd_acp63_probe(struct pci_dev *pci,
 	}
 	adata->addr = addr;
 	adata->reg_range = ACP63_REG_END - ACP63_REG_START;
+	adata->acp_rev = pci->revision;
 	pci_set_master(pci);
 	pci_set_drvdata(pci, adata);
 	mutex_init(&adata->acp_lock);
@@ -751,6 +768,6 @@ module_pci_driver(ps_acp63_driver);
 MODULE_AUTHOR("Vijendar.Mukunda@amd.com");
 MODULE_AUTHOR("Syed.SabaKareem@amd.com");
 MODULE_DESCRIPTION("AMD ACP Pink Sardine PCI driver");
-MODULE_IMPORT_NS(SOUNDWIRE_AMD_INIT);
-MODULE_IMPORT_NS(SND_AMD_SOUNDWIRE_ACPI);
+MODULE_IMPORT_NS("SOUNDWIRE_AMD_INIT");
+MODULE_IMPORT_NS("SND_AMD_SOUNDWIRE_ACPI");
 MODULE_LICENSE("GPL v2");
