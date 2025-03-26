@@ -401,7 +401,7 @@ do {									\
 	_ret;								\
 })
 
-size_t bch2_rand_range(size_t);
+u64 bch2_get_random_u64_below(u64);
 
 void memcpy_to_bio(struct bio *, struct bvec_iter, const void *);
 void memcpy_from_bio(void *, struct bio *, struct bvec_iter);
@@ -669,8 +669,6 @@ static inline int cmp_le32(__le32 l, __le32 r)
 }
 
 #include <linux/uuid.h>
-
-#define QSTR(n) { { { .len = strlen(n) } }, .name = n }
 
 static inline bool qstr_eq(const struct qstr l, const struct qstr r)
 {

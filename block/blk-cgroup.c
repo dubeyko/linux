@@ -659,6 +659,7 @@ static int blkcg_reset_stats(struct cgroup_subsys_state *css,
 	struct blkcg_gq *blkg;
 	int i;
 
+	pr_info_once("blkio.%s is deprecated\n", cftype->name);
 	mutex_lock(&blkcg_pol_mutex);
 	spin_lock_irq(&blkcg->lock);
 
@@ -1138,6 +1139,7 @@ static void blkcg_fill_root_iostats(void)
 		blkg_iostat_set(&blkg->iostat.cur, &tmp);
 		u64_stats_update_end_irqrestore(&blkg->iostat.sync, flags);
 	}
+	class_dev_iter_exit(&iter);
 }
 
 static void blkcg_print_one_stat(struct blkcg_gq *blkg, struct seq_file *s)
@@ -1545,6 +1547,7 @@ int blkcg_activate_policy(struct gendisk *disk, const struct blkcg_policy *pol)
 	struct request_queue *q = disk->queue;
 	struct blkg_policy_data *pd_prealloc = NULL;
 	struct blkcg_gq *blkg, *pinned_blkg = NULL;
+	unsigned int memflags;
 	int ret;
 
 	if (blkcg_policy_enabled(q, pol))
@@ -1559,7 +1562,7 @@ int blkcg_activate_policy(struct gendisk *disk, const struct blkcg_policy *pol)
 		return -EINVAL;
 
 	if (queue_is_mq(q))
-		blk_mq_freeze_queue(q);
+		memflags = blk_mq_freeze_queue(q);
 retry:
 	spin_lock_irq(&q->queue_lock);
 
@@ -1623,7 +1626,7 @@ retry:
 	spin_unlock_irq(&q->queue_lock);
 out:
 	if (queue_is_mq(q))
-		blk_mq_unfreeze_queue(q);
+		blk_mq_unfreeze_queue(q, memflags);
 	if (pinned_blkg)
 		blkg_put(pinned_blkg);
 	if (pd_prealloc)
@@ -1667,12 +1670,13 @@ void blkcg_deactivate_policy(struct gendisk *disk,
 {
 	struct request_queue *q = disk->queue;
 	struct blkcg_gq *blkg;
+	unsigned int memflags;
 
 	if (!blkcg_policy_enabled(q, pol))
 		return;
 
 	if (queue_is_mq(q))
-		blk_mq_freeze_queue(q);
+		memflags = blk_mq_freeze_queue(q);
 
 	mutex_lock(&q->blkcg_mutex);
 	spin_lock_irq(&q->queue_lock);
@@ -1696,7 +1700,7 @@ void blkcg_deactivate_policy(struct gendisk *disk,
 	mutex_unlock(&q->blkcg_mutex);
 
 	if (queue_is_mq(q))
-		blk_mq_unfreeze_queue(q);
+		blk_mq_unfreeze_queue(q, memflags);
 }
 EXPORT_SYMBOL_GPL(blkcg_deactivate_policy);
 
@@ -1767,12 +1771,15 @@ int blkcg_policy_register(struct blkcg_policy *pol)
 	mutex_unlock(&blkcg_pol_mutex);
 
 	/* everything is in place, add intf files for the new policy */
-	if (pol->dfl_cftypes)
+	if (pol->dfl_cftypes == pol->legacy_cftypes) {
+		WARN_ON(cgroup_add_cftypes(&io_cgrp_subsys,
+					   pol->dfl_cftypes));
+	} else {
 		WARN_ON(cgroup_add_dfl_cftypes(&io_cgrp_subsys,
 					       pol->dfl_cftypes));
-	if (pol->legacy_cftypes)
 		WARN_ON(cgroup_add_legacy_cftypes(&io_cgrp_subsys,
 						  pol->legacy_cftypes));
+	}
 	mutex_unlock(&blkcg_pol_register_mutex);
 	return 0;
 

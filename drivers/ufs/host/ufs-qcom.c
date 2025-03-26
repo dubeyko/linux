@@ -112,11 +112,18 @@ static inline void ufs_qcom_ice_enable(struct ufs_qcom_host *host)
 		qcom_ice_enable(host->ice);
 }
 
+static const struct blk_crypto_ll_ops ufs_qcom_crypto_ops; /* forward decl */
+
 static int ufs_qcom_ice_init(struct ufs_qcom_host *host)
 {
 	struct ufs_hba *hba = host->hba;
+	struct blk_crypto_profile *profile = &hba->crypto_profile;
 	struct device *dev = hba->dev;
 	struct qcom_ice *ice;
+	union ufs_crypto_capabilities caps;
+	union ufs_crypto_cap_entry cap;
+	int err;
+	int i;
 
 	ice = of_qcom_ice_get(dev);
 	if (ice == ERR_PTR(-EOPNOTSUPP)) {
@@ -128,8 +135,38 @@ static int ufs_qcom_ice_init(struct ufs_qcom_host *host)
 		return PTR_ERR_OR_ZERO(ice);
 
 	host->ice = ice;
-	hba->caps |= UFSHCD_CAP_CRYPTO;
 
+	/* Initialize the blk_crypto_profile */
+
+	caps.reg_val = cpu_to_le32(ufshcd_readl(hba, REG_UFS_CCAP));
+
+	/* The number of keyslots supported is (CFGC+1) */
+	err = devm_blk_crypto_profile_init(dev, profile, caps.config_count + 1);
+	if (err)
+		return err;
+
+	profile->ll_ops = ufs_qcom_crypto_ops;
+	profile->max_dun_bytes_supported = 8;
+	profile->dev = dev;
+
+	/*
+	 * Currently this driver only supports AES-256-XTS.  All known versions
+	 * of ICE support it, but to be safe make sure it is really declared in
+	 * the crypto capability registers.  The crypto capability registers
+	 * also give the supported data unit size(s).
+	 */
+	for (i = 0; i < caps.num_crypto_cap; i++) {
+		cap.reg_val = cpu_to_le32(ufshcd_readl(hba,
+						       REG_UFS_CRYPTOCAP +
+						       i * sizeof(__le32)));
+		if (cap.algorithm_id == UFS_CRYPTO_ALG_AES_XTS &&
+		    cap.key_size == UFS_CRYPTO_KEY_SIZE_256)
+			profile->modes_supported[BLK_ENCRYPTION_MODE_AES_256_XTS] |=
+				cap.sdus_mask * 512;
+	}
+
+	hba->caps |= UFSHCD_CAP_CRYPTO;
+	hba->quirks |= UFSHCD_QUIRK_CUSTOM_CRYPTO_PROFILE;
 	return 0;
 }
 
@@ -149,34 +186,49 @@ static inline int ufs_qcom_ice_suspend(struct ufs_qcom_host *host)
 	return 0;
 }
 
-static int ufs_qcom_ice_program_key(struct ufs_hba *hba,
-				    const union ufs_crypto_cfg_entry *cfg,
-				    int slot)
+static int ufs_qcom_ice_keyslot_program(struct blk_crypto_profile *profile,
+					const struct blk_crypto_key *key,
+					unsigned int slot)
 {
+	struct ufs_hba *hba = ufs_hba_from_crypto_profile(profile);
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
-	union ufs_crypto_cap_entry cap;
-	bool config_enable =
-		cfg->config_enable & UFS_CRYPTO_CONFIGURATION_ENABLE;
+	int err;
 
 	/* Only AES-256-XTS has been tested so far. */
-	cap = hba->crypto_cap_array[cfg->crypto_cap_idx];
-	if (cap.algorithm_id != UFS_CRYPTO_ALG_AES_XTS ||
-	    cap.key_size != UFS_CRYPTO_KEY_SIZE_256)
+	if (key->crypto_cfg.crypto_mode != BLK_ENCRYPTION_MODE_AES_256_XTS)
 		return -EOPNOTSUPP;
 
-	if (config_enable)
-		return qcom_ice_program_key(host->ice,
-					    QCOM_ICE_CRYPTO_ALG_AES_XTS,
-					    QCOM_ICE_CRYPTO_KEY_SIZE_256,
-					    cfg->crypto_key,
-					    cfg->data_unit_size, slot);
-	else
-		return qcom_ice_evict_key(host->ice, slot);
+	ufshcd_hold(hba);
+	err = qcom_ice_program_key(host->ice,
+				   QCOM_ICE_CRYPTO_ALG_AES_XTS,
+				   QCOM_ICE_CRYPTO_KEY_SIZE_256,
+				   key->raw,
+				   key->crypto_cfg.data_unit_size / 512,
+				   slot);
+	ufshcd_release(hba);
+	return err;
 }
 
-#else
+static int ufs_qcom_ice_keyslot_evict(struct blk_crypto_profile *profile,
+				      const struct blk_crypto_key *key,
+				      unsigned int slot)
+{
+	struct ufs_hba *hba = ufs_hba_from_crypto_profile(profile);
+	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
+	int err;
 
-#define ufs_qcom_ice_program_key NULL
+	ufshcd_hold(hba);
+	err = qcom_ice_evict_key(host->ice, slot);
+	ufshcd_release(hba);
+	return err;
+}
+
+static const struct blk_crypto_ll_ops ufs_qcom_crypto_ops = {
+	.keyslot_program	= ufs_qcom_ice_keyslot_program,
+	.keyslot_evict		= ufs_qcom_ice_keyslot_evict,
+};
+
+#else
 
 static inline void ufs_qcom_ice_enable(struct ufs_qcom_host *host)
 {
@@ -1730,15 +1782,19 @@ static void ufs_qcom_write_msi_msg(struct msi_desc *desc, struct msi_msg *msg)
 	ufshcd_mcq_config_esi(hba, msg);
 }
 
+struct ufs_qcom_irq {
+	unsigned int		irq;
+	unsigned int		idx;
+	struct ufs_hba		*hba;
+};
+
 static irqreturn_t ufs_qcom_mcq_esi_handler(int irq, void *data)
 {
-	struct msi_desc *desc = data;
-	struct device *dev = msi_desc_to_dev(desc);
-	struct ufs_hba *hba = dev_get_drvdata(dev);
-	u32 id = desc->msi_index;
-	struct ufs_hw_queue *hwq = &hba->uhq[id];
+	struct ufs_qcom_irq *qi = data;
+	struct ufs_hba *hba = qi->hba;
+	struct ufs_hw_queue *hwq = &hba->uhq[qi->idx];
 
-	ufshcd_mcq_write_cqis(hba, 0x1, id);
+	ufshcd_mcq_write_cqis(hba, 0x1, qi->idx);
 	ufshcd_mcq_poll_cqe_lock(hba, hwq);
 
 	return IRQ_HANDLED;
@@ -1747,8 +1803,7 @@ static irqreturn_t ufs_qcom_mcq_esi_handler(int irq, void *data)
 static int ufs_qcom_config_esi(struct ufs_hba *hba)
 {
 	struct ufs_qcom_host *host = ufshcd_get_variant(hba);
-	struct msi_desc *desc;
-	struct msi_desc *failed_desc = NULL;
+	struct ufs_qcom_irq *qi;
 	int nr_irqs, ret;
 
 	if (host->esi_enabled)
@@ -1759,47 +1814,47 @@ static int ufs_qcom_config_esi(struct ufs_hba *hba)
 	 * 2. Poll queues do not need ESI.
 	 */
 	nr_irqs = hba->nr_hw_queues - hba->nr_queues[HCTX_TYPE_POLL];
+	qi = devm_kcalloc(hba->dev, nr_irqs, sizeof(*qi), GFP_KERNEL);
+	if (qi)
+		return -ENOMEM;
+
 	ret = platform_device_msi_init_and_alloc_irqs(hba->dev, nr_irqs,
 						      ufs_qcom_write_msi_msg);
 	if (ret) {
 		dev_err(hba->dev, "Failed to request Platform MSI %d\n", ret);
-		return ret;
+		goto cleanup;
 	}
 
-	msi_lock_descs(hba->dev);
-	msi_for_each_desc(desc, hba->dev, MSI_DESC_ALL) {
-		ret = devm_request_irq(hba->dev, desc->irq,
-				       ufs_qcom_mcq_esi_handler,
-				       IRQF_SHARED, "qcom-mcq-esi", desc);
+	for (int idx = 0; idx < nr_irqs; idx++) {
+		qi[idx].irq = msi_get_virq(hba->dev, idx);
+		qi[idx].idx = idx;
+		qi[idx].hba = hba;
+
+		ret = devm_request_irq(hba->dev, qi[idx].irq, ufs_qcom_mcq_esi_handler,
+				       IRQF_SHARED, "qcom-mcq-esi", qi + idx);
 		if (ret) {
 			dev_err(hba->dev, "%s: Fail to request IRQ for %d, err = %d\n",
-				__func__, desc->irq, ret);
-			failed_desc = desc;
-			break;
+				__func__, qi[idx].irq, ret);
+			qi[idx].irq = 0;
+			goto cleanup;
 		}
 	}
-	msi_unlock_descs(hba->dev);
 
-	if (ret) {
-		/* Rewind */
-		msi_lock_descs(hba->dev);
-		msi_for_each_desc(desc, hba->dev, MSI_DESC_ALL) {
-			if (desc == failed_desc)
-				break;
-			devm_free_irq(hba->dev, desc->irq, hba);
-		}
-		msi_unlock_descs(hba->dev);
-		platform_device_msi_free_irqs_all(hba->dev);
-	} else {
-		if (host->hw_ver.major == 6 && host->hw_ver.minor == 0 &&
-		    host->hw_ver.step == 0)
-			ufshcd_rmwl(hba, ESI_VEC_MASK,
-				    FIELD_PREP(ESI_VEC_MASK, MAX_ESI_VEC - 1),
-				    REG_UFS_CFG3);
-		ufshcd_mcq_enable_esi(hba);
-		host->esi_enabled = true;
+	if (host->hw_ver.major == 6 && host->hw_ver.minor == 0 &&
+	    host->hw_ver.step == 0) {
+		ufshcd_rmwl(hba, ESI_VEC_MASK,
+			    FIELD_PREP(ESI_VEC_MASK, MAX_ESI_VEC - 1),
+			    REG_UFS_CFG3);
 	}
+	ufshcd_mcq_enable_esi(hba);
+	host->esi_enabled = true;
+	return 0;
 
+cleanup:
+	for (int idx = 0; qi[idx].irq; idx++)
+		devm_free_irq(hba->dev, qi[idx].irq, hba);
+	platform_device_msi_free_irqs_all(hba->dev);
+	devm_kfree(hba->dev, qi);
 	return ret;
 }
 
@@ -1826,7 +1881,6 @@ static const struct ufs_hba_variant_ops ufs_hba_qcom_vops = {
 	.dbg_register_dump	= ufs_qcom_dump_dbg_regs,
 	.device_reset		= ufs_qcom_device_reset,
 	.config_scaling_param = ufs_qcom_config_scaling_param,
-	.program_key		= ufs_qcom_ice_program_key,
 	.mcq_config_resource	= ufs_qcom_mcq_config_resource,
 	.get_hba_mac		= ufs_qcom_get_hba_mac,
 	.op_runtime_config	= ufs_qcom_op_runtime_config,

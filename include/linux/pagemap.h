@@ -710,6 +710,7 @@ pgoff_t page_cache_prev_miss(struct address_space *mapping,
  * * %FGP_NOFS - __GFP_FS will get cleared in gfp.
  * * %FGP_NOWAIT - Don't block on the folio lock.
  * * %FGP_STABLE - Wait for the folio to be stable (finished writeback)
+ * * %FGP_DONTCACHE - Uncached buffered IO
  * * %FGP_WRITEBEGIN - The flags to use in a filesystem write_begin()
  *   implementation.
  */
@@ -723,9 +724,20 @@ typedef unsigned int __bitwise fgf_t;
 #define FGP_NOWAIT		((__force fgf_t)0x00000020)
 #define FGP_FOR_MMAP		((__force fgf_t)0x00000040)
 #define FGP_STABLE		((__force fgf_t)0x00000080)
+#define FGP_DONTCACHE		((__force fgf_t)0x00000100)
 #define FGF_GET_ORDER(fgf)	(((__force unsigned)fgf) >> 26)	/* top 6 bits */
 
 #define FGP_WRITEBEGIN		(FGP_LOCK | FGP_WRITE | FGP_CREAT | FGP_STABLE)
+
+static inline unsigned int filemap_get_order(size_t size)
+{
+	unsigned int shift = ilog2(size);
+
+	if (shift <= PAGE_SHIFT)
+		return 0;
+
+	return shift - PAGE_SHIFT;
+}
 
 /**
  * fgf_set_order - Encode a length in the fgf_t flags.
@@ -740,11 +752,11 @@ typedef unsigned int __bitwise fgf_t;
  */
 static inline fgf_t fgf_set_order(size_t size)
 {
-	unsigned int shift = ilog2(size);
+	unsigned int order = filemap_get_order(size);
 
-	if (shift <= PAGE_SHIFT)
+	if (!order)
 		return 0;
-	return (__force fgf_t)((shift - PAGE_SHIFT) << 26);
+	return (__force fgf_t)(order << 26);
 }
 
 void *filemap_get_entry(struct address_space *mapping, pgoff_t index);
@@ -1032,21 +1044,23 @@ static inline pgoff_t page_pgoff(const struct folio *folio,
 	return folio->index + folio_page_idx(folio, page);
 }
 
+/**
+ * folio_pos - Returns the byte position of this folio in its file.
+ * @folio: The folio.
+ */
+static inline loff_t folio_pos(const struct folio *folio)
+{
+	return ((loff_t)folio->index) * PAGE_SIZE;
+}
+
 /*
  * Return byte-offset into filesystem object for page.
  */
 static inline loff_t page_offset(struct page *page)
 {
-	return ((loff_t)page->index) << PAGE_SHIFT;
-}
+	struct folio *folio = page_folio(page);
 
-/**
- * folio_pos - Returns the byte position of this folio in its file.
- * @folio: The folio.
- */
-static inline loff_t folio_pos(struct folio *folio)
-{
-	return page_offset(&folio->page);
+	return folio_pos(folio) + folio_page_idx(folio, page) * PAGE_SIZE;
 }
 
 /*
@@ -1271,11 +1285,6 @@ void folio_wait_private_2(struct folio *folio);
 int folio_wait_private_2_killable(struct folio *folio);
 
 /*
- * Add an arbitrary waiter to a page's wait queue
- */
-void folio_add_wait_queue(struct folio *folio, wait_queue_entry_t *waiter);
-
-/*
  * Fault in userspace address range.
  */
 size_t fault_in_writeable(char __user *uaddr, size_t size);
@@ -1353,6 +1362,7 @@ struct readahead_control {
 	pgoff_t _index;
 	unsigned int _nr_pages;
 	unsigned int _batch_count;
+	bool dropbehind;
 	bool _workingset;
 	unsigned long _pflags;
 };
@@ -1591,34 +1601,6 @@ static inline ssize_t folio_mkwrite_check_truncate(struct folio *folio,
 	if (folio->index > index || !offset)
 		return -EFAULT;
 	/* folio is partially inside EOF */
-	return offset;
-}
-
-/**
- * page_mkwrite_check_truncate - check if page was truncated
- * @page: the page to check
- * @inode: the inode to check the page against
- *
- * Returns the number of bytes in the page up to EOF,
- * or -EFAULT if the page was truncated.
- */
-static inline int page_mkwrite_check_truncate(struct page *page,
-					      struct inode *inode)
-{
-	loff_t size = i_size_read(inode);
-	pgoff_t index = size >> PAGE_SHIFT;
-	int offset = offset_in_page(size);
-
-	if (page->mapping != inode->i_mapping)
-		return -EFAULT;
-
-	/* page is wholly inside EOF */
-	if (page->index < index)
-		return PAGE_SIZE;
-	/* page is wholly past EOF */
-	if (page->index > index || !offset)
-		return -EFAULT;
-	/* page is partially inside EOF */
 	return offset;
 }
 

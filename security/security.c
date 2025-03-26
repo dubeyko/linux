@@ -1248,6 +1248,12 @@ int security_vm_enough_memory_mm(struct mm_struct *mm, long pages)
  * to 1 if AT_SECURE should be set to request libc enable secure mode.  @bprm
  * contains the linux_binprm structure.
  *
+ * If execveat(2) is called with the AT_EXECVE_CHECK flag, bprm->is_check is
+ * set.  The result must be the same as without this flag even if the execution
+ * will never really happen and @bprm will always be dropped.
+ *
+ * This hook must not change current->cred, only @bprm->cred.
+ *
  * Return: Returns 0 if the hook is successful and permission is granted.
  */
 int security_bprm_creds_for_exec(struct linux_binprm *bprm)
@@ -3096,6 +3102,10 @@ int security_file_receive(struct file *file)
  *
  * Save open-time permission checking state for later use upon file_permission,
  * and recheck access if anything has changed since inode_permission.
+ *
+ * We can check if a file is opened for execution (e.g. execve(2) call), either
+ * directly or indirectly (e.g. ELF's ld.so) by checking file->f_flags &
+ * __FMODE_EXEC .
  *
  * Return: Returns 0 if permission is granted.
  */
@@ -5873,16 +5883,15 @@ EXPORT_SYMBOL(security_bdev_setintegrity);
 #ifdef CONFIG_PERF_EVENTS
 /**
  * security_perf_event_open() - Check if a perf event open is allowed
- * @attr: perf event attribute
  * @type: type of event
  *
  * Check whether the @type of perf_event_open syscall is allowed.
  *
  * Return: Returns 0 if permission is granted.
  */
-int security_perf_event_open(struct perf_event_attr *attr, int type)
+int security_perf_event_open(int type)
 {
-	return call_int_hook(perf_event_open, attr, type);
+	return call_int_hook(perf_event_open, type);
 }
 
 /**
@@ -5988,6 +5997,18 @@ int security_uring_sqpoll(void)
 int security_uring_cmd(struct io_uring_cmd *ioucmd)
 {
 	return call_int_hook(uring_cmd, ioucmd);
+}
+
+/**
+ * security_uring_allowed() - Check if io_uring_setup() is allowed
+ *
+ * Check whether the current task is allowed to call io_uring_setup().
+ *
+ * Return: Returns 0 if permission is granted.
+ */
+int security_uring_allowed(void)
+{
+	return call_int_hook(uring_allowed);
 }
 #endif /* CONFIG_IO_URING */
 
