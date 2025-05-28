@@ -202,7 +202,7 @@ static bool try_to_map_unused_to_zeropage(struct page_vma_mapped_walk *pvmw,
 		return false;
 	VM_BUG_ON_PAGE(!PageAnon(page), page);
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
-	VM_BUG_ON_PAGE(pte_present(*pvmw->pte), page);
+	VM_BUG_ON_PAGE(pte_present(ptep_get(pvmw->pte)), page);
 
 	if (folio_test_mlocked(folio) || (pvmw->vma->vm_flags & VM_LOCKED) ||
 	    mm_forbids_zeropage(pvmw->vma->vm_mm))
@@ -328,7 +328,7 @@ static bool remove_migration_pte(struct folio *folio,
 				folio_add_file_rmap_pte(folio, new, vma);
 			set_pte_at(vma->vm_mm, pvmw.address, pvmw.pte, pte);
 		}
-		if (vma->vm_flags & VM_LOCKED)
+		if (READ_ONCE(vma->vm_flags) & VM_LOCKED)
 			mlock_drain_local();
 
 		trace_remove_migration_pte(pvmw.address, pte_val(pte),
@@ -845,9 +845,11 @@ static int __buffer_migrate_folio(struct address_space *mapping,
 		return -EAGAIN;
 
 	if (check_refs) {
-		bool busy;
+		bool busy, migrating;
 		bool invalidated = false;
 
+		migrating = test_and_set_bit_lock(BH_Migrate, &head->b_state);
+		VM_WARN_ON_ONCE(migrating);
 recheck_buffers:
 		busy = false;
 		spin_lock(&mapping->i_private_lock);
@@ -859,12 +861,12 @@ recheck_buffers:
 			}
 			bh = bh->b_this_page;
 		} while (bh != head);
+		spin_unlock(&mapping->i_private_lock);
 		if (busy) {
 			if (invalidated) {
 				rc = -EAGAIN;
 				goto unlock_buffers;
 			}
-			spin_unlock(&mapping->i_private_lock);
 			invalidate_bh_lrus();
 			invalidated = true;
 			goto recheck_buffers;
@@ -883,7 +885,7 @@ recheck_buffers:
 
 unlock_buffers:
 	if (check_refs)
-		spin_unlock(&mapping->i_private_lock);
+		clear_bit_unlock(BH_Migrate, &head->b_state);
 	bh = head;
 	do {
 		unlock_buffer(bh);
@@ -945,66 +947,20 @@ int filemap_migrate_folio(struct address_space *mapping,
 EXPORT_SYMBOL_GPL(filemap_migrate_folio);
 
 /*
- * Writeback a folio to clean the dirty state
- */
-static int writeout(struct address_space *mapping, struct folio *folio)
-{
-	struct writeback_control wbc = {
-		.sync_mode = WB_SYNC_NONE,
-		.nr_to_write = 1,
-		.range_start = 0,
-		.range_end = LLONG_MAX,
-		.for_reclaim = 1
-	};
-	int rc;
-
-	if (!mapping->a_ops->writepage)
-		/* No write method for the address space */
-		return -EINVAL;
-
-	if (!folio_clear_dirty_for_io(folio))
-		/* Someone else already triggered a write */
-		return -EAGAIN;
-
-	/*
-	 * A dirty folio may imply that the underlying filesystem has
-	 * the folio on some queue. So the folio must be clean for
-	 * migration. Writeout may mean we lose the lock and the
-	 * folio state is no longer what we checked for earlier.
-	 * At this point we know that the migration attempt cannot
-	 * be successful.
-	 */
-	remove_migration_ptes(folio, folio, 0);
-
-	rc = mapping->a_ops->writepage(&folio->page, &wbc);
-
-	if (rc != AOP_WRITEPAGE_ACTIVATE)
-		/* unlocked. Relock */
-		folio_lock(folio);
-
-	return (rc < 0) ? -EIO : -EAGAIN;
-}
-
-/*
  * Default handling if a filesystem does not provide a migration function.
  */
 static int fallback_migrate_folio(struct address_space *mapping,
 		struct folio *dst, struct folio *src, enum migrate_mode mode)
 {
-	if (folio_test_dirty(src)) {
-		/* Only writeback folios in full synchronous migration */
-		switch (mode) {
-		case MIGRATE_SYNC:
-			break;
-		default:
-			return -EBUSY;
-		}
-		return writeout(mapping, src);
-	}
+	WARN_ONCE(mapping->a_ops->writepages,
+			"%ps does not implement migrate_folio\n",
+			mapping->a_ops);
+	if (folio_test_dirty(src))
+		return -EBUSY;
 
 	/*
-	 * Buffers may be managed in a filesystem specific way.
-	 * We must have no buffers or drop them.
+	 * Filesystem may have private data at folio->private that we
+	 * can't migrate automatically.
 	 */
 	if (!filemap_release_folio(src, GFP_KERNEL))
 		return mode == MIGRATE_SYNC ? -EAGAIN : -EBUSY;
@@ -2226,7 +2182,7 @@ static int __add_folio_for_migration(struct folio *folio, int node,
 	if (folio_nid(folio) == node)
 		return 0;
 
-	if (folio_likely_mapped_shared(folio) && !migrate_all)
+	if (folio_maybe_mapped_shared(folio) && !migrate_all)
 		return -EACCES;
 
 	if (folio_test_hugetlb(folio)) {
@@ -2651,11 +2607,10 @@ int migrate_misplaced_folio_prepare(struct folio *folio,
 		 * processes with execute permissions as they are probably
 		 * shared libraries.
 		 *
-		 * See folio_likely_mapped_shared() on possible imprecision
+		 * See folio_maybe_mapped_shared() on possible imprecision
 		 * when we cannot easily detect if a folio is shared.
 		 */
-		if ((vma->vm_flags & VM_EXEC) &&
-		    folio_likely_mapped_shared(folio))
+		if ((vma->vm_flags & VM_EXEC) && folio_maybe_mapped_shared(folio))
 			return -EACCES;
 
 		/*

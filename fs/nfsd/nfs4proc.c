@@ -266,7 +266,9 @@ nfsd4_create_file(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	inode_lock_nested(inode, I_MUTEX_PARENT);
 
-	child = lookup_one_len(open->op_fname, parent, open->op_fnamelen);
+	child = lookup_one(&nop_mnt_idmap,
+			   &QSTR_LEN(open->op_fname, open->op_fnamelen),
+			   parent);
 	if (IS_ERR(child)) {
 		status = nfserrno(PTR_ERR(child));
 		goto out;
@@ -1847,7 +1849,7 @@ static void nfsd4_send_cb_offload(struct nfsd4_copy *copy)
 		      NFSPROC4_CLNT_CB_OFFLOAD);
 	trace_nfsd_cb_offload(copy->cp_clp, &cbo->co_res.cb_stateid,
 			      &cbo->co_fh, copy->cp_count, copy->nfserr);
-	nfsd4_run_cb(&cbo->co_cb);
+	nfsd4_try_run_cb(&cbo->co_cb);
 }
 
 /**

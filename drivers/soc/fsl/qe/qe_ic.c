@@ -344,7 +344,7 @@ static unsigned int qe_ic_get_low_irq(struct qe_ic *qe_ic)
 	if (irq == 0)
 		return 0;
 
-	return irq_linear_revmap(qe_ic->irqhost, irq);
+	return irq_find_mapping(qe_ic->irqhost, irq);
 }
 
 /* Return an interrupt vector or 0 if no interrupt is pending. */
@@ -360,7 +360,7 @@ static unsigned int qe_ic_get_high_irq(struct qe_ic *qe_ic)
 	if (irq == 0)
 		return 0;
 
-	return irq_linear_revmap(qe_ic->irqhost, irq);
+	return irq_find_mapping(qe_ic->irqhost, irq);
 }
 
 static void qe_ic_cascade_low(struct irq_desc *desc)
@@ -446,8 +446,8 @@ static int qe_ic_init(struct platform_device *pdev)
 		high_handler = NULL;
 	}
 
-	qe_ic->irqhost = irq_domain_add_linear(node, NR_QE_IC_INTS,
-					       &qe_ic_host_ops, qe_ic);
+	qe_ic->irqhost = irq_domain_create_linear(of_fwnode_handle(node), NR_QE_IC_INTS,
+						  &qe_ic_host_ops, qe_ic);
 	if (qe_ic->irqhost == NULL) {
 		dev_err(dev, "failed to add irq domain\n");
 		return -ENODEV;

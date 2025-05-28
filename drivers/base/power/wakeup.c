@@ -197,7 +197,7 @@ void wakeup_source_remove(struct wakeup_source *ws)
 	raw_spin_unlock_irqrestore(&events_lock, flags);
 	synchronize_srcu(&wakeup_srcu);
 
-	del_timer_sync(&ws->timer);
+	timer_delete_sync(&ws->timer);
 	/*
 	 * Clear timer.function to make wakeup_source_not_registered() treat
 	 * this wakeup source as not registered.
@@ -337,7 +337,7 @@ int device_wakeup_enable(struct device *dev)
 	if (!dev || !dev->power.can_wakeup)
 		return -EINVAL;
 
-	if (pm_suspend_target_state != PM_SUSPEND_ON)
+	if (pm_sleep_transition_in_progress())
 		dev_dbg(dev, "Suspicious %s() during system transition!\n", __func__);
 
 	ws = wakeup_source_register(dev, dev_name(dev));
@@ -613,7 +613,7 @@ void __pm_stay_awake(struct wakeup_source *ws)
 	spin_lock_irqsave(&ws->lock, flags);
 
 	wakeup_source_report_event(ws, false);
-	del_timer(&ws->timer);
+	timer_delete(&ws->timer);
 	ws->timer_expires = 0;
 
 	spin_unlock_irqrestore(&ws->lock, flags);
@@ -693,7 +693,7 @@ static void wakeup_source_deactivate(struct wakeup_source *ws)
 		ws->max_time = duration;
 
 	ws->last_time = now;
-	del_timer(&ws->timer);
+	timer_delete(&ws->timer);
 	ws->timer_expires = 0;
 
 	if (ws->autosleep_enabled)

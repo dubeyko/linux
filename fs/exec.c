@@ -115,66 +115,6 @@ bool path_noexec(const struct path *path)
 	       (path->mnt->mnt_sb->s_iflags & SB_I_NOEXEC);
 }
 
-#ifdef CONFIG_USELIB
-/*
- * Note that a shared library must be both readable and executable due to
- * security reasons.
- *
- * Also note that we take the address to load from the file itself.
- */
-SYSCALL_DEFINE1(uselib, const char __user *, library)
-{
-	struct linux_binfmt *fmt;
-	struct file *file;
-	struct filename *tmp = getname(library);
-	int error = PTR_ERR(tmp);
-	static const struct open_flags uselib_flags = {
-		.open_flag = O_LARGEFILE | O_RDONLY,
-		.acc_mode = MAY_READ | MAY_EXEC,
-		.intent = LOOKUP_OPEN,
-		.lookup_flags = LOOKUP_FOLLOW,
-	};
-
-	if (IS_ERR(tmp))
-		goto out;
-
-	file = do_filp_open(AT_FDCWD, tmp, &uselib_flags);
-	putname(tmp);
-	error = PTR_ERR(file);
-	if (IS_ERR(file))
-		goto out;
-
-	/*
-	 * Check do_open_execat() for an explanation.
-	 */
-	error = -EACCES;
-	if (WARN_ON_ONCE(!S_ISREG(file_inode(file)->i_mode)) ||
-	    path_noexec(&file->f_path))
-		goto exit;
-
-	error = -ENOEXEC;
-
-	read_lock(&binfmt_lock);
-	list_for_each_entry(fmt, &formats, lh) {
-		if (!fmt->load_shlib)
-			continue;
-		if (!try_module_get(fmt->module))
-			continue;
-		read_unlock(&binfmt_lock);
-		error = fmt->load_shlib(file);
-		read_lock(&binfmt_lock);
-		put_binfmt(fmt);
-		if (error != -ENOEXEC)
-			break;
-	}
-	read_unlock(&binfmt_lock);
-exit:
-	fput(file);
-out:
-	return error;
-}
-#endif /* #ifdef CONFIG_USELIB */
-
 #ifdef CONFIG_MMU
 /*
  * The nascent bprm->mm is not visible until exec_mmap() but it can
@@ -1227,13 +1167,12 @@ int begin_new_exec(struct linux_binprm * bprm)
 	 */
 	bprm->point_of_no_return = true;
 
-	/*
-	 * Make this the only thread in the thread group.
-	 */
+	/* Make this the only thread in the thread group */
 	retval = de_thread(me);
 	if (retval)
 		goto out;
-
+	/* see the comment in check_unsafe_exec() */
+	current->fs->in_exec = 0;
 	/*
 	 * Cancel any io_uring activity across execve
 	 */
@@ -1495,6 +1434,8 @@ static void free_bprm(struct linux_binprm *bprm)
 	}
 	free_arg_pages(bprm);
 	if (bprm->cred) {
+		/* in case exec fails before de_thread() succeeds */
+		current->fs->in_exec = 0;
 		mutex_unlock(&current->signal->cred_guard_mutex);
 		abort_creds(bprm->cred);
 	}
@@ -1616,6 +1557,10 @@ static void check_unsafe_exec(struct linux_binprm *bprm)
 	 * suid exec because the differently privileged task
 	 * will be able to manipulate the current directory, etc.
 	 * It would be nice to force an unshare instead...
+	 *
+	 * Otherwise we set fs->in_exec = 1 to deny clone(CLONE_FS)
+	 * from another sub-thread until de_thread() succeeds, this
+	 * state is protected by cred_guard_mutex we hold.
 	 */
 	n_fs = 1;
 	spin_lock(&p->fs->lock);
@@ -1859,10 +1804,9 @@ static int bprm_execve(struct linux_binprm *bprm)
 		goto out;
 
 	sched_mm_cid_after_execve(current);
-	/* execve succeeded */
-	current->fs->in_exec = 0;
-	current->in_execve = 0;
 	rseq_execve(current);
+	/* execve succeeded */
+	current->in_execve = 0;
 	user_events_execve(current);
 	acct_update_integrals(current);
 	task_numa_free(current, false);
@@ -1879,7 +1823,7 @@ out:
 		force_fatal_sig(SIGSEGV);
 
 	sched_mm_cid_after_execve(current);
-	current->fs->in_exec = 0;
+	rseq_set_notify_resume(current);
 	current->in_execve = 0;
 
 	return retval;

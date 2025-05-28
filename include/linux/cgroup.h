@@ -344,7 +344,7 @@ static inline u64 cgroup_id(const struct cgroup *cgrp)
  */
 static inline bool css_is_dying(struct cgroup_subsys_state *css)
 {
-	return !(css->flags & CSS_NO_REF) && percpu_ref_is_dying(&css->refcnt);
+	return css->flags & CSS_DYING;
 }
 
 static inline void cgroup_get(struct cgroup *cgrp)
@@ -785,6 +785,17 @@ struct cgroup_namespace *copy_cgroup_ns(unsigned long flags,
 int cgroup_path_ns(struct cgroup *cgrp, char *buf, size_t buflen,
 		   struct cgroup_namespace *ns);
 
+static inline void get_cgroup_ns(struct cgroup_namespace *ns)
+{
+	refcount_inc(&ns->ns.count);
+}
+
+static inline void put_cgroup_ns(struct cgroup_namespace *ns)
+{
+	if (refcount_dec_and_test(&ns->ns.count))
+		free_cgroup_ns(ns);
+}
+
 #else /* !CONFIG_CGROUPS */
 
 static inline void free_cgroup_ns(struct cgroup_namespace *ns) { }
@@ -795,19 +806,10 @@ copy_cgroup_ns(unsigned long flags, struct user_namespace *user_ns,
 	return old_ns;
 }
 
+static inline void get_cgroup_ns(struct cgroup_namespace *ns) { }
+static inline void put_cgroup_ns(struct cgroup_namespace *ns) { }
+
 #endif /* !CONFIG_CGROUPS */
-
-static inline void get_cgroup_ns(struct cgroup_namespace *ns)
-{
-	if (ns)
-		refcount_inc(&ns->ns.count);
-}
-
-static inline void put_cgroup_ns(struct cgroup_namespace *ns)
-{
-	if (ns && refcount_dec_and_test(&ns->ns.count))
-		free_cgroup_ns(ns);
-}
 
 #ifdef CONFIG_CGROUPS
 

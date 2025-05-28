@@ -133,8 +133,13 @@ struct release_task_post {
 static void __unhash_process(struct release_task_post *post, struct task_struct *p,
 			     bool group_dead)
 {
+	struct pid *pid = task_pid(p);
+
 	nr_threads--;
+
 	detach_pid(post->pids, p, PIDTYPE_PID);
+	wake_up_all(&pid->wait_pidfd);
+
 	if (group_dead) {
 		detach_pid(post->pids, p, PIDTYPE_TGID);
 		detach_pid(post->pids, p, PIDTYPE_PGID);
@@ -253,7 +258,8 @@ repeat:
 	pidfs_exit(p);
 	cgroup_release(p);
 
-	thread_pid = get_pid(p->thread_pid);
+	/* Retrieve @thread_pid before __unhash_process() may set it to NULL. */
+	thread_pid = task_pid(p);
 
 	write_lock_irq(&tasklist_lock);
 	ptrace_release_task(p);
@@ -268,6 +274,9 @@ repeat:
 	leader = p->group_leader;
 	if (leader != p && thread_group_empty(leader)
 			&& leader->exit_state == EXIT_ZOMBIE) {
+		/* for pidfs_exit() and do_notify_parent() */
+		if (leader->signal->flags & SIGNAL_GROUP_EXIT)
+			leader->exit_code = leader->signal->group_exit_code;
 		/*
 		 * If we were the last child thread and the leader has
 		 * exited already, and the leader's parent ignores SIGCHLD,
@@ -279,8 +288,8 @@ repeat:
 	}
 
 	write_unlock_irq(&tasklist_lock);
+	/* @thread_pid can't go away until free_pids() below */
 	proc_flush_pid(thread_pid);
-	put_pid(thread_pid);
 	add_device_randomness(&p->se.sum_exec_runtime,
 			      sizeof(p->se.sum_exec_runtime));
 	free_pids(post.pids);
@@ -756,12 +765,6 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
 		kill_orphaned_pgrp(tsk->group_leader, NULL);
 
 	tsk->exit_state = EXIT_ZOMBIE;
-	/*
-	 * Ignore thread-group leaders that exited before all
-	 * subthreads did.
-	 */
-	if (!delay_group_leader(tsk))
-		do_notify_pidfd(tsk);
 
 	if (unlikely(tsk->ptrace)) {
 		int sig = thread_group_leader(tsk) &&
@@ -774,6 +777,8 @@ static void exit_notify(struct task_struct *tsk, int group_dead)
 			do_notify_parent(tsk, tsk->exit_signal);
 	} else {
 		autoreap = true;
+		/* untraced sub-thread */
+		do_notify_pidfd(tsk);
 	}
 
 	if (autoreap) {
@@ -937,12 +942,12 @@ void __noreturn do_exit(long code)
 
 	tsk->exit_code = code;
 	taskstats_exit(tsk, group_dead);
+	trace_sched_process_exit(tsk, group_dead);
 
 	exit_mm();
 
 	if (group_dead)
 		acct_process();
-	trace_sched_process_exit(tsk);
 
 	exit_sem(tsk);
 	exit_shm(tsk);

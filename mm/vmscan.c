@@ -271,6 +271,25 @@ static int sc_swappiness(struct scan_control *sc, struct mem_cgroup *memcg)
 }
 #endif
 
+/* for_each_managed_zone_pgdat - helper macro to iterate over all managed zones in a pgdat up to
+ * and including the specified highidx
+ * @zone: The current zone in the iterator
+ * @pgdat: The pgdat which node_zones are being iterated
+ * @idx: The index variable
+ * @highidx: The index of the highest zone to return
+ *
+ * This macro iterates through all managed zones up to and including the specified highidx.
+ * The zone iterator enters an invalid state after macro call and must be reinitialized
+ * before it can be used again.
+ */
+#define for_each_managed_zone_pgdat(zone, pgdat, idx, highidx)	\
+	for ((idx) = 0, (zone) = (pgdat)->node_zones;		\
+	    (idx) <= (highidx);					\
+	    (idx)++, (zone)++)					\
+		if (!managed_zone(zone))			\
+			continue;				\
+		else
+
 static void set_task_reclaim_state(struct task_struct *task,
 				   struct reclaim_state *rs)
 {
@@ -396,13 +415,9 @@ static unsigned long lruvec_lru_size(struct lruvec *lruvec, enum lru_list lru,
 {
 	unsigned long size = 0;
 	int zid;
+	struct zone *zone;
 
-	for (zid = 0; zid <= zone_idx; zid++) {
-		struct zone *zone = &lruvec_pgdat(lruvec)->node_zones[zid];
-
-		if (!managed_zone(zone))
-			continue;
-
+	for_each_managed_zone_pgdat(zone, lruvec_pgdat(lruvec), zid, zone_idx) {
 		if (!mem_cgroup_disabled())
 			size += mem_cgroup_get_zone_lru_size(lruvec, lru, zid);
 		else
@@ -441,21 +456,26 @@ void drop_slab(void)
 	} while ((freed >> shift++) > 1);
 }
 
-static int reclaimer_offset(void)
+#define CHECK_RECLAIMER_OFFSET(type)					\
+	do {								\
+		BUILD_BUG_ON(PGSTEAL_##type - PGSTEAL_KSWAPD !=		\
+			     PGDEMOTE_##type - PGDEMOTE_KSWAPD);	\
+		BUILD_BUG_ON(PGSTEAL_##type - PGSTEAL_KSWAPD !=		\
+			     PGSCAN_##type - PGSCAN_KSWAPD);		\
+	} while (0)
+
+static int reclaimer_offset(struct scan_control *sc)
 {
-	BUILD_BUG_ON(PGSTEAL_DIRECT - PGSTEAL_KSWAPD !=
-			PGDEMOTE_DIRECT - PGDEMOTE_KSWAPD);
-	BUILD_BUG_ON(PGSTEAL_KHUGEPAGED - PGSTEAL_KSWAPD !=
-			PGDEMOTE_KHUGEPAGED - PGDEMOTE_KSWAPD);
-	BUILD_BUG_ON(PGSTEAL_DIRECT - PGSTEAL_KSWAPD !=
-			PGSCAN_DIRECT - PGSCAN_KSWAPD);
-	BUILD_BUG_ON(PGSTEAL_KHUGEPAGED - PGSTEAL_KSWAPD !=
-			PGSCAN_KHUGEPAGED - PGSCAN_KSWAPD);
+	CHECK_RECLAIMER_OFFSET(DIRECT);
+	CHECK_RECLAIMER_OFFSET(KHUGEPAGED);
+	CHECK_RECLAIMER_OFFSET(PROACTIVE);
 
 	if (current_is_kswapd())
 		return 0;
 	if (current_is_khugepaged())
 		return PGSTEAL_KHUGEPAGED - PGSTEAL_KSWAPD;
+	if (sc->proactive)
+		return PGSTEAL_PROACTIVE - PGSTEAL_KSWAPD;
 	return PGSTEAL_DIRECT - PGSTEAL_KSWAPD;
 }
 
@@ -495,7 +515,7 @@ static bool skip_throttle_noprogress(pg_data_t *pgdat)
 {
 	int reclaimable = 0, write_pending = 0;
 	int i;
-
+	struct zone *zone;
 	/*
 	 * If kswapd is disabled, reschedule if necessary but do not
 	 * throttle as the system is likely near OOM.
@@ -508,12 +528,7 @@ static bool skip_throttle_noprogress(pg_data_t *pgdat)
 	 * throttle as throttling will occur when the folios cycle
 	 * towards the end of the LRU if still under writeback.
 	 */
-	for (i = 0; i < MAX_NR_ZONES; i++) {
-		struct zone *zone = pgdat->node_zones + i;
-
-		if (!managed_zone(zone))
-			continue;
-
+	for_each_managed_zone_pgdat(zone, pgdat, i, MAX_NR_ZONES - 1) {
 		reclaimable += zone_reclaimable_pages(zone);
 		write_pending += zone_page_state_snapshot(zone,
 						  NR_ZONE_WRITE_PENDING);
@@ -633,21 +648,20 @@ typedef enum {
 
 /*
  * pageout is called by shrink_folio_list() for each dirty folio.
- * Calls ->writepage().
  */
 static pageout_t pageout(struct folio *folio, struct address_space *mapping,
 			 struct swap_iocb **plug, struct list_head *folio_list)
 {
+	int (*writeout)(struct folio *, struct writeback_control *);
+
 	/*
-	 * If the folio is dirty, only perform writeback if that write
-	 * will be non-blocking.  To prevent this allocation from being
-	 * stalled by pagecache activity.  But note that there may be
-	 * stalls if we need to run get_block().  We could test
-	 * PagePrivate for that.
-	 *
-	 * If this process is currently in __generic_file_write_iter() against
-	 * this folio's queue, we can perform writeback even if that
-	 * will block.
+	 * We no longer attempt to writeback filesystem folios here, other
+	 * than tmpfs/shmem.  That's taken care of in page-writeback.
+	 * If we find a dirty filesystem folio at the end of the LRU list,
+	 * typically that means the filesystem is saturating the storage
+	 * with contiguous writes and telling it to write a folio here
+	 * would only make the situation worse by injecting an element
+	 * of random access.
 	 *
 	 * If the folio is swapcache, write it back even if that would
 	 * block, for some throttling. This happens by accident, because
@@ -670,7 +684,11 @@ static pageout_t pageout(struct folio *folio, struct address_space *mapping,
 		}
 		return PAGE_KEEP;
 	}
-	if (mapping->a_ops->writepage == NULL)
+	if (shmem_mapping(mapping))
+		writeout = shmem_writeout;
+	else if (folio_test_anon(folio))
+		writeout = swap_writeout;
+	else
 		return PAGE_ACTIVATE;
 
 	if (folio_clear_dirty_for_io(folio)) {
@@ -693,7 +711,7 @@ static pageout_t pageout(struct folio *folio, struct address_space *mapping,
 			wbc.list = folio_list;
 
 		folio_set_reclaim(folio);
-		res = mapping->a_ops->writepage(&folio->page, &wbc);
+		res = writeout(folio, &wbc);
 		if (res < 0)
 			handle_write_error(mapping, folio, res);
 		if (res == AOP_WRITEPAGE_ACTIVATE) {
@@ -702,7 +720,7 @@ static pageout_t pageout(struct folio *folio, struct address_space *mapping,
 		}
 
 		if (!folio_test_writeback(folio)) {
-			/* synchronous write or broken a_ops? */
+			/* synchronous write? */
 			folio_clear_reclaim(folio);
 		}
 		trace_mm_vmscan_write_folio(folio);
@@ -769,7 +787,7 @@ static int __remove_mapping(struct address_space *mapping, struct folio *folio,
 		if (reclaimed && !mapping_exiting(mapping))
 			shadow = workingset_eviction(folio, target_memcg);
 		__delete_from_swap_cache(folio, swap, shadow);
-		mem_cgroup_swapout(folio, swap);
+		memcg1_swapout(folio, swap);
 		xa_unlock_irq(&mapping->i_pages);
 		put_swap_folio(folio, swap);
 	} else {
@@ -1112,6 +1130,13 @@ retry:
 		if (!folio_trylock(folio))
 			goto keep;
 
+		if (folio_contain_hwpoisoned_page(folio)) {
+			unmap_poisoned_folio(folio, folio_pfn(folio), false);
+			folio_unlock(folio);
+			folio_put(folio);
+			continue;
+		}
+
 		VM_BUG_ON_FOLIO(folio_test_active(folio), folio);
 
 		nr_pages = folio_nr_pages(folio);
@@ -1279,7 +1304,7 @@ retry:
 					    split_folio_to_list(folio, folio_list))
 						goto activate_locked;
 				}
-				if (!add_to_swap(folio)) {
+				if (folio_alloc_swap(folio, __GFP_HIGH | __GFP_NOWARN)) {
 					int __maybe_unused order = folio_order(folio);
 
 					if (!folio_test_large(folio))
@@ -1295,9 +1320,21 @@ retry:
 					}
 #endif
 					count_mthp_stat(order, MTHP_STAT_SWPOUT_FALLBACK);
-					if (!add_to_swap(folio))
+					if (folio_alloc_swap(folio, __GFP_HIGH | __GFP_NOWARN))
 						goto activate_locked_split;
 				}
+				/*
+				 * Normally the folio will be dirtied in unmap because its
+				 * pte should be dirty. A special case is MADV_FREE page. The
+				 * page's pte could have dirty bit cleared but the folio's
+				 * SwapBacked flag is still set because clearing the dirty bit
+				 * and SwapBacked flag has no lock protected. For such folio,
+				 * unmap will not set dirty bit for it, so folio reclaim will
+				 * not write the folio out. This can cause data corruption when
+				 * the folio is swapped in later. Always setting the dirty flag
+				 * for the folio solves the problem.
+				 */
+				folio_mark_dirty(folio);
 			}
 		}
 
@@ -1986,7 +2023,7 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 				     &nr_scanned, sc, lru);
 
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, nr_taken);
-	item = PGSCAN_KSWAPD + reclaimer_offset();
+	item = PGSCAN_KSWAPD + reclaimer_offset(sc);
 	if (!cgroup_reclaim(sc))
 		__count_vm_events(item, nr_scanned);
 	__count_memcg_events(lruvec_memcg(lruvec), item, nr_scanned);
@@ -2002,10 +2039,10 @@ static unsigned long shrink_inactive_list(unsigned long nr_to_scan,
 	spin_lock_irq(&lruvec->lru_lock);
 	move_folios_to_lru(lruvec, &folio_list);
 
-	__mod_lruvec_state(lruvec, PGDEMOTE_KSWAPD + reclaimer_offset(),
+	__mod_lruvec_state(lruvec, PGDEMOTE_KSWAPD + reclaimer_offset(sc),
 					stat.nr_demoted);
 	__mod_node_page_state(pgdat, NR_ISOLATED_ANON + file, -nr_taken);
-	item = PGSTEAL_KSWAPD + reclaimer_offset();
+	item = PGSTEAL_KSWAPD + reclaimer_offset(sc);
 	if (!cgroup_reclaim(sc))
 		__count_vm_events(item, nr_reclaimed);
 	__count_memcg_events(lruvec_memcg(lruvec), item, nr_reclaimed);
@@ -2372,17 +2409,13 @@ static void prepare_scan_control(pg_data_t *pgdat, struct scan_control *sc)
 		unsigned long total_high_wmark = 0;
 		unsigned long free, anon;
 		int z;
+		struct zone *zone;
 
 		free = sum_zone_node_page_state(pgdat->node_id, NR_FREE_PAGES);
 		file = node_page_state(pgdat, NR_ACTIVE_FILE) +
 			   node_page_state(pgdat, NR_INACTIVE_FILE);
 
-		for (z = 0; z < MAX_NR_ZONES; z++) {
-			struct zone *zone = &pgdat->node_zones[z];
-
-			if (!managed_zone(zone))
-				continue;
-
+		for_each_managed_zone_pgdat(zone, pgdat, z, MAX_NR_ZONES - 1) {
 			total_high_wmark += high_wmark_pages(zone);
 		}
 
@@ -2400,6 +2433,43 @@ static void prepare_scan_control(pg_data_t *pgdat, struct scan_control *sc)
 	}
 }
 
+static inline void calculate_pressure_balance(struct scan_control *sc,
+			int swappiness, u64 *fraction, u64 *denominator)
+{
+	unsigned long anon_cost, file_cost, total_cost;
+	unsigned long ap, fp;
+
+	/*
+	 * Calculate the pressure balance between anon and file pages.
+	 *
+	 * The amount of pressure we put on each LRU is inversely
+	 * proportional to the cost of reclaiming each list, as
+	 * determined by the share of pages that are refaulting, times
+	 * the relative IO cost of bringing back a swapped out
+	 * anonymous page vs reloading a filesystem page (swappiness).
+	 *
+	 * Although we limit that influence to ensure no list gets
+	 * left behind completely: at least a third of the pressure is
+	 * applied, before swappiness.
+	 *
+	 * With swappiness at 100, anon and file have equal IO cost.
+	 */
+	total_cost = sc->anon_cost + sc->file_cost;
+	anon_cost = total_cost + sc->anon_cost;
+	file_cost = total_cost + sc->file_cost;
+	total_cost = anon_cost + file_cost;
+
+	ap = swappiness * (total_cost + 1);
+	ap /= anon_cost + 1;
+
+	fp = (MAX_SWAPPINESS - swappiness) * (total_cost + 1);
+	fp /= file_cost + 1;
+
+	fraction[WORKINGSET_ANON] = ap;
+	fraction[WORKINGSET_FILE] = fp;
+	*denominator = ap + fp;
+}
+
 /*
  * Determine how aggressively the anon and file LRU lists should be
  * scanned.
@@ -2412,12 +2482,10 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 {
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 	struct mem_cgroup *memcg = lruvec_memcg(lruvec);
-	unsigned long anon_cost, file_cost, total_cost;
 	int swappiness = sc_swappiness(sc, memcg);
 	u64 fraction[ANON_AND_FILE];
 	u64 denominator = 0;	/* gcc */
 	enum scan_balance scan_balance;
-	unsigned long ap, fp;
 	enum lru_list lru;
 
 	/* If we have no swap space, do not bother scanning anon folios. */
@@ -2466,35 +2534,8 @@ static void get_scan_count(struct lruvec *lruvec, struct scan_control *sc,
 	}
 
 	scan_balance = SCAN_FRACT;
-	/*
-	 * Calculate the pressure balance between anon and file pages.
-	 *
-	 * The amount of pressure we put on each LRU is inversely
-	 * proportional to the cost of reclaiming each list, as
-	 * determined by the share of pages that are refaulting, times
-	 * the relative IO cost of bringing back a swapped out
-	 * anonymous page vs reloading a filesystem page (swappiness).
-	 *
-	 * Although we limit that influence to ensure no list gets
-	 * left behind completely: at least a third of the pressure is
-	 * applied, before swappiness.
-	 *
-	 * With swappiness at 100, anon and file have equal IO cost.
-	 */
-	total_cost = sc->anon_cost + sc->file_cost;
-	anon_cost = total_cost + sc->anon_cost;
-	file_cost = total_cost + sc->file_cost;
-	total_cost = anon_cost + file_cost;
+	calculate_pressure_balance(sc, swappiness, fraction, &denominator);
 
-	ap = swappiness * (total_cost + 1);
-	ap /= anon_cost + 1;
-
-	fp = (MAX_SWAPPINESS - swappiness) * (total_cost + 1);
-	fp /= file_cost + 1;
-
-	fraction[0] = ap;
-	fraction[1] = fp;
-	denominator = ap + fp;
 out:
 	for_each_evictable_lru(lru) {
 		bool file = is_file_lru(lru);
@@ -4545,7 +4586,7 @@ static int scan_folios(struct lruvec *lruvec, struct scan_control *sc,
 			break;
 	}
 
-	item = PGSCAN_KSWAPD + reclaimer_offset();
+	item = PGSCAN_KSWAPD + reclaimer_offset(sc);
 	if (!cgroup_reclaim(sc)) {
 		__count_vm_events(item, isolated);
 		__count_vm_events(PGREFILL, sorted);
@@ -4695,10 +4736,10 @@ retry:
 		reset_batch_size(walk);
 	}
 
-	__mod_lruvec_state(lruvec, PGDEMOTE_KSWAPD + reclaimer_offset(),
+	__mod_lruvec_state(lruvec, PGDEMOTE_KSWAPD + reclaimer_offset(sc),
 					stat.nr_demoted);
 
-	item = PGSTEAL_KSWAPD + reclaimer_offset();
+	item = PGSTEAL_KSWAPD + reclaimer_offset(sc);
 	if (!cgroup_reclaim(sc))
 		__count_vm_events(item, reclaimed);
 	__count_memcg_events(memcg, item, reclaimed);
@@ -5843,6 +5884,7 @@ static inline bool should_continue_reclaim(struct pglist_data *pgdat,
 	unsigned long pages_for_compaction;
 	unsigned long inactive_lru_pages;
 	int z;
+	struct zone *zone;
 
 	/* If not in reclaim/compaction mode, stop */
 	if (!in_reclaim_compaction(sc))
@@ -5862,17 +5904,16 @@ static inline bool should_continue_reclaim(struct pglist_data *pgdat,
 		return false;
 
 	/* If compaction would go ahead or the allocation would succeed, stop */
-	for (z = 0; z <= sc->reclaim_idx; z++) {
-		struct zone *zone = &pgdat->node_zones[z];
-		if (!managed_zone(zone))
-			continue;
+	for_each_managed_zone_pgdat(zone, pgdat, z, sc->reclaim_idx) {
+		unsigned long watermark = min_wmark_pages(zone);
 
 		/* Allocation can already succeed, nothing to do */
-		if (zone_watermark_ok(zone, sc->order, min_wmark_pages(zone),
+		if (zone_watermark_ok(zone, sc->order, watermark,
 				      sc->reclaim_idx, 0))
 			return false;
 
-		if (compaction_suitable(zone, sc->order, sc->reclaim_idx))
+		if (compaction_suitable(zone, sc->order, watermark,
+					sc->reclaim_idx))
 			return false;
 	}
 
@@ -6099,22 +6140,21 @@ static inline bool compaction_ready(struct zone *zone, struct scan_control *sc)
 			      sc->reclaim_idx, 0))
 		return true;
 
-	/* Compaction cannot yet proceed. Do reclaim. */
-	if (!compaction_suitable(zone, sc->order, sc->reclaim_idx))
-		return false;
-
 	/*
-	 * Compaction is already possible, but it takes time to run and there
-	 * are potentially other callers using the pages just freed. So proceed
-	 * with reclaim to make a buffer of free pages available to give
-	 * compaction a reasonable chance of completing and allocating the page.
+	 * Direct reclaim usually targets the min watermark, but compaction
+	 * takes time to run and there are potentially other callers using the
+	 * pages just freed. So target a higher buffer to give compaction a
+	 * reasonable chance of completing and allocating the pages.
+	 *
 	 * Note that we won't actually reclaim the whole buffer in one attempt
 	 * as the target watermark in should_continue_reclaim() is lower. But if
 	 * we are already above the high+gap watermark, don't reclaim at all.
 	 */
-	watermark = high_wmark_pages(zone) + compact_gap(sc->order);
+	watermark = high_wmark_pages(zone);
+	if (compaction_suitable(zone, sc->order, watermark, sc->reclaim_idx))
+		return true;
 
-	return zone_watermark_ok_safe(zone, 0, watermark, sc->reclaim_idx);
+	return false;
 }
 
 static void consider_reclaim_throttle(pg_data_t *pgdat, struct scan_control *sc)
@@ -6393,11 +6433,7 @@ static bool allow_direct_reclaim(pg_data_t *pgdat)
 	if (pgdat->kswapd_failures >= MAX_RECLAIM_RETRIES)
 		return true;
 
-	for (i = 0; i <= ZONE_NORMAL; i++) {
-		zone = &pgdat->node_zones[i];
-		if (!managed_zone(zone))
-			continue;
-
+	for_each_managed_zone_pgdat(zone, pgdat, i, ZONE_NORMAL) {
 		if (!zone_reclaimable_pages(zone))
 			continue;
 
@@ -6702,17 +6738,48 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 	 * Check watermarks bottom-up as lower zones are more likely to
 	 * meet watermarks.
 	 */
-	for (i = 0; i <= highest_zoneidx; i++) {
-		zone = pgdat->node_zones + i;
-
-		if (!managed_zone(zone))
-			continue;
+	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
+		enum zone_stat_item item;
+		unsigned long free_pages;
 
 		if (sysctl_numa_balancing_mode & NUMA_BALANCING_MEMORY_TIERING)
 			mark = promo_wmark_pages(zone);
 		else
 			mark = high_wmark_pages(zone);
-		if (zone_watermark_ok_safe(zone, order, mark, highest_zoneidx))
+
+		/*
+		 * In defrag_mode, watermarks must be met in whole
+		 * blocks to avoid polluting allocator fallbacks.
+		 *
+		 * However, kswapd usually cannot accomplish this on
+		 * its own and needs kcompactd support. Once it's
+		 * reclaimed a compaction gap, and kswapd_shrink_node
+		 * has dropped order, simply ensure there are enough
+		 * base pages for compaction, wake kcompactd & sleep.
+		 */
+		if (defrag_mode && order)
+			item = NR_FREE_PAGES_BLOCKS;
+		else
+			item = NR_FREE_PAGES;
+
+		/*
+		 * When there is a high number of CPUs in the system,
+		 * the cumulative error from the vmstat per-cpu cache
+		 * can blur the line between the watermarks. In that
+		 * case, be safe and get an accurate snapshot.
+		 *
+		 * TODO: NR_FREE_PAGES_BLOCKS moves in steps of
+		 * pageblock_nr_pages, while the vmstat pcp threshold
+		 * is limited to 125. On many configurations that
+		 * counter won't actually be per-cpu cached. But keep
+		 * things simple for now; revisit when somebody cares.
+		 */
+		free_pages = zone_page_state(zone, item);
+		if (zone->percpu_drift_mark && free_pages < zone->percpu_drift_mark)
+			free_pages = zone_page_state_snapshot(zone, item);
+
+		if (__zone_watermark_ok(zone, order, mark, highest_zoneidx,
+					0, free_pages))
 			return true;
 	}
 
@@ -6792,11 +6859,7 @@ static bool kswapd_shrink_node(pg_data_t *pgdat,
 
 	/* Reclaim a number of pages proportional to the number of zones */
 	sc->nr_to_reclaim = 0;
-	for (z = 0; z <= sc->reclaim_idx; z++) {
-		zone = pgdat->node_zones + z;
-		if (!managed_zone(zone))
-			continue;
-
+	for_each_managed_zone_pgdat(zone, pgdat, z, sc->reclaim_idx) {
 		sc->nr_to_reclaim += max(high_wmark_pages(zone), SWAP_CLUSTER_MAX);
 	}
 
@@ -6827,12 +6890,7 @@ update_reclaim_active(pg_data_t *pgdat, int highest_zoneidx, bool active)
 	int i;
 	struct zone *zone;
 
-	for (i = 0; i <= highest_zoneidx; i++) {
-		zone = pgdat->node_zones + i;
-
-		if (!managed_zone(zone))
-			continue;
-
+	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
 		if (active)
 			set_bit(ZONE_RECLAIM_ACTIVE, &zone->flags);
 		else
@@ -6893,11 +6951,7 @@ static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 	 * stall or direct reclaim until kswapd is finished.
 	 */
 	nr_boost_reclaim = 0;
-	for (i = 0; i <= highest_zoneidx; i++) {
-		zone = pgdat->node_zones + i;
-		if (!managed_zone(zone))
-			continue;
-
+	for_each_managed_zone_pgdat(zone, pgdat, i, highest_zoneidx) {
 		nr_boost_reclaim += zone->watermark_boost;
 		zone_boosts[i] = zone->watermark_boost;
 	}
@@ -7404,6 +7458,28 @@ void __meminit kswapd_stop(int nid)
 	pgdat_kswapd_unlock(pgdat);
 }
 
+static const struct ctl_table vmscan_sysctl_table[] = {
+	{
+		.procname	= "swappiness",
+		.data		= &vm_swappiness,
+		.maxlen		= sizeof(vm_swappiness),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_TWO_HUNDRED,
+	},
+#ifdef CONFIG_NUMA
+	{
+		.procname	= "zone_reclaim_mode",
+		.data		= &node_reclaim_mode,
+		.maxlen		= sizeof(node_reclaim_mode),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+	}
+#endif
+};
+
 static int __init kswapd_init(void)
 {
 	int nid;
@@ -7411,6 +7487,7 @@ static int __init kswapd_init(void)
 	swap_setup();
 	for_each_node_state(nid, N_MEMORY)
  		kswapd_run(nid);
+	register_sysctl_init("vm", vmscan_sysctl_table);
 	return 0;
 }
 
@@ -7576,11 +7653,11 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 	if (node_state(pgdat->node_id, N_CPU) && pgdat->node_id != numa_node_id())
 		return NODE_RECLAIM_NOSCAN;
 
-	if (test_and_set_bit(PGDAT_RECLAIM_LOCKED, &pgdat->flags))
+	if (test_and_set_bit_lock(PGDAT_RECLAIM_LOCKED, &pgdat->flags))
 		return NODE_RECLAIM_NOSCAN;
 
 	ret = __node_reclaim(pgdat, gfp_mask, order);
-	clear_bit(PGDAT_RECLAIM_LOCKED, &pgdat->flags);
+	clear_bit_unlock(PGDAT_RECLAIM_LOCKED, &pgdat->flags);
 
 	if (ret)
 		count_vm_event(PGSCAN_ZONE_RECLAIM_SUCCESS);

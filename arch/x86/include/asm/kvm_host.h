@@ -34,7 +34,9 @@
 #include <asm/desc.h>
 #include <asm/mtrr.h>
 #include <asm/msr-index.h>
+#include <asm/msr.h>
 #include <asm/asm.h>
+#include <asm/irq_remapping.h>
 #include <asm/kvm_page_track.h>
 #include <asm/kvm_vcpu_regs.h>
 #include <asm/reboot.h>
@@ -1472,8 +1474,13 @@ struct kvm_arch {
 	struct once nx_once;
 
 #ifdef CONFIG_X86_64
-	/* The number of TDP MMU pages across all roots. */
+#ifdef CONFIG_KVM_PROVE_MMU
+	/*
+	 * The number of TDP MMU pages across all roots.  Used only to sanity
+	 * check that KVM isn't leaking TDP MMU pages.
+	 */
 	atomic64_t tdp_mmu_pages;
+#endif
 
 	/*
 	 * List of struct kvm_mmu_pages being used as roots.
@@ -2272,7 +2279,7 @@ static inline unsigned long read_msr(unsigned long msr)
 {
 	u64 value;
 
-	rdmsrl(msr, value);
+	rdmsrq(msr, value);
 	return value;
 }
 #endif
@@ -2417,5 +2424,10 @@ int memslot_rmap_alloc(struct kvm_memory_slot *slot, unsigned long npages);
  * remaining 31 lower bits must be 0 to preserve ABI.
  */
 #define KVM_EXIT_HYPERCALL_MBZ		GENMASK_ULL(31, 1)
+
+static inline bool kvm_arch_has_irq_bypass(void)
+{
+	return enable_apicv && irq_remapping_cap(IRQ_POSTING_CAP);
+}
 
 #endif /* _ASM_X86_KVM_HOST_H */

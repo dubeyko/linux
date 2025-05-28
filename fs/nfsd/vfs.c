@@ -71,7 +71,6 @@ nfserrno (int errno)
 		{ nfserr_acces, -EACCES },
 		{ nfserr_exist, -EEXIST },
 		{ nfserr_xdev, -EXDEV },
-		{ nfserr_mlink, -EMLINK },
 		{ nfserr_nodev, -ENODEV },
 		{ nfserr_notdir, -ENOTDIR },
 		{ nfserr_isdir, -EISDIR },
@@ -265,7 +264,8 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				goto out_nfserr;
 		}
 	} else {
-		dentry = lookup_one_len_unlocked(name, dparent, len);
+		dentry = lookup_one_unlocked(&nop_mnt_idmap,
+					     &QSTR_LEN(name, len), dparent);
 		host_err = PTR_ERR(dentry);
 		if (IS_ERR(dentry))
 			goto out_nfserr;
@@ -923,7 +923,7 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 	 * directories, but we never have and it doesn't seem to have
 	 * caused anyone a problem.  If we were to change this, note
 	 * also that our filldir callbacks would need a variant of
-	 * lookup_one_len that doesn't check permissions.
+	 * lookup_one_positive_unlocked() that doesn't check permissions.
 	 */
 	if (type == S_IFREG)
 		may_flags |= NFSD_MAY_OWNER_OVERRIDE;
@@ -1555,7 +1555,7 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		return nfserrno(host_err);
 
 	inode_lock_nested(dentry->d_inode, I_MUTEX_PARENT);
-	dchild = lookup_one_len(fname, dentry, flen);
+	dchild = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), dentry);
 	host_err = PTR_ERR(dchild);
 	if (IS_ERR(dchild)) {
 		err = nfserrno(host_err);
@@ -1660,7 +1660,7 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	dentry = fhp->fh_dentry;
 	inode_lock_nested(dentry->d_inode, I_MUTEX_PARENT);
-	dnew = lookup_one_len(fname, dentry, flen);
+	dnew = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), dentry);
 	if (IS_ERR(dnew)) {
 		err = nfserrno(PTR_ERR(dnew));
 		inode_unlock(dentry->d_inode);
@@ -1687,9 +1687,17 @@ out:
 	return err;
 }
 
-/*
- * Create a hardlink
- * N.B. After this call _both_ ffhp and tfhp need an fh_put
+/**
+ * nfsd_link - create a link
+ * @rqstp: RPC transaction context
+ * @ffhp: the file handle of the directory where the new link is to be created
+ * @name: the filename of the new link
+ * @len: the length of @name in octets
+ * @tfhp: the file handle of an existing file object
+ *
+ * After this call _both_ ffhp and tfhp need an fh_put.
+ *
+ * Returns a generic NFS status code in network byte-order.
  */
 __be32
 nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
@@ -1697,6 +1705,7 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 {
 	struct dentry	*ddir, *dnew, *dold;
 	struct inode	*dirp;
+	int		type;
 	__be32		err;
 	int		host_err;
 
@@ -1716,19 +1725,19 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	if (isdotent(name, len))
 		goto out;
 
+	err = nfs_ok;
+	type = d_inode(tfhp->fh_dentry)->i_mode & S_IFMT;
 	host_err = fh_want_write(tfhp);
-	if (host_err) {
-		err = nfserrno(host_err);
+	if (host_err)
 		goto out;
-	}
 
 	ddir = ffhp->fh_dentry;
 	dirp = d_inode(ddir);
 	inode_lock_nested(dirp, I_MUTEX_PARENT);
 
-	dnew = lookup_one_len(name, ddir, len);
+	dnew = lookup_one(&nop_mnt_idmap, &QSTR_LEN(name, len), ddir);
 	if (IS_ERR(dnew)) {
-		err = nfserrno(PTR_ERR(dnew));
+		host_err = PTR_ERR(dnew);
 		goto out_unlock;
 	}
 
@@ -1744,17 +1753,26 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	fh_fill_post_attrs(ffhp);
 	inode_unlock(dirp);
 	if (!host_err) {
-		err = nfserrno(commit_metadata(ffhp));
-		if (!err)
-			err = nfserrno(commit_metadata(tfhp));
-	} else {
-		err = nfserrno(host_err);
+		host_err = commit_metadata(ffhp);
+		if (!host_err)
+			host_err = commit_metadata(tfhp);
 	}
+
 	dput(dnew);
 out_drop_write:
 	fh_drop_write(tfhp);
+	if (host_err == -EBUSY) {
+		/*
+		 * See RFC 8881 Section 18.9.4 para 1-2: NFSv4 LINK
+		 * wants a status unique to the object type.
+		 */
+		if (type != S_IFDIR)
+			err = nfserr_file_open;
+		else
+			err = nfserr_acces;
+	}
 out:
-	return err;
+	return err != nfs_ok ? err : nfserrno(host_err);
 
 out_dput:
 	dput(dnew);
@@ -1783,9 +1801,19 @@ nfsd_has_cached_files(struct dentry *dentry)
 	return ret;
 }
 
-/*
- * Rename a file
- * N.B. After this call _both_ ffhp and tfhp need an fh_put
+/**
+ * nfsd_rename - rename a directory entry
+ * @rqstp: RPC transaction context
+ * @ffhp: the file handle of parent directory containing the entry to be renamed
+ * @fname: the filename of directory entry to be renamed
+ * @flen: the length of @fname in octets
+ * @tfhp: the file handle of parent directory to contain the renamed entry
+ * @tname: the filename of the new entry
+ * @tlen: the length of @tlen in octets
+ *
+ * After this call _both_ ffhp and tfhp need an fh_put.
+ *
+ * Returns a generic NFS status code in network byte-order.
  */
 __be32
 nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
@@ -1793,6 +1821,7 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 {
 	struct dentry	*fdentry, *tdentry, *odentry, *ndentry, *trap;
 	struct inode	*fdir, *tdir;
+	int		type = S_IFDIR;
 	__be32		err;
 	int		host_err;
 	bool		close_cached = false;
@@ -1839,7 +1868,7 @@ retry:
 	if (err != nfs_ok)
 		goto out_unlock;
 
-	odentry = lookup_one_len(fname, fdentry, flen);
+	odentry = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), fdentry);
 	host_err = PTR_ERR(odentry);
 	if (IS_ERR(odentry))
 		goto out_nfserr;
@@ -1850,11 +1879,14 @@ retry:
 	host_err = -EINVAL;
 	if (odentry == trap)
 		goto out_dput_old;
+	type = d_inode(odentry)->i_mode & S_IFMT;
 
-	ndentry = lookup_one_len(tname, tdentry, tlen);
+	ndentry = lookup_one(&nop_mnt_idmap, &QSTR_LEN(tname, tlen), tdentry);
 	host_err = PTR_ERR(ndentry);
 	if (IS_ERR(ndentry))
 		goto out_dput_old;
+	if (d_inode(ndentry))
+		type = d_inode(ndentry)->i_mode & S_IFMT;
 	host_err = -ENOTEMPTY;
 	if (ndentry == trap)
 		goto out_dput_new;
@@ -1892,7 +1924,18 @@ retry:
  out_dput_old:
 	dput(odentry);
  out_nfserr:
-	err = nfserrno(host_err);
+	if (host_err == -EBUSY) {
+		/*
+		 * See RFC 8881 Section 18.26.4 para 1-3: NFSv4 RENAME
+		 * wants a status unique to the object type.
+		 */
+		if (type != S_IFDIR)
+			err = nfserr_file_open;
+		else
+			err = nfserr_acces;
+	} else {
+		err = nfserrno(host_err);
+	}
 
 	if (!close_cached) {
 		fh_fill_post_attrs(ffhp);
@@ -1919,9 +1962,17 @@ out:
 	return err;
 }
 
-/*
- * Unlink a file or directory
- * N.B. After this call fhp needs an fh_put
+/**
+ * nfsd_unlink - remove a directory entry
+ * @rqstp: RPC transaction context
+ * @fhp: the file handle of the parent directory to be modified
+ * @type: enforced file type of the object to be removed
+ * @fname: the name of directory entry to be removed
+ * @flen: length of @fname in octets
+ *
+ * After this call fhp needs an fh_put.
+ *
+ * Returns a generic NFS status code in network byte-order.
  */
 __be32
 nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
@@ -1948,7 +1999,7 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	dirp = d_inode(dentry);
 	inode_lock_nested(dirp, I_MUTEX_PARENT);
 
-	rdentry = lookup_one_len(fname, dentry, flen);
+	rdentry = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), dentry);
 	host_err = PTR_ERR(rdentry);
 	if (IS_ERR(rdentry))
 		goto out_unlock;
@@ -1995,15 +2046,17 @@ out_drop_write:
 	fh_drop_write(fhp);
 out_nfserr:
 	if (host_err == -EBUSY) {
-		/* name is mounted-on. There is no perfect
-		 * error status.
+		/*
+		 * See RFC 8881 Section 18.25.4 para 4: NFSv4 REMOVE
+		 * wants a status unique to the object type.
 		 */
-		err = nfserr_file_open;
-	} else {
-		err = nfserrno(host_err);
+		if (type != S_IFDIR)
+			err = nfserr_file_open;
+		else
+			err = nfserr_acces;
 	}
 out:
-	return err;
+	return err != nfs_ok ? err : nfserrno(host_err);
 out_unlock:
 	inode_unlock(dirp);
 	goto out_drop_write;
