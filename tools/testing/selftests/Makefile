@@ -67,14 +67,17 @@ TARGETS += mseal_system_mappings
 TARGETS += nci
 TARGETS += net
 TARGETS += net/af_unix
+TARGETS += net/can
 TARGETS += net/forwarding
 TARGETS += net/hsr
 TARGETS += net/mptcp
 TARGETS += net/netfilter
 TARGETS += net/openvswitch
+TARGETS += net/ovpn
 TARGETS += net/packetdrill
 TARGETS += net/rds
 TARGETS += net/tcp_ao
+TARGETS += nolibc
 TARGETS += nsfs
 TARGETS += pci_endpoint
 TARGETS += pcie_bwctrl
@@ -203,7 +206,7 @@ export KHDR_INCLUDES
 
 all:
 	@ret=1;							\
-	for TARGET in $(TARGETS); do				\
+	for TARGET in $(TARGETS) $(INSTALL_DEP_TARGETS); do	\
 		BUILD_TARGET=$$BUILD/$$TARGET;			\
 		mkdir $$BUILD_TARGET  -p;			\
 		$(MAKE) OUTPUT=$$BUILD_TARGET -C $$TARGET	\
@@ -291,6 +294,14 @@ ifdef INSTALL_PATH
 		$(MAKE) -s --no-print-directory OUTPUT=$$BUILD_TARGET COLLECTION=$$TARGET \
 			-C $$TARGET emit_tests >> $(TEST_LIST); \
 	done;
+	@VERSION=$$(git describe HEAD 2>/dev/null); \
+	if [ -n "$$VERSION" ]; then \
+		echo "$$VERSION" > $(INSTALL_PATH)/VERSION; \
+		printf "Version saved to $(INSTALL_PATH)/VERSION\n"; \
+	else \
+		printf "Unable to get version from git describe\n"; \
+	fi
+	@echo "**Kselftest Installation is complete: $(INSTALL_PATH)**"
 else
 	$(error Error: set INSTALL_PATH to use install)
 endif

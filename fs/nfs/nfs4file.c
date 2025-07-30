@@ -225,8 +225,14 @@ static long nfs42_fallocate(struct file *filep, int mode, loff_t offset, loff_t 
 	if (!S_ISREG(inode->i_mode))
 		return -EOPNOTSUPP;
 
-	if ((mode != 0) && (mode != (FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE)))
+	switch (mode) {
+	case 0:
+	case FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE:
+	case FALLOC_FL_ZERO_RANGE:
+		break;
+	default:
 		return -EOPNOTSUPP;
+	}
 
 	ret = inode_newsize_ok(inode, offset + len);
 	if (ret < 0)
@@ -234,6 +240,8 @@ static long nfs42_fallocate(struct file *filep, int mode, loff_t offset, loff_t 
 
 	if (mode & FALLOC_FL_PUNCH_HOLE)
 		return nfs42_proc_deallocate(filep, offset, len);
+	else if (mode & FALLOC_FL_ZERO_RANGE)
+		return nfs42_proc_zero_range(filep, offset ,len);
 	return nfs42_proc_allocate(filep, offset, len);
 }
 
@@ -448,7 +456,7 @@ static int nfs4_setlease(struct file *file, int arg, struct file_lease **lease,
 const struct file_operations nfs4_file_operations = {
 	.read_iter	= nfs_file_read,
 	.write_iter	= nfs_file_write,
-	.mmap		= nfs_file_mmap,
+	.mmap_prepare	= nfs_file_mmap_prepare,
 	.open		= nfs4_file_open,
 	.flush		= nfs4_file_flush,
 	.release	= nfs_file_release,

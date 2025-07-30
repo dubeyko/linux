@@ -73,7 +73,7 @@ static void igb_ptp_tx_hwtstamp(struct igb_adapter *adapter);
 static void igb_ptp_sdp_init(struct igb_adapter *adapter);
 
 /* SYSTIM read access for the 82576 */
-static u64 igb_ptp_read_82576(const struct cyclecounter *cc)
+static u64 igb_ptp_read_82576(struct cyclecounter *cc)
 {
 	struct igb_adapter *igb = container_of(cc, struct igb_adapter, cc);
 	struct e1000_hw *hw = &igb->hw;
@@ -90,7 +90,7 @@ static u64 igb_ptp_read_82576(const struct cyclecounter *cc)
 }
 
 /* SYSTIM read access for the 82580 */
-static u64 igb_ptp_read_82580(const struct cyclecounter *cc)
+static u64 igb_ptp_read_82580(struct cyclecounter *cc)
 {
 	struct igb_adapter *igb = container_of(cc, struct igb_adapter, cc);
 	struct e1000_hw *hw = &igb->hw;
@@ -502,13 +502,6 @@ static int igb_ptp_feature_enable_82580(struct ptp_clock_info *ptp,
 
 	switch (rq->type) {
 	case PTP_CLK_REQ_EXTTS:
-		/* Reject requests with unsupported flags */
-		if (rq->extts.flags & ~(PTP_ENABLE_FEATURE |
-					PTP_RISING_EDGE |
-					PTP_FALLING_EDGE |
-					PTP_STRICT_FLAGS))
-			return -EOPNOTSUPP;
-
 		/* Both the rising and falling edge are timestamped */
 		if (rq->extts.flags & PTP_STRICT_FLAGS &&
 		    (rq->extts.flags & PTP_ENABLE_FEATURE) &&
@@ -658,13 +651,6 @@ static int igb_ptp_feature_enable_i210(struct ptp_clock_info *ptp,
 
 	switch (rq->type) {
 	case PTP_CLK_REQ_EXTTS:
-		/* Reject requests with unsupported flags */
-		if (rq->extts.flags & ~(PTP_ENABLE_FEATURE |
-					PTP_RISING_EDGE |
-					PTP_FALLING_EDGE |
-					PTP_STRICT_FLAGS))
-			return -EOPNOTSUPP;
-
 		/* Reject requests failing to enable both edges. */
 		if ((rq->extts.flags & PTP_STRICT_FLAGS) &&
 		    (rq->extts.flags & PTP_ENABLE_FEATURE) &&
@@ -1356,6 +1342,9 @@ void igb_ptp_init(struct igb_adapter *adapter)
 		adapter->ptp_caps.n_per_out = IGB_N_PEROUT;
 		adapter->ptp_caps.n_pins = IGB_N_SDP;
 		adapter->ptp_caps.pps = 0;
+		adapter->ptp_caps.supported_extts_flags = PTP_RISING_EDGE |
+							  PTP_FALLING_EDGE |
+							  PTP_STRICT_FLAGS;
 		adapter->ptp_caps.pin_config = adapter->sdp_config;
 		adapter->ptp_caps.adjfine = igb_ptp_adjfine_82580;
 		adapter->ptp_caps.adjtime = igb_ptp_adjtime_82576;
@@ -1378,6 +1367,9 @@ void igb_ptp_init(struct igb_adapter *adapter)
 		adapter->ptp_caps.n_ext_ts = IGB_N_EXTTS;
 		adapter->ptp_caps.n_per_out = IGB_N_PEROUT;
 		adapter->ptp_caps.n_pins = IGB_N_SDP;
+		adapter->ptp_caps.supported_extts_flags = PTP_RISING_EDGE |
+							  PTP_FALLING_EDGE |
+							  PTP_STRICT_FLAGS;
 		adapter->ptp_caps.pps = 1;
 		adapter->ptp_caps.pin_config = adapter->sdp_config;
 		adapter->ptp_caps.adjfine = igb_ptp_adjfine_82580;

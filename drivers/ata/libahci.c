@@ -162,10 +162,10 @@ struct ata_port_operations ahci_ops = {
 
 	.freeze			= ahci_freeze,
 	.thaw			= ahci_thaw,
-	.softreset		= ahci_softreset,
-	.hardreset		= ahci_hardreset,
-	.postreset		= ahci_postreset,
-	.pmp_softreset		= ahci_softreset,
+	.reset.softreset	= ahci_softreset,
+	.reset.hardreset	= ahci_hardreset,
+	.reset.postreset	= ahci_postreset,
+	.pmp_reset.softreset	= ahci_softreset,
 	.error_handler		= ahci_error_handler,
 	.post_internal_cmd	= ahci_post_internal_cmd,
 	.dev_config		= ahci_dev_config,
@@ -192,7 +192,7 @@ EXPORT_SYMBOL_GPL(ahci_ops);
 
 struct ata_port_operations ahci_pmp_retry_srst_ops = {
 	.inherits		= &ahci_ops,
-	.softreset		= ahci_pmp_retry_softreset,
+	.reset.softreset	= ahci_pmp_retry_softreset,
 };
 EXPORT_SYMBOL_GPL(ahci_pmp_retry_srst_ops);
 
@@ -1034,7 +1034,7 @@ static void ahci_sw_activity(struct ata_link *link)
 
 static void ahci_sw_activity_blink(struct timer_list *t)
 {
-	struct ahci_em_priv *emp = from_timer(emp, t, timer);
+	struct ahci_em_priv *emp = timer_container_of(emp, t, timer);
 	struct ata_link *link = emp->link;
 	struct ata_port *ap = link->ap;
 

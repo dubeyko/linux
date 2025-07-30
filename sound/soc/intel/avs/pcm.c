@@ -83,10 +83,8 @@ void avs_period_elapsed(struct snd_pcm_substream *substream)
 static int hw_rule_param_size(struct snd_pcm_hw_params *params, struct snd_pcm_hw_rule *rule);
 static int avs_hw_constraints_init(struct snd_pcm_substream *substream, struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_pcm_hw_constraint_list *r, *c, *s;
-	struct avs_tplg_path_template *template;
 	struct avs_dma_data *data;
 	int ret;
 
@@ -99,8 +97,7 @@ static int avs_hw_constraints_init(struct snd_pcm_substream *substream, struct s
 	c = &(data->channels_list);
 	s = &(data->sample_bits_list);
 
-	template = avs_dai_find_path_template(dai, !rtd->dai_link->no_pcm, substream->stream);
-	ret = avs_path_set_constraint(data->adev, template, r, c, s);
+	ret = avs_path_set_constraint(data->adev, data->template, r, c, s);
 	if (ret <= 0)
 		return ret;
 
@@ -450,9 +447,10 @@ static int avs_dai_hda_be_hw_free(struct snd_pcm_substream *substream, struct sn
 
 static int avs_dai_hda_be_prepare(struct snd_pcm_substream *substream, struct snd_soc_dai *dai)
 {
-	struct snd_pcm_runtime *runtime = substream->runtime;
+	struct snd_soc_pcm_runtime *be = snd_soc_substream_to_rtd(substream);
 	const struct snd_soc_pcm_stream *stream_info;
 	struct hdac_ext_stream *link_stream;
+	const struct snd_pcm_hw_params *p;
 	struct avs_dma_data *data;
 	unsigned int format_val;
 	unsigned int bits;
@@ -460,14 +458,15 @@ static int avs_dai_hda_be_prepare(struct snd_pcm_substream *substream, struct sn
 
 	data = snd_soc_dai_get_dma_data(dai, substream);
 	link_stream = data->link_stream;
+	p = &be->dpcm[substream->stream].hw_params;
 
 	if (link_stream->link_prepared)
 		return 0;
 
 	stream_info = snd_soc_dai_get_pcm_stream(dai, substream->stream);
-	bits = snd_hdac_stream_format_bits(runtime->format, runtime->subformat,
+	bits = snd_hdac_stream_format_bits(params_format(p), params_subformat(p),
 					   stream_info->sig_bits);
-	format_val = snd_hdac_stream_format(runtime->channels, bits, runtime->rate);
+	format_val = snd_hdac_stream_format(params_channels(p), bits, params_rate(p));
 
 	snd_hdac_ext_stream_decouple(&data->adev->base.core, link_stream, true);
 	snd_hdac_ext_stream_reset(link_stream);
@@ -980,7 +979,6 @@ static int avs_component_load_libraries(struct avs_soc_component *acomp)
 	if (!ret)
 		ret = avs_module_info_init(adev, false);
 
-	pm_runtime_mark_last_busy(adev->dev);
 	pm_runtime_put_autosuspend(adev->dev);
 
 	return ret;
@@ -1571,11 +1569,13 @@ static void avs_component_hda_unregister_dais(struct snd_soc_component *componen
 {
 	struct snd_soc_acpi_mach *mach;
 	struct snd_soc_dai *dai, *save;
+	struct avs_mach_pdata *pdata;
 	struct hda_codec *codec;
 	char name[32];
 
 	mach = dev_get_platdata(component->card->dev);
-	codec = mach->pdata;
+	pdata = mach->pdata;
+	codec = pdata->codec;
 	snprintf(name, sizeof(name), "%s-cpu", dev_name(&codec->core.dev));
 
 	for_each_component_dais_safe(component, dai, save) {

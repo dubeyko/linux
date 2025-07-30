@@ -623,7 +623,7 @@ static int dummy_enable(struct usb_ep *_ep,
 
 	dev_dbg(udc_dev(dum), "enabled %s (ep%d%s-%s) maxpacket %d stream %s\n",
 		_ep->name,
-		desc->bEndpointAddress & 0x0f,
+		usb_endpoint_num(desc),
 		(desc->bEndpointAddress & USB_DIR_IN) ? "in" : "out",
 		usb_ep_type_string(usb_endpoint_type(desc)),
 		max, str_enabled_disabled(ep->stream_en));
@@ -1787,7 +1787,8 @@ static int handle_control_request(struct dummy_hcd *dum_hcd, struct urb *urb,
  */
 static enum hrtimer_restart dummy_timer(struct hrtimer *t)
 {
-	struct dummy_hcd	*dum_hcd = from_timer(dum_hcd, t, timer);
+	struct dummy_hcd	*dum_hcd = timer_container_of(dum_hcd, t,
+							      timer);
 	struct dummy		*dum = dum_hcd->dum;
 	struct urbp		*urbp, *tmp;
 	unsigned long		flags;

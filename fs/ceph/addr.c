@@ -238,6 +238,7 @@ static void finish_netfs_read(struct ceph_osd_request *req)
 		if (sparse && err > 0)
 			err = ceph_sparse_ext_map_end(op);
 		if (err < subreq->len &&
+		    subreq->rreq->origin != NETFS_UNBUFFERED_READ &&
 		    subreq->rreq->origin != NETFS_DIO_READ)
 			__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
 		if (IS_ENCRYPTED(inode) && err > 0) {
@@ -281,7 +282,8 @@ static bool ceph_netfs_issue_op_inline(struct netfs_io_subrequest *subreq)
 	size_t len;
 	int mode;
 
-	if (rreq->origin != NETFS_DIO_READ)
+	if (rreq->origin != NETFS_UNBUFFERED_READ &&
+	    rreq->origin != NETFS_DIO_READ)
 		__set_bit(NETFS_SREQ_CLEAR_TAIL, &subreq->flags);
 	__clear_bit(NETFS_SREQ_COPY_TO_CACHE, &subreq->flags);
 
@@ -406,6 +408,15 @@ static void ceph_netfs_issue_read(struct netfs_io_subrequest *subreq)
 	if (IS_ENCRYPTED(inode)) {
 		struct page **pages;
 		size_t page_off;
+
+		/*
+		 * FIXME: io_iter.count needs to be corrected to aligned
+		 * length. Otherwise, iov_iter_get_pages_alloc2() operates
+		 * with the initial unaligned length value. As a result,
+		 * ceph_msg_data_cursor_init() triggers BUG_ON() in the case
+		 * if msg->sparse_read_total > msg->data_length.
+		 */
+		subreq->io_iter.count = len;
 
 		err = iov_iter_get_pages_alloc2(&subreq->io_iter, &pages, len, &page_off);
 		if (err < 0) {
@@ -539,7 +550,7 @@ static void ceph_set_page_fscache(struct page *page)
 	folio_start_private_2(page_folio(page)); /* [DEPRECATED] */
 }
 
-static void ceph_fscache_write_terminated(void *priv, ssize_t error, bool was_async)
+static void ceph_fscache_write_terminated(void *priv, ssize_t error)
 {
 	struct inode *inode = priv;
 
@@ -1853,10 +1864,12 @@ static int ceph_netfs_check_write_begin(struct file *file, loff_t pos, unsigned 
  * We are only allowed to write into/dirty the page if the page is
  * clean, or already dirty within the same snap context.
  */
-static int ceph_write_begin(struct file *file, struct address_space *mapping,
+static int ceph_write_begin(const struct kiocb *iocb,
+			    struct address_space *mapping,
 			    loff_t pos, unsigned len,
 			    struct folio **foliop, void **fsdata)
 {
+	struct file *file = iocb->ki_filp;
 	struct inode *inode = file_inode(file);
 	struct ceph_inode_info *ci = ceph_inode(inode);
 	int r;
@@ -1874,10 +1887,12 @@ static int ceph_write_begin(struct file *file, struct address_space *mapping,
  * we don't do anything in here that simple_write_end doesn't do
  * except adjust dirty page accounting
  */
-static int ceph_write_end(struct file *file, struct address_space *mapping,
-			  loff_t pos, unsigned len, unsigned copied,
+static int ceph_write_end(const struct kiocb *iocb,
+			  struct address_space *mapping, loff_t pos,
+			  unsigned len, unsigned copied,
 			  struct folio *folio, void *fsdata)
 {
+	struct file *file = iocb->ki_filp;
 	struct inode *inode = file_inode(file);
 	struct ceph_client *cl = ceph_inode_to_client(inode);
 	bool check_cap = false;
@@ -2319,13 +2334,13 @@ static const struct vm_operations_struct ceph_vmops = {
 	.page_mkwrite	= ceph_page_mkwrite,
 };
 
-int ceph_mmap(struct file *file, struct vm_area_struct *vma)
+int ceph_mmap_prepare(struct vm_area_desc *desc)
 {
-	struct address_space *mapping = file->f_mapping;
+	struct address_space *mapping = desc->file->f_mapping;
 
 	if (!mapping->a_ops->read_folio)
 		return -ENOEXEC;
-	vma->vm_ops = &ceph_vmops;
+	desc->vm_ops = &ceph_vmops;
 	return 0;
 }
 

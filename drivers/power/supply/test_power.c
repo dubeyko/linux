@@ -228,6 +228,7 @@ static const struct power_supply_desc test_power_desc[] = {
 		.property_is_writeable = test_power_battery_property_is_writeable,
 		.charge_behaviours = BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_AUTO)
 				   | BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE)
+				   | BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_INHIBIT_CHARGE_AWAKE)
 				   | BIT(POWER_SUPPLY_CHARGE_BEHAVIOUR_FORCE_DISCHARGE),
 		.charge_types = BIT(POWER_SUPPLY_CHARGE_TYPE_STANDARD)
 				   | BIT(POWER_SUPPLY_CHARGE_TYPE_LONGLIFE)
@@ -258,6 +259,7 @@ static const struct power_supply_config test_power_configs[] = {
 static int test_power_battery_extmanufacture_year = 1234;
 static int test_power_battery_exttemp_max = 1000;
 static const enum power_supply_property test_power_battery_extprops[] = {
+	POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW,
 	POWER_SUPPLY_PROP_MANUFACTURE_YEAR,
 	POWER_SUPPLY_PROP_TEMP_MAX,
 };
@@ -269,6 +271,9 @@ static int test_power_battery_extget_property(struct power_supply *psy,
 					      union power_supply_propval *val)
 {
 	switch (psp) {
+	case POWER_SUPPLY_PROP_TIME_TO_EMPTY_NOW:
+		return power_supply_get_property_direct(psy, POWER_SUPPLY_PROP_TIME_TO_EMPTY_AVG,
+							val);
 	case POWER_SUPPLY_PROP_MANUFACTURE_YEAR:
 		val->intval = test_power_battery_extmanufacture_year;
 		break;

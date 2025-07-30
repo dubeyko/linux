@@ -113,7 +113,8 @@ static int pci_setup_msi_context(struct pci_dev *dev)
 
 void pci_msi_update_mask(struct msi_desc *desc, u32 clear, u32 set)
 {
-	raw_spinlock_t *lock = &to_pci_dev(desc->dev)->msi_lock;
+	struct pci_dev *dev = msi_desc_to_pci_dev(desc);
+	raw_spinlock_t *lock = &dev->msi_lock;
 	unsigned long flags;
 
 	if (!desc->pci.msi_attrib.can_mask)
@@ -122,8 +123,7 @@ void pci_msi_update_mask(struct msi_desc *desc, u32 clear, u32 set)
 	raw_spin_lock_irqsave(lock, flags);
 	desc->pci.msi_mask &= ~clear;
 	desc->pci.msi_mask |= set;
-	pci_write_config_dword(msi_desc_to_pci_dev(desc), desc->pci.mask_pos,
-			       desc->pci.msi_mask);
+	pci_write_config_dword(dev, desc->pci.mask_pos, desc->pci.msi_mask);
 	raw_spin_unlock_irqrestore(lock, flags);
 }
 
@@ -439,15 +439,15 @@ int __pci_enable_msi_range(struct pci_dev *dev, int minvec, int maxvec,
 	if (nvec < minvec)
 		return -ENOSPC;
 
-	if (nvec > maxvec)
-		nvec = maxvec;
-
 	rc = pci_setup_msi_context(dev);
 	if (rc)
 		return rc;
 
-	if (!pci_setup_msi_device_domain(dev))
+	if (!pci_setup_msi_device_domain(dev, nvec))
 		return -ENODEV;
+
+	if (nvec > maxvec)
+		nvec = maxvec;
 
 	for (;;) {
 		if (affd) {
@@ -934,10 +934,12 @@ int pci_msix_write_tph_tag(struct pci_dev *pdev, unsigned int index, u16 tag)
 	if (!pdev->msix_enabled)
 		return -ENXIO;
 
-	guard(msi_descs_lock)(&pdev->dev);
 	virq = msi_get_virq(&pdev->dev, index);
 	if (!virq)
 		return -ENXIO;
+
+	guard(msi_descs_lock)(&pdev->dev);
+
 	/*
 	 * This is a horrible hack, but short of implementing a PCI
 	 * specific interrupt chip callback and a huge pile of

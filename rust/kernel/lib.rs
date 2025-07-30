@@ -12,20 +12,41 @@
 //! do so first instead of bypassing this crate.
 
 #![no_std]
-#![feature(arbitrary_self_types)]
-#![cfg_attr(CONFIG_RUSTC_HAS_COERCE_POINTEE, feature(derive_coerce_pointee))]
-#![cfg_attr(not(CONFIG_RUSTC_HAS_COERCE_POINTEE), feature(coerce_unsized))]
-#![cfg_attr(not(CONFIG_RUSTC_HAS_COERCE_POINTEE), feature(dispatch_from_dyn))]
-#![cfg_attr(not(CONFIG_RUSTC_HAS_COERCE_POINTEE), feature(unsize))]
+//
+// Please see https://github.com/Rust-for-Linux/linux/issues/2 for details on
+// the unstable features in use.
+//
+// Stable since Rust 1.79.0.
 #![feature(inline_const)]
+//
+// Stable since Rust 1.81.0.
 #![feature(lint_reasons)]
-// Stable in Rust 1.82
+//
+// Stable since Rust 1.82.0.
 #![feature(raw_ref_op)]
-// Stable in Rust 1.83
+//
+// Stable since Rust 1.83.0.
 #![feature(const_maybe_uninit_as_mut_ptr)]
 #![feature(const_mut_refs)]
 #![feature(const_ptr_write)]
 #![feature(const_refs_to_cell)]
+//
+// Expected to become stable.
+#![feature(arbitrary_self_types)]
+//
+// To be determined.
+#![feature(used_with_arg)]
+//
+// `feature(derive_coerce_pointee)` is expected to become stable. Before Rust
+// 1.84.0, it did not exist, so enable the predecessor features.
+#![cfg_attr(CONFIG_RUSTC_HAS_COERCE_POINTEE, feature(derive_coerce_pointee))]
+#![cfg_attr(not(CONFIG_RUSTC_HAS_COERCE_POINTEE), feature(coerce_unsized))]
+#![cfg_attr(not(CONFIG_RUSTC_HAS_COERCE_POINTEE), feature(dispatch_from_dyn))]
+#![cfg_attr(not(CONFIG_RUSTC_HAS_COERCE_POINTEE), feature(unsize))]
+//
+// `feature(file_with_nul)` is expected to become stable. Before Rust 1.89.0, it did not exist, so
+// enable it conditionally.
+#![cfg_attr(CONFIG_RUSTC_HAS_FILE_WITH_NUL, feature(file_with_nul))]
 
 // Ensure conditional compilation based on the kernel configuration works;
 // otherwise we may silently break things like initcall handling.
@@ -37,19 +58,29 @@ extern crate self as kernel;
 
 pub use ffi;
 
+pub mod acpi;
 pub mod alloc;
+#[cfg(CONFIG_AUXILIARY_BUS)]
+pub mod auxiliary;
 #[cfg(CONFIG_BLOCK)]
 pub mod block;
 #[doc(hidden)]
 pub mod build_assert;
+pub mod clk;
 #[cfg(CONFIG_CONFIGFS_FS)]
 pub mod configfs;
+pub mod cpu;
+#[cfg(CONFIG_CPU_FREQ)]
+pub mod cpufreq;
+pub mod cpumask;
 pub mod cred;
 pub mod device;
 pub mod device_id;
 pub mod devres;
 pub mod dma;
 pub mod driver;
+#[cfg(CONFIG_DRM = "y")]
+pub mod drm;
 pub mod error;
 pub mod faux;
 #[cfg(CONFIG_RUST_FW_LOADER_ABSTRACTIONS)]
@@ -63,9 +94,12 @@ pub mod jump_label;
 pub mod kunit;
 pub mod list;
 pub mod miscdevice;
+pub mod mm;
 #[cfg(CONFIG_NET)]
 pub mod net;
 pub mod of;
+#[cfg(CONFIG_PM_OPP)]
+pub mod opp;
 pub mod page;
 #[cfg(CONFIG_PCI)]
 pub mod pci;
@@ -74,6 +108,7 @@ pub mod platform;
 pub mod prelude;
 pub mod print;
 pub mod rbtree;
+pub mod regulator;
 pub mod revocable;
 pub mod security;
 pub mod seq_file;
@@ -90,6 +125,7 @@ pub mod transmute;
 pub mod types;
 pub mod uaccess;
 pub mod workqueue;
+pub mod xarray;
 
 #[doc(hidden)]
 pub use bindings;
@@ -192,7 +228,7 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 /// }
 ///
 /// let test = Test { a: 10, b: 20 };
-/// let b_ptr = &test.b;
+/// let b_ptr: *const _ = &test.b;
 /// // SAFETY: The pointer points at the `b` field of a `Test`, so the resulting pointer will be
 /// // in-bounds of the same allocation as `b_ptr`.
 /// let test_alias = unsafe { container_of!(b_ptr, Test, b) };
@@ -200,12 +236,18 @@ fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
 /// ```
 #[macro_export]
 macro_rules! container_of {
-    ($ptr:expr, $type:ty, $($f:tt)*) => {{
-        let ptr = $ptr as *const _ as *const u8;
-        let offset: usize = ::core::mem::offset_of!($type, $($f)*);
-        ptr.sub(offset) as *const $type
+    ($field_ptr:expr, $Container:ty, $($fields:tt)*) => {{
+        let offset: usize = ::core::mem::offset_of!($Container, $($fields)*);
+        let field_ptr = $field_ptr;
+        let container_ptr = field_ptr.byte_sub(offset).cast::<$Container>();
+        $crate::assert_same_type(field_ptr, (&raw const (*container_ptr).$($fields)*).cast_mut());
+        container_ptr
     }}
 }
+
+/// Helper for [`container_of!`].
+#[doc(hidden)]
+pub fn assert_same_type<T>(_: T, _: T) {}
 
 /// Helper for `.rs.S` files.
 #[doc(hidden)]
@@ -240,4 +282,48 @@ macro_rules! asm {
     ($($asm:expr),* ; $($rest:tt)*) => {
         ::core::arch::asm!( $($asm)*, $($rest)* )
     };
+}
+
+/// Gets the C string file name of a [`Location`].
+///
+/// If `file_with_nul()` is not available, returns a string that warns about it.
+///
+/// [`Location`]: core::panic::Location
+///
+/// # Examples
+///
+/// ```
+/// # use kernel::file_from_location;
+///
+/// #[track_caller]
+/// fn foo() {
+///     let caller = core::panic::Location::caller();
+///
+///     // Output:
+///     // - A path like "rust/kernel/example.rs" if file_with_nul() is available.
+///     // - "<Location::file_with_nul() not supported>" otherwise.
+///     let caller_file = file_from_location(caller);
+///
+///     // Prints out the message with caller's file name.
+///     pr_info!("foo() called in file {caller_file:?}\n");
+///
+///     # if cfg!(CONFIG_RUSTC_HAS_FILE_WITH_NUL) {
+///     #     assert_eq!(Ok(caller.file()), caller_file.to_str());
+///     # }
+/// }
+///
+/// # foo();
+/// ```
+#[inline]
+pub fn file_from_location<'a>(loc: &'a core::panic::Location<'a>) -> &'a core::ffi::CStr {
+    #[cfg(CONFIG_RUSTC_HAS_FILE_WITH_NUL)]
+    {
+        loc.file_with_nul()
+    }
+
+    #[cfg(not(CONFIG_RUSTC_HAS_FILE_WITH_NUL))]
+    {
+        let _ = loc;
+        c"<Location::file_with_nul() not supported>"
+    }
 }

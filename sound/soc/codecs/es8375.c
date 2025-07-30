@@ -319,6 +319,7 @@ static int es8375_hw_params(struct snd_pcm_substream *substream,
 	coeff = get_coeff(es8375->vddd, dmic_enable, es8375->mclk_freq, params_rate(params));
 	if (coeff < 0) {
 		dev_warn(component->dev, "Clock coefficients do not match");
+		return coeff;
 	}
 	regmap_write(es8375->regmap, ES8375_CLK_MGR4,
 			coeff_div[coeff].Reg0x04);
@@ -619,7 +620,7 @@ static bool es8375_writeable_register(struct device *dev, unsigned int reg)
 	}
 }
 
-static struct regmap_config es8375_regmap_config = {
+static const struct regmap_config es8375_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
 	.max_register = ES8375_REG_MAX,
