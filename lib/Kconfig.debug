@@ -2479,6 +2479,20 @@ config STRING_HELPERS_KUNIT_TEST
 	depends on KUNIT
 	default KUNIT_ALL_TESTS
 
+config FFS_KUNIT_TEST
+	tristate "KUnit test ffs-family functions at runtime" if !KUNIT_ALL_TESTS
+	depends on KUNIT
+	default KUNIT_ALL_TESTS
+	help
+	  This builds KUnit tests for ffs-family bit manipulation functions
+	  including ffs(), __ffs(), fls(), __fls(), fls64(), and __ffs64().
+
+	  These tests validate mathematical correctness, edge case handling,
+	  and cross-architecture consistency of bit scanning functions.
+
+	  For more information on KUnit and unit tests in general,
+	  please refer to Documentation/dev-tools/kunit/.
+
 config TEST_KSTRTOX
 	tristate "Test kstrto*() family of functions at runtime"
 
@@ -2894,7 +2908,7 @@ config FORTIFY_KUNIT_TEST
 config LONGEST_SYM_KUNIT_TEST
 	tristate "Test the longest symbol possible" if !KUNIT_ALL_TESTS
 	depends on KUNIT && KPROBES
-	depends on !PREFIX_SYMBOLS && !CFI_CLANG && !GCOV_KERNEL
+	depends on !PREFIX_SYMBOLS && !CFI && !GCOV_KERNEL
 	default KUNIT_ALL_TESTS
 	help
 	  Tests the longest symbol possible
@@ -3211,6 +3225,26 @@ config TEST_OBJPOOL
 	  This builds the "test_objpool" module that should be used for
 	  correctness verification and concurrent testings of objects
 	  allocation and reclamation.
+
+	  If unsure, say N.
+
+config TEST_KEXEC_HANDOVER
+	bool "Test for Kexec HandOver"
+	default n
+	depends on KEXEC_HANDOVER
+	help
+	  This option enables test for Kexec HandOver (KHO).
+	  The test consists of two parts: saving kernel data before kexec and
+	  restoring the data after kexec and verifying that it was properly
+	  handed over. This test module creates and saves data on the boot of
+	  the first kernel and restores and verifies the data on the boot of
+	  kexec'ed kernel.
+
+	  For detailed documentation about KHO, see Documentation/core-api/kho.
+
+	  To run the test run:
+
+	  tools/testing/selftests/kho/vmtest.sh -h
 
 	  If unsure, say N.
 

@@ -103,6 +103,7 @@
 #include <linux/randomize_kstack.h>
 #include <linux/pidfs.h>
 #include <linux/ptdump.h>
+#include <linux/time_namespace.h>
 #include <net/net_namespace.h>
 
 #include <asm/io.h>
@@ -956,6 +957,7 @@ void start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_core_init();
+	maple_tree_init();
 	poking_init();
 	ftrace_init();
 
@@ -973,7 +975,6 @@ void start_kernel(void)
 		 "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
 	radix_tree_init();
-	maple_tree_init();
 
 	/*
 	 * Set up housekeeping before setting up workqueues to allow the unbound
@@ -1072,6 +1073,7 @@ void start_kernel(void)
 	fork_init();
 	proc_caches_init();
 	uts_ns_init();
+	time_ns_init();
 	key_init();
 	security_init();
 	dbg_late_init();
@@ -1587,7 +1589,11 @@ static noinline void __init kernel_init_freeable(void)
 	 * check if there is an early userspace init.  If yes, let it do all
 	 * the work
 	 */
-	if (init_eaccess(ramdisk_execute_command) != 0) {
+	int ramdisk_command_access;
+	ramdisk_command_access = init_eaccess(ramdisk_execute_command);
+	if (ramdisk_command_access != 0) {
+		pr_warn("check access for rdinit=%s failed: %i, ignoring\n",
+			ramdisk_execute_command, ramdisk_command_access);
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}

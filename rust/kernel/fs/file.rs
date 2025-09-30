@@ -10,8 +10,9 @@
 use crate::{
     bindings,
     cred::Credential,
-    error::{code::*, Error, Result},
-    types::{ARef, AlwaysRefCounted, NotThreadSafe, Opaque},
+    error::{code::*, to_result, Error, Result},
+    sync::aref::{ARef, AlwaysRefCounted},
+    types::{NotThreadSafe, Opaque},
 };
 use core::ptr;
 
@@ -366,7 +367,7 @@ impl core::ops::Deref for File {
         //
         // By the type invariants, there are no `fdget_pos` calls that did not take the
         // `f_pos_lock` mutex.
-        unsafe { LocalFile::from_raw_file(self as *const File as *const bindings::file) }
+        unsafe { LocalFile::from_raw_file(core::ptr::from_ref(self).cast()) }
     }
 }
 
@@ -398,9 +399,8 @@ impl FileDescriptorReservation {
     pub fn get_unused_fd_flags(flags: u32) -> Result<Self> {
         // SAFETY: FFI call, there are no safety requirements on `flags`.
         let fd: i32 = unsafe { bindings::get_unused_fd_flags(flags) };
-        if fd < 0 {
-            return Err(Error::from_errno(fd));
-        }
+        to_result(fd)?;
+
         Ok(Self {
             fd: fd as u32,
             _not_send: NotThreadSafe,

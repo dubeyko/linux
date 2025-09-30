@@ -66,6 +66,20 @@ static pm_message_t pm_transition;
 static DEFINE_MUTEX(async_wip_mtx);
 static int async_error;
 
+/**
+ * pm_hibernate_is_recovering - if recovering from hibernate due to error.
+ *
+ * Used to query if dev_pm_ops.thaw() is called for normal hibernation case or
+ * recovering from some error.
+ *
+ * Return: true for error case, false for normal case.
+ */
+bool pm_hibernate_is_recovering(void)
+{
+	return pm_transition.event == PM_EVENT_RECOVER;
+}
+EXPORT_SYMBOL_GPL(pm_hibernate_is_recovering);
+
 static const char *pm_verb(int event)
 {
 	switch (event) {
@@ -661,7 +675,7 @@ static void dpm_async_resume_subordinate(struct device *dev, async_func_t func)
 	idx = device_links_read_lock();
 
 	/* Start processing the device's "async" consumers. */
-	list_for_each_entry_rcu(link, &dev->links.consumers, s_node)
+	list_for_each_entry_rcu_locked(link, &dev->links.consumers, s_node)
 		if (READ_ONCE(link->status) != DL_STATE_DORMANT)
 			dpm_async_with_cleanup(link->consumer, func);
 
@@ -1316,7 +1330,7 @@ static void dpm_async_suspend_superior(struct device *dev, async_func_t func)
 	idx = device_links_read_lock();
 
 	/* Start processing the device's "async" suppliers. */
-	list_for_each_entry_rcu(link, &dev->links.suppliers, c_node)
+	list_for_each_entry_rcu_locked(link, &dev->links.suppliers, c_node)
 		if (READ_ONCE(link->status) != DL_STATE_DORMANT)
 			dpm_async_with_cleanup(link->supplier, func);
 

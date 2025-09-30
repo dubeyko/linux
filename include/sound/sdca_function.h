@@ -742,14 +742,14 @@ struct sdca_control_range {
  * struct sdca_control - information for one SDCA Control
  * @label: Name for the Control, from SDCA Specification v1.0, section 7.1.7.
  * @sel: Identifier used for addressing.
- * @value: Holds the Control value for constants and defaults.
  * @nbits: Number of bits used in the Control.
- * @interrupt_position: SCDA interrupt line that will alert to changes on this
- * Control.
+ * @values: Holds the Control value for constants and defaults.
  * @cn_list: A bitmask showing the valid Control Numbers within this Control,
  * Control Numbers typically represent channels.
- * @range: Buffer describing valid range of values for the Control.
+ * @interrupt_position: SCDA interrupt line that will alert to changes on this
+ * Control.
  * @type: Format of the data in the Control.
+ * @range: Buffer describing valid range of values for the Control.
  * @mode: Access mode of the Control.
  * @layers: Bitmask of access layers of the Control.
  * @deferrable: Indicates if the access to the Control can be deferred.
@@ -760,13 +760,13 @@ struct sdca_control {
 	const char *label;
 	int sel;
 
-	int value;
 	int nbits;
-	int interrupt_position;
+	int *values;
 	u64 cn_list;
+	int interrupt_position;
 
-	struct sdca_control_range range;
 	enum sdca_control_datatype type;
+	struct sdca_control_range range;
 	enum sdca_access_mode mode;
 	u8 layers;
 
@@ -1063,27 +1063,30 @@ struct sdca_entity_ge {
 /**
  * struct sdca_entity_hide - information specific to HIDE Entities
  * @hid: HID device structure
- * @hidtx_ids: HIDTx Report ID
  * @num_hidtx_ids: number of HIDTx Report ID
- * @hidrx_ids: HIDRx Report ID
  * @num_hidrx_ids: number of HIDRx Report ID
- * @hide_reside_function_num: indicating which Audio Function Numbers within this Device
- * @max_delay: the maximum time in microseconds allowed for the Device to change the ownership from Device to Host
- * @af_number_list: which Audio Function Numbers within this Device are sending/receiving the messages in this HIDE
- * @hid_desc: HID descriptor for the HIDE Entity
+ * @hidtx_ids: HIDTx Report ID
+ * @hidrx_ids: HIDRx Report ID
+ * @af_number_list: which Audio Function Numbers within this Device are
+ * sending/receiving the messages in this HIDE
+ * @hide_reside_function_num: indicating which Audio Function Numbers
+ * within this Device
+ * @max_delay: the maximum time in microseconds allowed for the Device
+ * to change the ownership from Device to Host
  * @hid_report_desc: HID Report Descriptor for the HIDE Entity
+ * @hid_desc: HID descriptor for the HIDE Entity
  */
 struct sdca_entity_hide {
 	struct hid_device *hid;
 	unsigned int *hidtx_ids;
-	int num_hidtx_ids;
 	unsigned int *hidrx_ids;
+	int num_hidtx_ids;
 	int num_hidrx_ids;
+	unsigned int af_number_list[SDCA_MAX_FUNCTION_COUNT];
 	unsigned int hide_reside_function_num;
 	unsigned int max_delay;
-	unsigned int af_number_list[SDCA_MAX_FUNCTION_COUNT];
-	struct hid_descriptor hid_desc;
 	unsigned char *hid_report_desc;
+	struct hid_descriptor hid_desc;
 };
 
 /**

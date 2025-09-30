@@ -1196,12 +1196,14 @@ SecPageTables
               Memory consumed by secondary page tables, this currently includes
               KVM mmu and IOMMU allocations on x86 and arm64.
 NFS_Unstable
-              Always zero. Previous counted pages which had been written to
+              Always zero. Previously counted pages which had been written to
               the server, but has not been committed to stable storage.
 Bounce
-              Memory used for block device "bounce buffers"
+              Always zero. Previously memory used for block device
+              "bounce buffers".
 WritebackTmp
-              Memory used by FUSE for temporary writeback buffers
+              Always zero. Previously memory used by FUSE for temporary
+              writeback buffers.
 CommitLimit
               Based on the overcommit ratio ('vm.overcommit_ratio'),
               this is the total amount of  memory currently available to
@@ -2360,6 +2362,7 @@ The following mount options are supported:
 	hidepid=	Set /proc/<pid>/ access mode.
 	gid=		Set the group authorized to learn processes information.
 	subset=		Show only the specified subset of procfs.
+	pidns=		Specify a the namespace used by this procfs.
 	=========	========================================================
 
 hidepid=off or hidepid=0 means classic mode - everybody may access all
@@ -2391,6 +2394,13 @@ information about processes information, just add identd to this group.
 
 subset=pid hides all top level files and directories in the procfs that
 are not related to tasks.
+
+pidns= specifies a pid namespace (either as a string path to something like
+`/proc/$pid/ns/pid`, or a file descriptor when using `FSCONFIG_SET_FD`) that
+will be used by the procfs instance when translating pids. By default, procfs
+will use the calling process's active pid namespace. Note that the pid
+namespace of an existing procfs instance cannot be modified (attempting to do
+so will give an `-EBUSY` error).
 
 Chapter 5: Filesystem behavior
 ==============================
