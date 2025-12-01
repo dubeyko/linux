@@ -86,7 +86,8 @@ __cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
 
 EXPORT_SYMBOL(rename_lock);
 
-static struct kmem_cache *dentry_cache __ro_after_init;
+static struct kmem_cache *__dentry_cache __ro_after_init;
+#define dentry_cache runtime_const_ptr(__dentry_cache)
 
 const struct qstr empty_name = QSTR_INIT("", 0);
 EXPORT_SYMBOL(empty_name);
@@ -794,7 +795,7 @@ void d_mark_dontcache(struct inode *inode)
 		de->d_flags |= DCACHE_DONTCACHE;
 		spin_unlock(&de->d_lock);
 	}
-	inode->i_state |= I_DONTCACHE;
+	inode_state_set(inode, I_DONTCACHE);
 	spin_unlock(&inode->i_lock);
 }
 EXPORT_SYMBOL(d_mark_dontcache);
@@ -1073,7 +1074,7 @@ struct dentry *d_find_alias_rcu(struct inode *inode)
 	spin_lock(&inode->i_lock);
 	// ->i_dentry and ->i_rcu are colocated, but the latter won't be
 	// used without having I_FREEING set, which means no aliases left
-	if (likely(!(inode->i_state & I_FREEING) && !hlist_empty(l))) {
+	if (likely(!(inode_state_read(inode) & I_FREEING) && !hlist_empty(l))) {
 		if (S_ISDIR(inode->i_mode)) {
 			de = hlist_entry(l->first, struct dentry, d_u.d_alias);
 		} else {
@@ -1390,6 +1391,7 @@ struct check_mount {
 	unsigned int mounted;
 };
 
+/* locks: mount_locked_reader && dentry->d_lock */
 static enum d_walk_ret path_check_mount(void *data, struct dentry *dentry)
 {
 	struct check_mount *info = data;
@@ -1416,9 +1418,8 @@ int path_has_submounts(const struct path *parent)
 {
 	struct check_mount data = { .mnt = parent->mnt, .mounted = 0 };
 
-	read_seqlock_excl(&mount_lock);
+	guard(mount_locked_reader)();
 	d_walk(parent->dentry, &data, path_check_mount);
-	read_sequnlock_excl(&mount_lock);
 
 	return data.mounted;
 }
@@ -1717,13 +1718,13 @@ static struct dentry *__d_alloc(struct super_block *sb, const struct qstr *name)
 		dname = dentry->d_shortname.string;
 	}	
 
-	dentry->d_name.len = name->len;
-	dentry->d_name.hash = name->hash;
+	dentry->__d_name.len = name->len;
+	dentry->__d_name.hash = name->hash;
 	memcpy(dname, name->name, name->len);
 	dname[name->len] = 0;
 
 	/* Make sure we always see the terminating NUL character */
-	smp_store_release(&dentry->d_name.name, dname); /* ^^^ */
+	smp_store_release(&dentry->__d_name.name, dname); /* ^^^ */
 
 	dentry->d_flags = 0;
 	lockref_init(&dentry->d_lockref);
@@ -1980,14 +1981,8 @@ void d_instantiate_new(struct dentry *entry, struct inode *inode)
 	security_d_instantiate(entry, inode);
 	spin_lock(&inode->i_lock);
 	__d_instantiate(entry, inode);
-	WARN_ON(!(inode->i_state & I_NEW));
-	inode->i_state &= ~I_NEW & ~I_CREATING;
-	/*
-	 * Pairs with the barrier in prepare_to_wait_event() to make sure
-	 * ___wait_var_event() either sees the bit cleared or
-	 * waitqueue_active() check in wake_up_var() sees the waiter.
-	 */
-	smp_mb();
+	WARN_ON(!(inode_state_read(inode) & I_NEW));
+	inode_state_clear(inode, I_NEW | I_CREATING);
 	inode_wake_up_bit(inode, __I_NEW);
 	spin_unlock(&inode->i_lock);
 }
@@ -2306,11 +2301,20 @@ struct dentry *__d_lookup_rcu(const struct dentry *parent,
 		seq = raw_seqcount_begin(&dentry->d_seq);
 		if (dentry->d_parent != parent)
 			continue;
-		if (d_unhashed(dentry))
-			continue;
 		if (dentry->d_name.hash_len != hashlen)
 			continue;
-		if (dentry_cmp(dentry, str, hashlen_len(hashlen)) != 0)
+		if (unlikely(dentry_cmp(dentry, str, hashlen_len(hashlen)) != 0))
+			continue;
+		/*
+		 * Check for the dentry being unhashed.
+		 *
+		 * As tempting as it is, we *can't* skip it because of a race window
+		 * between us finding the dentry before it gets unhashed and loading
+		 * the sequence counter after unhashing is finished.
+		 *
+		 * We can at least predict on it.
+		 */
+		if (unlikely(d_unhashed(dentry)))
 			continue;
 		*seqp = seq;
 		return dentry;
@@ -2557,6 +2561,8 @@ struct dentry *d_alloc_parallel(struct dentry *parent,
 	spin_lock(&parent->d_lock);
 	new->d_parent = dget_dlock(parent);
 	hlist_add_head(&new->d_sib, &parent->d_children);
+	if (parent->d_flags & DCACHE_DISCONNECTED)
+		new->d_flags |= DCACHE_DISCONNECTED;
 	spin_unlock(&parent->d_lock);
 
 retry:
@@ -2743,15 +2749,15 @@ static void swap_names(struct dentry *dentry, struct dentry *target)
 			/*
 			 * Both external: swap the pointers
 			 */
-			swap(target->d_name.name, dentry->d_name.name);
+			swap(target->__d_name.name, dentry->__d_name.name);
 		} else {
 			/*
 			 * dentry:internal, target:external.  Steal target's
 			 * storage and make target internal.
 			 */
-			dentry->d_name.name = target->d_name.name;
+			dentry->__d_name.name = target->__d_name.name;
 			target->d_shortname = dentry->d_shortname;
-			target->d_name.name = target->d_shortname.string;
+			target->__d_name.name = target->d_shortname.string;
 		}
 	} else {
 		if (unlikely(dname_external(dentry))) {
@@ -2759,9 +2765,9 @@ static void swap_names(struct dentry *dentry, struct dentry *target)
 			 * dentry:external, target:internal.  Give dentry's
 			 * storage to target and make dentry internal
 			 */
-			target->d_name.name = dentry->d_name.name;
+			target->__d_name.name = dentry->__d_name.name;
 			dentry->d_shortname = target->d_shortname;
-			dentry->d_name.name = dentry->d_shortname.string;
+			dentry->__d_name.name = dentry->d_shortname.string;
 		} else {
 			/*
 			 * Both are internal.
@@ -2771,7 +2777,7 @@ static void swap_names(struct dentry *dentry, struct dentry *target)
 				     target->d_shortname.words[i]);
 		}
 	}
-	swap(dentry->d_name.hash_len, target->d_name.hash_len);
+	swap(dentry->__d_name.hash_len, target->__d_name.hash_len);
 }
 
 static void copy_name(struct dentry *dentry, struct dentry *target)
@@ -2781,11 +2787,11 @@ static void copy_name(struct dentry *dentry, struct dentry *target)
 		old_name = external_name(dentry);
 	if (unlikely(dname_external(target))) {
 		atomic_inc(&external_name(target)->count);
-		dentry->d_name = target->d_name;
+		dentry->__d_name = target->__d_name;
 	} else {
 		dentry->d_shortname = target->d_shortname;
-		dentry->d_name.name = dentry->d_shortname.string;
-		dentry->d_name.hash_len = target->d_name.hash_len;
+		dentry->__d_name.name = dentry->d_shortname.string;
+		dentry->__d_name.hash_len = target->__d_name.hash_len;
 	}
 	if (old_name && likely(atomic_dec_and_test(&old_name->count)))
 		kfree_rcu(old_name, head);
@@ -3134,7 +3140,7 @@ void d_mark_tmpfile(struct file *file, struct inode *inode)
 		!d_unlinked(dentry));
 	spin_lock(&dentry->d_parent->d_lock);
 	spin_lock_nested(&dentry->d_lock, DENTRY_D_LOCK_NESTED);
-	dentry->d_name.len = sprintf(dentry->d_shortname.string, "#%llu",
+	dentry->__d_name.len = sprintf(dentry->d_shortname.string, "#%llu",
 				(unsigned long long)inode->i_ino);
 	spin_unlock(&dentry->d_lock);
 	spin_unlock(&dentry->d_parent->d_lock);
@@ -3220,9 +3226,10 @@ static void __init dcache_init(void)
 	 * but it is probably not worth it because of the cache nature
 	 * of the dcache.
 	 */
-	dentry_cache = KMEM_CACHE_USERCOPY(dentry,
+	__dentry_cache = KMEM_CACHE_USERCOPY(dentry,
 		SLAB_RECLAIM_ACCOUNT|SLAB_PANIC|SLAB_ACCOUNT,
 		d_shortname.string);
+	runtime_const_init(ptr, __dentry_cache);
 
 	/* Hash may have been set up in dcache_init_early */
 	if (!hashdist)

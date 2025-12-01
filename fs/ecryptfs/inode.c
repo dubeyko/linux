@@ -95,7 +95,7 @@ static struct inode *__ecryptfs_get_inode(struct inode *lower_inode,
 		iput(lower_inode);
 		return ERR_PTR(-EACCES);
 	}
-	if (!(inode->i_state & I_NEW))
+	if (!(inode_state_read_once(inode) & I_NEW))
 		iput(lower_inode);
 
 	return inode;
@@ -106,7 +106,7 @@ struct inode *ecryptfs_get_inode(struct inode *lower_inode,
 {
 	struct inode *inode = __ecryptfs_get_inode(lower_inode, sb);
 
-	if (!IS_ERR(inode) && (inode->i_state & I_NEW))
+	if (!IS_ERR(inode) && (inode_state_read_once(inode) & I_NEW))
 		unlock_new_inode(inode);
 
 	return inode;
@@ -327,24 +327,15 @@ static int ecryptfs_i_size_read(struct dentry *dentry, struct inode *inode)
 static struct dentry *ecryptfs_lookup_interpose(struct dentry *dentry,
 				     struct dentry *lower_dentry)
 {
-	const struct path *path = ecryptfs_dentry_to_lower_path(dentry->d_parent);
+	struct dentry *lower_parent = ecryptfs_dentry_to_lower(dentry->d_parent);
 	struct inode *inode, *lower_inode;
-	struct ecryptfs_dentry_info *dentry_info;
 	int rc = 0;
 
-	dentry_info = kmem_cache_alloc(ecryptfs_dentry_info_cache, GFP_KERNEL);
-	if (!dentry_info) {
-		dput(lower_dentry);
-		return ERR_PTR(-ENOMEM);
-	}
-
 	fsstack_copy_attr_atime(d_inode(dentry->d_parent),
-				d_inode(path->dentry));
+				d_inode(lower_parent));
 	BUG_ON(!d_count(lower_dentry));
 
-	ecryptfs_set_dentry_private(dentry, dentry_info);
-	dentry_info->lower_path.mnt = mntget(path->mnt);
-	dentry_info->lower_path.dentry = lower_dentry;
+	ecryptfs_set_dentry_lower(dentry, lower_dentry);
 
 	/*
 	 * negative dentry can go positive under us here - its parent is not
@@ -373,7 +364,7 @@ static struct dentry *ecryptfs_lookup_interpose(struct dentry *dentry,
 		}
 	}
 
-	if (inode->i_state & I_NEW)
+	if (inode_state_read_once(inode) & I_NEW)
 		unlock_new_inode(inode);
 	return d_splice_alias(inode, dentry);
 }
@@ -912,11 +903,8 @@ static int ecryptfs_setattr(struct mnt_idmap *idmap,
 	struct ecryptfs_crypt_stat *crypt_stat;
 
 	crypt_stat = &ecryptfs_inode_to_private(d_inode(dentry))->crypt_stat;
-	if (!(crypt_stat->flags & ECRYPTFS_STRUCT_INITIALIZED)) {
-		rc = ecryptfs_init_crypt_stat(crypt_stat);
-		if (rc)
-			return rc;
-	}
+	if (!(crypt_stat->flags & ECRYPTFS_STRUCT_INITIALIZED))
+		ecryptfs_init_crypt_stat(crypt_stat);
 	inode = d_inode(dentry);
 	lower_inode = ecryptfs_inode_to_lower(inode);
 	lower_dentry = ecryptfs_dentry_to_lower(dentry);
@@ -1021,10 +1009,10 @@ static int ecryptfs_getattr(struct mnt_idmap *idmap,
 {
 	struct dentry *dentry = path->dentry;
 	struct kstat lower_stat;
+	struct path lower_path = ecryptfs_lower_path(dentry);
 	int rc;
 
-	rc = vfs_getattr_nosec(ecryptfs_dentry_to_lower_path(dentry),
-			       &lower_stat, request_mask, flags);
+	rc = vfs_getattr_nosec(&lower_path, &lower_stat, request_mask, flags);
 	if (!rc) {
 		fsstack_copy_attr_all(d_inode(dentry),
 				      ecryptfs_inode_to_lower(d_inode(dentry)));

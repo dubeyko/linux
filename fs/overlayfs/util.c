@@ -210,11 +210,11 @@ bool ovl_dentry_weird(struct dentry *dentry)
 		return true;
 
 	/*
-	 * Allow filesystems that are case-folding capable but deny composing
-	 * ovl stack from case-folded directories.
+	 * Exceptionally for layers with casefold, we accept that they have
+	 * their own hash and compare operations
 	 */
 	if (sb_has_encoding(dentry->d_sb))
-		return IS_CASEFOLDED(d_inode(dentry));
+		return false;
 
 	return dentry->d_flags & (DCACHE_OP_HASH | DCACHE_OP_COMPARE);
 }
@@ -1019,8 +1019,8 @@ bool ovl_inuse_trylock(struct dentry *dentry)
 	bool locked = false;
 
 	spin_lock(&inode->i_lock);
-	if (!(inode->i_state & I_OVL_INUSE)) {
-		inode->i_state |= I_OVL_INUSE;
+	if (!(inode_state_read(inode) & I_OVL_INUSE)) {
+		inode_state_set(inode, I_OVL_INUSE);
 		locked = true;
 	}
 	spin_unlock(&inode->i_lock);
@@ -1034,8 +1034,8 @@ void ovl_inuse_unlock(struct dentry *dentry)
 		struct inode *inode = d_inode(dentry);
 
 		spin_lock(&inode->i_lock);
-		WARN_ON(!(inode->i_state & I_OVL_INUSE));
-		inode->i_state &= ~I_OVL_INUSE;
+		WARN_ON(!(inode_state_read(inode) & I_OVL_INUSE));
+		inode_state_clear(inode, I_OVL_INUSE);
 		spin_unlock(&inode->i_lock);
 	}
 }
@@ -1046,7 +1046,7 @@ bool ovl_is_inuse(struct dentry *dentry)
 	bool inuse;
 
 	spin_lock(&inode->i_lock);
-	inuse = (inode->i_state & I_OVL_INUSE);
+	inuse = (inode_state_read(inode) & I_OVL_INUSE);
 	spin_unlock(&inode->i_lock);
 
 	return inuse;
@@ -1234,9 +1234,9 @@ int ovl_lock_rename_workdir(struct dentry *workdir, struct dentry *work,
 		goto err;
 	if (trap)
 		goto err_unlock;
-	if (work && work->d_parent != workdir)
+	if (work && (work->d_parent != workdir || d_unhashed(work)))
 		goto err_unlock;
-	if (upper && upper->d_parent != upperdir)
+	if (upper && (upper->d_parent != upperdir || d_unhashed(upper)))
 		goto err_unlock;
 
 	return 0;
@@ -1381,7 +1381,7 @@ err_free:
 }
 
 /* Call with mounter creds as it may open the file */
-int ovl_ensure_verity_loaded(struct path *datapath)
+int ovl_ensure_verity_loaded(const struct path *datapath)
 {
 	struct inode *inode = d_inode(datapath->dentry);
 	struct file *filp;
@@ -1401,8 +1401,8 @@ int ovl_ensure_verity_loaded(struct path *datapath)
 }
 
 int ovl_validate_verity(struct ovl_fs *ofs,
-			struct path *metapath,
-			struct path *datapath)
+			const struct path *metapath,
+			const struct path *datapath)
 {
 	struct ovl_metacopy metacopy_data;
 	u8 actual_digest[FS_VERITY_MAX_DIGEST_SIZE];
@@ -1455,7 +1455,7 @@ int ovl_validate_verity(struct ovl_fs *ofs,
 	return 0;
 }
 
-int ovl_get_verity_digest(struct ovl_fs *ofs, struct path *src,
+int ovl_get_verity_digest(struct ovl_fs *ofs, const struct path *src,
 			  struct ovl_metacopy *metacopy)
 {
 	int err, digest_size;

@@ -323,7 +323,6 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 	if (!s)
 		return NULL;
 
-	INIT_LIST_HEAD(&s->s_mounts);
 	s->s_user_ns = get_user_ns(user_ns);
 	init_rwsem(&s->s_umount);
 	lockdep_set_class(&s->s_umount, &type->s_umount_key);
@@ -390,6 +389,7 @@ static struct super_block *alloc_super(struct file_system_type *type, int flags,
 		goto fail;
 	if (list_lru_init_memcg(&s->s_inode_lru, s->s_shrink))
 		goto fail;
+	s->s_min_writeback_pages = MIN_WRITEBACK_PAGES;
 	return s;
 
 fail:
@@ -408,7 +408,7 @@ static void __put_super(struct super_block *s)
 		list_del_init(&s->s_list);
 		WARN_ON(s->s_dentry_lru.node);
 		WARN_ON(s->s_inode_lru.node);
-		WARN_ON(!list_empty(&s->s_mounts));
+		WARN_ON(s->s_mounts);
 		call_rcu(&s->rcu, destroy_super_rcu);
 	}
 }
@@ -1184,9 +1184,12 @@ static inline bool get_active_super(struct super_block *sb)
 
 static const char *filesystems_freeze_ptr = "filesystems_freeze";
 
-static void filesystems_freeze_callback(struct super_block *sb, void *unused)
+static void filesystems_freeze_callback(struct super_block *sb, void *freeze_all_ptr)
 {
 	if (!sb->s_op->freeze_fs && !sb->s_op->freeze_super)
+		return;
+
+	if (freeze_all_ptr && !(sb->s_type->fs_flags & FS_POWER_FREEZE))
 		return;
 
 	if (!get_active_super(sb))
@@ -1202,9 +1205,13 @@ static void filesystems_freeze_callback(struct super_block *sb, void *unused)
 	deactivate_super(sb);
 }
 
-void filesystems_freeze(void)
+void filesystems_freeze(bool freeze_all)
 {
-	__iterate_supers(filesystems_freeze_callback, NULL,
+	void *freeze_all_ptr = NULL;
+
+	if (freeze_all)
+		freeze_all_ptr = &freeze_all;
+	__iterate_supers(filesystems_freeze_callback, freeze_all_ptr,
 			 SUPER_ITER_UNLOCKED | SUPER_ITER_REVERSE);
 }
 

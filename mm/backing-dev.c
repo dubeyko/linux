@@ -72,7 +72,7 @@ static void collect_wb_stats(struct wb_stats *stats,
 	list_for_each_entry(inode, &wb->b_more_io, i_io_list)
 		stats->nr_more_io++;
 	list_for_each_entry(inode, &wb->b_dirty_time, i_io_list)
-		if (inode->i_state & I_DIRTY_TIME)
+		if (inode_state_read_once(inode) & I_DIRTY_TIME)
 			stats->nr_dirty_time++;
 	spin_unlock(&wb->list_lock);
 
@@ -510,7 +510,7 @@ static void wb_update_bandwidth_workfn(struct work_struct *work)
 /*
  * Initial write bandwidth: 100 MB/s
  */
-#define INIT_BW		(100 << (20 - PAGE_SHIFT))
+#define INIT_BW		MB_TO_PAGES(100)
 
 static int wb_init(struct bdi_writeback *wb, struct backing_dev_info *bdi,
 		   gfp_t gfp)
@@ -1031,7 +1031,7 @@ struct backing_dev_info *bdi_alloc(int node_id)
 		kfree(bdi);
 		return NULL;
 	}
-	bdi->capabilities = BDI_CAP_WRITEBACK | BDI_CAP_WRITEBACK_ACCT;
+	bdi->capabilities = BDI_CAP_WRITEBACK;
 	bdi->ra_pages = VM_READAHEAD_PAGES;
 	bdi->io_pages = VM_READAHEAD_PAGES;
 	timer_setup(&bdi->laptop_mode_wb_timer, laptop_mode_timer_fn, 0);

@@ -187,6 +187,13 @@ struct dentry *ovl_create_real(struct ovl_fs *ofs, struct dentry *parent,
 			/* mkdir is special... */
 			newdentry =  ovl_do_mkdir(ofs, dir, newdentry, attr->mode);
 			err = PTR_ERR_OR_ZERO(newdentry);
+			/* expect to inherit casefolding from workdir/upperdir */
+			if (!err && ofs->casefold != ovl_dentry_casefolded(newdentry)) {
+				pr_warn_ratelimited("wrong inherited casefold (%pd2)\n",
+						    newdentry);
+				dput(newdentry);
+				err = -EINVAL;
+			}
 			break;
 
 		case S_IFCHR:
@@ -205,12 +212,32 @@ struct dentry *ovl_create_real(struct ovl_fs *ofs, struct dentry *parent,
 			err = -EPERM;
 		}
 	}
-	if (!err && WARN_ON(!newdentry->d_inode)) {
+	if (err)
+		goto out;
+
+	if (WARN_ON(!newdentry->d_inode)) {
 		/*
 		 * Not quite sure if non-instantiated dentry is legal or not.
 		 * VFS doesn't seem to care so check and warn here.
 		 */
 		err = -EIO;
+	} else if (d_unhashed(newdentry)) {
+		struct dentry *d;
+		/*
+		 * Some filesystems (i.e. casefolded) may return an unhashed
+		 * negative dentry from the ovl_lookup_upper() call before
+		 * ovl_create_real().
+		 * In that case, lookup again after making the newdentry
+		 * positive, so ovl_create_upper() always returns a hashed
+		 * positive dentry.
+		 */
+		d = ovl_lookup_upper(ofs, newdentry->d_name.name, parent,
+				     newdentry->d_name.len);
+		dput(newdentry);
+		if (IS_ERR_OR_NULL(d))
+			err = d ? PTR_ERR(d) : -ENOENT;
+		else
+			return d;
 	}
 out:
 	if (err) {
@@ -659,7 +686,7 @@ static int ovl_create_object(struct dentry *dentry, int mode, dev_t rdev,
 		goto out_drop_write;
 
 	spin_lock(&inode->i_lock);
-	inode->i_state |= I_CREATING;
+	inode_state_set(inode, I_CREATING);
 	spin_unlock(&inode->i_lock);
 
 	inode_init_owner(&nop_mnt_idmap, inode, dentry->d_parent->d_inode, mode);

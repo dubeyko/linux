@@ -6892,7 +6892,7 @@ static void ocfs2_zero_cluster_folios(struct inode *inode, loff_t start,
 		ocfs2_map_and_dirty_folio(inode, handle, from, to, folio, 1,
 				&phys);
 
-		start = folio_next_index(folio) << PAGE_SHIFT;
+		start = folio_next_pos(folio);
 	}
 out:
 	if (folios)
@@ -6928,8 +6928,7 @@ static int ocfs2_grab_folios(struct inode *inode, loff_t start, loff_t end,
 
 out:
 	if (ret != 0) {
-		if (folios)
-			ocfs2_unlock_and_free_folios(folios, numfolios);
+		ocfs2_unlock_and_free_folios(folios, numfolios);
 		numfolios = 0;
 	}
 

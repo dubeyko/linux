@@ -318,7 +318,7 @@ static void lru_gen_refault(struct folio *folio, void *shadow)
 		folio_set_workingset(folio);
 		mod_lruvec_state(lruvec, WORKINGSET_RESTORE_BASE + type, delta);
 	} else
-		set_mask_bits(&folio->flags, LRU_REFS_MASK, (refs - 1UL) << LRU_REFS_PGOFF);
+		set_mask_bits(&folio->flags.f, LRU_REFS_MASK, (refs - 1UL) << LRU_REFS_PGOFF);
 unlock:
 	rcu_read_unlock();
 }
@@ -755,7 +755,7 @@ out_invalid:
 	xa_unlock_irq(&mapping->i_pages);
 	if (mapping->host != NULL) {
 		if (mapping_shrinkable(mapping))
-			inode_add_lru(mapping->host);
+			inode_lru_list_add(mapping->host);
 		spin_unlock(&mapping->host->i_lock);
 	}
 	ret = LRU_REMOVED_RETRY;

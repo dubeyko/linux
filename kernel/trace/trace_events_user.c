@@ -835,7 +835,7 @@ void user_event_mm_remove(struct task_struct *t)
 	 * so we use a work queue after call_rcu() to run within.
 	 */
 	INIT_RCU_WORK(&mm->put_rwork, delayed_user_event_mm_put);
-	queue_rcu_work(system_wq, &mm->put_rwork);
+	queue_rcu_work(system_percpu_wq, &mm->put_rwork);
 }
 
 void user_event_mm_dup(struct task_struct *t, struct user_event_mm *old_mm)
@@ -1449,12 +1449,7 @@ static struct trace_event_functions user_event_funcs = {
 
 static int user_event_set_call_visible(struct user_event *user, bool visible)
 {
-	int ret;
-	const struct cred *old_cred;
-	struct cred *cred;
-
-	cred = prepare_creds();
-
+	CLASS(prepare_creds, cred)();
 	if (!cred)
 		return -ENOMEM;
 
@@ -1469,17 +1464,12 @@ static int user_event_set_call_visible(struct user_event *user, bool visible)
 	 */
 	cred->fsuid = GLOBAL_ROOT_UID;
 
-	old_cred = override_creds(cred);
+	scoped_with_creds(cred) {
+		if (visible)
+			return trace_add_event_call(&user->call);
 
-	if (visible)
-		ret = trace_add_event_call(&user->call);
-	else
-		ret = trace_remove_event_call(&user->call);
-
-	revert_creds(old_cred);
-	put_cred(cred);
-
-	return ret;
+		return trace_remove_event_call(&user->call);
+	}
 }
 
 static int destroy_user_event(struct user_event *user)
