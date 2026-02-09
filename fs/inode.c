@@ -1593,6 +1593,9 @@ EXPORT_SYMBOL(igrab);
  * @hashval:	hash value (usually inode number) to search for
  * @test:	callback used for comparisons between inodes
  * @data:	opaque data pointer to pass to @test
+ * @isnew:	return argument telling whether I_NEW was set when
+ *		the inode was found in hash (the caller needs to
+ *		wait for I_NEW to clear)
  *
  * Search for the inode specified by @hashval and @data in the inode cache.
  * If the inode is in the cache, the inode is returned with an incremented
@@ -1968,7 +1971,7 @@ void iput(struct inode *inode)
 
 retry:
 	lockdep_assert_not_held(&inode->i_lock);
-	VFS_BUG_ON_INODE(inode_state_read_once(inode) & I_CLEAR, inode);
+	VFS_BUG_ON_INODE(inode_state_read_once(inode) & (I_FREEING | I_CLEAR), inode);
 	/*
 	 * Note this assert is technically racy as if the count is bogusly
 	 * equal to one, then two CPUs racing to further drop it can both
@@ -2010,6 +2013,7 @@ EXPORT_SYMBOL(iput);
  */
 void iput_not_last(struct inode *inode)
 {
+	VFS_BUG_ON_INODE(inode_state_read_once(inode) & (I_FREEING | I_CLEAR), inode);
 	VFS_BUG_ON_INODE(atomic_read(&inode->i_count) < 2, inode);
 
 	WARN_ON(atomic_sub_return(1, &inode->i_count) == 0);

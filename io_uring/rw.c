@@ -144,19 +144,22 @@ static inline int io_import_rw_buffer(int rw, struct io_kiocb *req,
 	return 0;
 }
 
-static void io_rw_recycle(struct io_kiocb *req, unsigned int issue_flags)
+static bool io_rw_recycle(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_async_rw *rw = req->async_data;
 
 	if (unlikely(issue_flags & IO_URING_F_UNLOCKED))
-		return;
+		return false;
 
 	io_alloc_cache_vec_kasan(&rw->vec);
 	if (rw->vec.nr > IO_VEC_CACHE_SOFT_CAP)
 		io_vec_free(&rw->vec);
 
-	if (io_alloc_cache_put(&req->ctx->rw_cache, rw))
+	if (io_alloc_cache_put(&req->ctx->rw_cache, rw)) {
 		io_req_async_data_clear(req, 0);
+		return true;
+	}
+	return false;
 }
 
 static void io_req_rw_cleanup(struct io_kiocb *req, unsigned int issue_flags)
@@ -186,11 +189,15 @@ static void io_req_rw_cleanup(struct io_kiocb *req, unsigned int issue_flags)
 	 * This is really a bug in the core code that does this, any issue
 	 * path should assume that a successful (or -EIOCBQUEUED) return can
 	 * mean that the underlying data can be gone at any time. But that
-	 * should be fixed seperately, and then this check could be killed.
+	 * should be fixed separately, and then this check could be killed.
 	 */
 	if (!(req->flags & (REQ_F_REISSUE | REQ_F_REFCOUNT))) {
 		req->flags &= ~REQ_F_NEED_CLEANUP;
-		io_rw_recycle(req, issue_flags);
+		if (!io_rw_recycle(req, issue_flags)) {
+			struct io_async_rw *rw = req->async_data;
+
+			io_vec_free(&rw->vec);
+		}
 	}
 }
 
@@ -348,7 +355,7 @@ static int io_prep_rwv(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 
 	/*
 	 * Have to do this validation here, as this is in io_read() rw->len
-	 * might have chanaged due to buffer selection
+	 * might have changed due to buffer selection
 	 */
 	return io_iov_buffer_select_prep(req);
 }
@@ -566,15 +573,17 @@ static inline int io_fixup_rw_res(struct io_kiocb *req, long res)
 	return res;
 }
 
-void io_req_rw_complete(struct io_kiocb *req, io_tw_token_t tw)
+void io_req_rw_complete(struct io_tw_req tw_req, io_tw_token_t tw)
 {
+	struct io_kiocb *req = tw_req.req;
+
 	io_req_io_end(req);
 
 	if (req->flags & (REQ_F_BUFFER_SELECTED|REQ_F_BUFFER_RING))
 		req->cqe.flags |= io_put_kbuf(req, req->cqe.res, NULL);
 
 	io_req_rw_cleanup(req, 0);
-	io_req_task_complete(req, tw);
+	io_req_task_complete(tw_req, tw);
 }
 
 static void io_complete_rw(struct kiocb *kiocb, long res)
@@ -853,7 +862,6 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode, int rw_type)
 	ret = kiocb_set_rw_flags(kiocb, rw->flags, rw_type);
 	if (unlikely(ret))
 		return ret;
-	kiocb->ki_flags |= IOCB_ALLOC_CACHE;
 
 	/*
 	 * If the file is marked O_NONBLOCK, still allow retry for it if it
@@ -1010,7 +1018,7 @@ static int __io_read(struct io_kiocb *req, struct io_br_sel *sel,
 		iov_iter_restore(&io->iter, &io->iter_state);
 	} while (ret > 0);
 done:
-	/* it's faster to check here then delegate to kfree */
+	/* it's faster to check here than delegate to kfree */
 	return ret;
 }
 
