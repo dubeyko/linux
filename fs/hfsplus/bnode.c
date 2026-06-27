@@ -25,6 +25,8 @@ void hfs_bnode_read(struct hfs_bnode *node, void *buf, u32 off, u32 len)
 	struct page **pagep;
 	u32 l;
 
+	memset(buf, 0, len);
+
 	if (!is_bnode_offset_valid(node, off))
 		return;
 
@@ -420,7 +422,10 @@ void hfs_bnode_unlink(struct hfs_bnode *node)
 		tree->root = 0;
 		tree->depth = 0;
 	}
+
+	spin_lock(&tree->hash_lock);
 	set_bit(HFS_BNODE_DELETED, &node->flags);
+	spin_unlock(&tree->hash_lock);
 }
 
 static inline int hfs_bnode_hash(u32 num)
@@ -452,7 +457,7 @@ static struct hfs_bnode *__hfs_bnode_create(struct hfs_btree *tree, u32 cnid)
 	struct hfs_bnode *node, *node2;
 	struct address_space *mapping;
 	struct page *page;
-	int size, block, i, hash;
+	int block, i, hash;
 	loff_t off;
 
 	if (cnid >= tree->node_count) {
@@ -461,9 +466,7 @@ static struct hfs_bnode *__hfs_bnode_create(struct hfs_btree *tree, u32 cnid)
 		return NULL;
 	}
 
-	size = sizeof(struct hfs_bnode) + tree->pages_per_bnode *
-		sizeof(struct page *);
-	node = kzalloc(size, GFP_KERNEL);
+	node = kzalloc_flex(*node, page, tree->pages_per_bnode);
 	if (!node)
 		return NULL;
 	node->tree = tree;

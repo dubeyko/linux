@@ -40,7 +40,7 @@ void komeda_crtc_get_color_config(struct drm_crtc_state *crtc_st,
 
 	/* connector doesn't config any color_format, use RGB444 as default */
 	if (!conn_color_formats)
-		conn_color_formats = DRM_COLOR_FORMAT_RGB444;
+		conn_color_formats = BIT(DRM_OUTPUT_COLOR_FORMAT_RGB444);
 
 	*color_depths = GENMASK(min_bpc, 0);
 	*color_formats = conn_color_formats;
@@ -75,7 +75,7 @@ static void komeda_crtc_update_clock_ratio(struct komeda_crtc_state *kcrtc_st)
  */
 static int
 komeda_crtc_atomic_check(struct drm_crtc *crtc,
-			 struct drm_atomic_state *state)
+			 struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
 									  crtc);
@@ -279,7 +279,7 @@ komeda_crtc_do_flush(struct drm_crtc *crtc,
 
 static void
 komeda_crtc_atomic_enable(struct drm_crtc *crtc,
-			  struct drm_atomic_state *state)
+			  struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *old = drm_atomic_get_old_crtc_state(state,
 								   crtc);
@@ -325,7 +325,7 @@ komeda_crtc_flush_and_wait_for_flip_done(struct komeda_crtc *kcrtc,
 
 static void
 komeda_crtc_atomic_disable(struct drm_crtc *crtc,
-			   struct drm_atomic_state *state)
+			   struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *old = drm_atomic_get_old_crtc_state(state,
 								   crtc);
@@ -387,7 +387,7 @@ komeda_crtc_atomic_disable(struct drm_crtc *crtc,
 
 static void
 komeda_crtc_atomic_flush(struct drm_crtc *crtc,
-			 struct drm_atomic_state *state)
+			 struct drm_atomic_commit *state)
 {
 	struct drm_crtc_state *crtc_state = drm_atomic_get_new_crtc_state(state,
 									  crtc);

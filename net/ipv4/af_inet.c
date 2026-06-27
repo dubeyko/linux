@@ -104,7 +104,6 @@
 #include <net/tcp.h>
 #include <net/psp.h>
 #include <net/udp.h>
-#include <net/udplite.h>
 #include <net/ping.h>
 #include <linux/skbuff.h>
 #include <net/sock.h>
@@ -853,16 +852,17 @@ int inet_send_prepare(struct sock *sk)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(inet_send_prepare);
 
 int inet_sendmsg(struct socket *sock, struct msghdr *msg, size_t size)
 {
 	struct sock *sk = sock->sk;
+	const struct proto *prot;
 
 	if (unlikely(inet_send_prepare(sk)))
 		return -EAGAIN;
 
-	return INDIRECT_CALL_2(sk->sk_prot->sendmsg, tcp_sendmsg, udp_sendmsg,
+	prot = READ_ONCE(sk->sk_prot);
+	return INDIRECT_CALL_2(prot->sendmsg, tcp_sendmsg, udp_sendmsg,
 			       sk, msg, size);
 }
 EXPORT_SYMBOL(inet_sendmsg);
@@ -880,25 +880,19 @@ void inet_splice_eof(struct socket *sock)
 	if (prot->splice_eof)
 		prot->splice_eof(sock);
 }
-EXPORT_SYMBOL_GPL(inet_splice_eof);
 
-INDIRECT_CALLABLE_DECLARE(int udp_recvmsg(struct sock *, struct msghdr *,
-					  size_t, int, int *));
 int inet_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		 int flags)
 {
 	struct sock *sk = sock->sk;
-	int addr_len = 0;
-	int err;
+	const struct proto *prot;
 
 	if (likely(!(flags & MSG_ERRQUEUE)))
 		sock_rps_record_flow(sk);
 
-	err = INDIRECT_CALL_2(sk->sk_prot->recvmsg, tcp_recvmsg, udp_recvmsg,
-			      sk, msg, size, flags, &addr_len);
-	if (err >= 0)
-		msg->msg_namelen = addr_len;
-	return err;
+	prot = READ_ONCE(sk->sk_prot);
+	return INDIRECT_CALL_2(prot->recvmsg, tcp_recvmsg, udp_recvmsg,
+			       sk, msg, size, flags);
 }
 EXPORT_SYMBOL(inet_recvmsg);
 
@@ -1095,6 +1089,7 @@ const struct proto_ops inet_stream_ops = {
 	.compat_ioctl	   = inet_compat_ioctl,
 #endif
 	.set_rcvlowat	   = tcp_set_rcvlowat,
+	.set_rcvbuf	   = tcp_set_rcvbuf,
 };
 EXPORT_SYMBOL(inet_stream_ops);
 
@@ -1352,7 +1347,6 @@ int inet_sk_rebuild_header(struct sock *sk)
 
 	return err;
 }
-EXPORT_SYMBOL(inet_sk_rebuild_header);
 
 void inet_sk_set_state(struct sock *sk, int state)
 {
@@ -1543,6 +1537,7 @@ out:
 
 	return pp;
 }
+EXPORT_INDIRECT_CALLABLE(inet_gro_receive);
 
 static struct sk_buff *ipip_gro_receive(struct list_head *head,
 					struct sk_buff *skb)
@@ -1581,17 +1576,16 @@ __be32 inet_current_timestamp(void)
 	/* Convert to network byte order. */
 	return htonl(msecs);
 }
-EXPORT_SYMBOL(inet_current_timestamp);
 
-int inet_recv_error(struct sock *sk, struct msghdr *msg, int len, int *addr_len)
+int inet_recv_error(struct sock *sk, struct msghdr *msg, int len)
 {
 	unsigned int family = READ_ONCE(sk->sk_family);
 
 	if (family == AF_INET)
-		return ip_recv_error(sk, msg, len, addr_len);
+		return ip_recv_error(sk, msg, len);
 #if IS_ENABLED(CONFIG_IPV6)
 	if (family == AF_INET6)
-		return pingv6_ops.ipv6_recv_error(sk, msg, len, addr_len);
+		return pingv6_ops.ipv6_recv_error(sk, msg, len);
 #endif
 	return -EINVAL;
 }
@@ -1628,6 +1622,7 @@ int inet_gro_complete(struct sk_buff *skb, int nhoff)
 out:
 	return err;
 }
+EXPORT_INDIRECT_CALLABLE(inet_gro_complete);
 
 static int ipip_gro_complete(struct sk_buff *skb, int nhoff)
 {
@@ -1666,7 +1661,6 @@ unsigned long snmp_fold_field(void __percpu *mib, int offt)
 		res += snmp_get_cpu_field(mib, i, offt);
 	return res;
 }
-EXPORT_SYMBOL_GPL(snmp_fold_field);
 
 #if BITS_PER_LONG==32
 
@@ -1687,7 +1681,6 @@ u64 snmp_get_cpu_field64(void __percpu *mib, int cpu, int offt,
 
 	return v;
 }
-EXPORT_SYMBOL_GPL(snmp_get_cpu_field64);
 
 u64 snmp_fold_field64(void __percpu *mib, int offt, size_t syncp_offset)
 {
@@ -1699,7 +1692,6 @@ u64 snmp_fold_field64(void __percpu *mib, int offt, size_t syncp_offset)
 	}
 	return res;
 }
-EXPORT_SYMBOL_GPL(snmp_fold_field64);
 #endif
 
 #ifdef CONFIG_IP_MULTICAST
@@ -1737,9 +1729,6 @@ static __net_init int ipv4_mib_init_net(struct net *net)
 	net->mib.udp_statistics = alloc_percpu(struct udp_mib);
 	if (!net->mib.udp_statistics)
 		goto err_udp_mib;
-	net->mib.udplite_statistics = alloc_percpu(struct udp_mib);
-	if (!net->mib.udplite_statistics)
-		goto err_udplite_mib;
 	net->mib.icmp_statistics = alloc_percpu(struct icmp_mib);
 	if (!net->mib.icmp_statistics)
 		goto err_icmp_mib;
@@ -1753,8 +1742,6 @@ static __net_init int ipv4_mib_init_net(struct net *net)
 err_icmpmsg_mib:
 	free_percpu(net->mib.icmp_statistics);
 err_icmp_mib:
-	free_percpu(net->mib.udplite_statistics);
-err_udplite_mib:
 	free_percpu(net->mib.udp_statistics);
 err_udp_mib:
 	free_percpu(net->mib.net_statistics);
@@ -1770,7 +1757,6 @@ static __net_exit void ipv4_mib_exit_net(struct net *net)
 {
 	kfree(net->mib.icmpmsg_statistics);
 	free_percpu(net->mib.icmp_statistics);
-	free_percpu(net->mib.udplite_statistics);
 	free_percpu(net->mib.udp_statistics);
 	free_percpu(net->mib.net_statistics);
 	free_percpu(net->mib.ip_statistics);
@@ -1985,9 +1971,6 @@ static int __init inet_init(void)
 
 	/* Setup UDP memory threshold */
 	udp_init();
-
-	/* Add UDP-Lite (RFC 3828) */
-	udplite4_register();
 
 	raw_init();
 

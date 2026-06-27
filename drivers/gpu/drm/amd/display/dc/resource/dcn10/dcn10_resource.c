@@ -764,6 +764,7 @@ static struct link_encoder *dcn10_link_encoder_create(
 	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
+	(void)ctx;
 	struct dcn10_link_encoder *enc10 =
 		kzalloc_obj(struct dcn10_link_encoder);
 	int link_regs_id;
@@ -975,7 +976,7 @@ static void dcn10_resource_destruct(struct dcn10_resource_pool *pool)
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		if (pool->base.engines[i] != NULL)
 			dce110_engine_destroy(&pool->base.engines[i]);
 		kfree(pool->base.hw_i2cs[i]);
@@ -1082,6 +1083,7 @@ static enum dc_status build_mapped_resource(
 		struct dc_state *context,
 		struct dc_stream_state *stream)
 {
+	(void)dc;
 	struct pipe_ctx *pipe_ctx = resource_get_otg_master_for_stream(&context->res_ctx, stream);
 
 	if (!pipe_ctx)
@@ -1116,6 +1118,7 @@ static struct pipe_ctx *dcn10_acquire_free_pipe_for_layer(
 		const struct resource_pool *pool,
 		const struct pipe_ctx *opp_head_pipe)
 {
+	(void)cur_ctx;
 	struct resource_context *res_ctx = &new_ctx->res_ctx;
 	struct pipe_ctx *head_pipe = resource_get_otg_master_for_stream(res_ctx, opp_head_pipe->stream);
 	struct pipe_ctx *idle_pipe = resource_find_free_secondary_pipe_legacy(res_ctx, pool, head_pipe);
@@ -1136,7 +1139,7 @@ static struct pipe_ctx *dcn10_acquire_free_pipe_for_layer(
 	idle_pipe->plane_res.hubp = pool->hubps[idle_pipe->pipe_idx];
 	idle_pipe->plane_res.ipp = pool->ipps[idle_pipe->pipe_idx];
 	idle_pipe->plane_res.dpp = pool->dpps[idle_pipe->pipe_idx];
-	idle_pipe->plane_res.mpcc_inst = pool->dpps[idle_pipe->pipe_idx]->inst;
+	idle_pipe->plane_res.mpcc_inst = (uint8_t)pool->dpps[idle_pipe->pipe_idx]->inst;
 
 	return idle_pipe;
 }
@@ -1178,7 +1181,8 @@ static enum dc_status dcn10_validate_plane(const struct dc_plane_state *plane_st
 {
 	if (plane_state->format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN
 			&& caps->max_video_width != 0
-			&& plane_state->src_rect.width > caps->max_video_width)
+			&& plane_state->src_rect.width > 0
+			&& (unsigned int)plane_state->src_rect.width > caps->max_video_width)
 		return DC_FAIL_SURFACE_VALIDATE;
 
 	return DC_OK;
@@ -1263,7 +1267,7 @@ struct stream_encoder *dcn10_find_first_free_match_stream_enc_for_link(
 		const struct resource_pool *pool,
 		struct dc_stream_state *stream)
 {
-	int i;
+	unsigned int i;
 	int j = -1;
 	struct dc_link *link = stream->link;
 
@@ -1275,7 +1279,7 @@ struct stream_encoder *dcn10_find_first_free_match_stream_enc_for_link(
 			 */
 
 			if (pool->stream_enc[i]->id != ENGINE_ID_VIRTUAL)
-				j = i;
+				j = (int)i;
 
 			if (link->ep_type == DISPLAY_ENDPOINT_PHY && pool->stream_enc[i]->id ==
 					link->link_enc->preferred_engine)
@@ -1306,6 +1310,12 @@ static const struct dc_cap_funcs cap_funcs = {
 	.get_dcc_compression_cap = dcn10_get_dcc_compression_cap
 };
 
+void dcn10_get_default_tiling_info(struct dc_tiling_info *tiling_info)
+{
+	tiling_info->gfxversion = DcGfxVersion9;
+	tiling_info->gfx9.swizzle = DC_SW_LINEAR;
+}
+
 static const struct resource_funcs dcn10_res_pool_funcs = {
 	.destroy = dcn10_destroy_resource_pool,
 	.link_enc_create = dcn10_link_encoder_create,
@@ -1317,7 +1327,8 @@ static const struct resource_funcs dcn10_res_pool_funcs = {
 	.add_stream_to_ctx = dcn10_add_stream_to_ctx,
 	.patch_unknown_plane_state = dcn10_patch_unknown_plane_state,
 	.find_first_free_match_stream_enc_for_link = dcn10_find_first_free_match_stream_enc_for_link,
-	.get_vstartup_for_pipe = dcn10_get_vstartup_for_pipe
+	.get_vstartup_for_pipe = dcn10_get_vstartup_for_pipe,
+	.get_default_tiling_info = dcn10_get_default_tiling_info
 };
 
 static uint32_t read_pipe_fuses(struct dc_context *ctx)
@@ -1330,7 +1341,7 @@ static uint32_t read_pipe_fuses(struct dc_context *ctx)
 
 static bool verify_clock_values(struct dm_pp_clock_levels_with_voltage *clks)
 {
-	int i;
+	unsigned int i;
 
 	if (clks->num_levels == 0)
 		return false;
@@ -1348,7 +1359,7 @@ static bool dcn10_resource_construct(
 	struct dc *dc,
 	struct dcn10_resource_pool *pool)
 {
-	int i;
+	unsigned int i;
 	int j;
 	struct dc_context *ctx = dc->ctx;
 	uint32_t pipe_fuses = read_pipe_fuses(ctx);
@@ -1372,7 +1383,7 @@ static bool dcn10_resource_construct(
 	/*************************************************
 	 *  Resource + asic cap harcoding                *
 	 *************************************************/
-	pool->base.underlay_pipe_index = NO_UNDERLAY_PIPE;
+	pool->base.underlay_pipe_index = (unsigned int)NO_UNDERLAY_PIPE;
 
 	/* max pipe num for ASIC before check pipe fuses */
 	pool->base.pipe_count = pool->base.res_cap->num_timing_generator;
@@ -1643,7 +1654,7 @@ static bool dcn10_resource_construct(
 		j++;
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dcn10_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();
@@ -1725,7 +1736,7 @@ struct resource_pool *dcn10_create_resource_pool(
 	if (!pool)
 		return NULL;
 
-	if (dcn10_resource_construct(init_data->num_virtual_links, dc, pool))
+	if (dcn10_resource_construct((uint8_t)init_data->num_virtual_links, dc, pool))
 		return &pool->base;
 
 	kfree(pool);

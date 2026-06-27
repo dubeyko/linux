@@ -131,8 +131,10 @@ static int sb_write_pointer(struct block_device *bdev, struct blk_zone *zones,
 			u64 bytenr = ALIGN_DOWN(zone_end, BTRFS_SUPER_INFO_SIZE) -
 						BTRFS_SUPER_INFO_SIZE;
 
+			filemap_invalidate_lock_shared(mapping);
 			page[i] = read_cache_page_gfp(mapping,
 					bytenr >> PAGE_SHIFT, GFP_NOFS);
+			filemap_invalidate_unlock_shared(mapping);
 			if (IS_ERR(page[i])) {
 				if (i == 1)
 					btrfs_release_disk_super(super[0]);
@@ -354,12 +356,33 @@ int btrfs_get_dev_zone_info_all_devices(struct btrfs_fs_info *fs_info)
 	return ret;
 }
 
+static int btrfs_get_max_active_zones(struct btrfs_device *device,
+				      struct btrfs_zoned_device_info *zone_info)
+{
+	struct block_device *bdev = device->bdev;
+	int max_active_zones;
+
+	if (unlikely(zone_info->nr_zones < BTRFS_MIN_ACTIVE_ZONES)) {
+		btrfs_err(device->fs_info, "zoned: not enough zones to mount filesystem: %u < %d",
+			  zone_info->nr_zones, BTRFS_MIN_ACTIVE_ZONES);
+		return -EINVAL;
+	}
+
+	max_active_zones = min_not_zero(bdev_max_active_zones(bdev),
+					bdev_max_open_zones(bdev));
+	if (max_active_zones == 0)
+		max_active_zones = min(zone_info->nr_zones / 4,
+				       BTRFS_DEFAULT_MAX_ACTIVE_ZONES);
+
+	zone_info->max_active_zones = max(max_active_zones, BTRFS_MIN_ACTIVE_ZONES);
+	return 0;
+}
+
 int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 {
 	struct btrfs_fs_info *fs_info = device->fs_info;
 	struct btrfs_zoned_device_info *zone_info = NULL;
 	struct block_device *bdev = device->bdev;
-	unsigned int max_active_zones;
 	unsigned int nactive;
 	sector_t nr_sectors;
 	sector_t sector = 0;
@@ -424,19 +447,9 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 	if (!IS_ALIGNED(nr_sectors, zone_sectors))
 		zone_info->nr_zones++;
 
-	max_active_zones = min_not_zero(bdev_max_active_zones(bdev),
-					bdev_max_open_zones(bdev));
-	if (!max_active_zones && zone_info->nr_zones > BTRFS_DEFAULT_MAX_ACTIVE_ZONES)
-		max_active_zones = BTRFS_DEFAULT_MAX_ACTIVE_ZONES;
-	if (max_active_zones && max_active_zones < BTRFS_MIN_ACTIVE_ZONES) {
-		btrfs_err(fs_info,
-"zoned: %s: max active zones %u is too small, need at least %u active zones",
-				 rcu_dereference(device->name), max_active_zones,
-				 BTRFS_MIN_ACTIVE_ZONES);
-		ret = -EINVAL;
+	ret = btrfs_get_max_active_zones(device, zone_info);
+	if (ret)
 		goto out;
-	}
-	zone_info->max_active_zones = max_active_zones;
 
 	zone_info->seq_zones = bitmap_zalloc(zone_info->nr_zones, GFP_KERNEL);
 	if (!zone_info->seq_zones) {
@@ -517,26 +530,29 @@ int btrfs_get_dev_zone_info(struct btrfs_device *device, bool populate_cache)
 		goto out;
 	}
 
-	if (max_active_zones) {
-		if (unlikely(nactive > max_active_zones)) {
-			if (bdev_max_active_zones(bdev) == 0) {
-				max_active_zones = 0;
-				zone_info->max_active_zones = 0;
-				goto validate;
-			}
+	if (unlikely(nactive > zone_info->max_active_zones)) {
+		if (bdev_max_active_zones(bdev) > 0) {
 			btrfs_err(device->fs_info,
-			"zoned: %u active zones on %s exceeds max_active_zones %u",
-					 nactive, rcu_dereference(device->name),
-					 max_active_zones);
+					"zoned: %u active zones on %s exceeds max_active_zones %u",
+					nactive, rcu_dereference(device->name),
+					zone_info->max_active_zones);
 			ret = -EIO;
 			goto out;
 		}
+
+		/*
+		 * This is for backward compatibility with old filesystems that
+		 * have a lot of active zones because the device doesn't report
+		 * a maximum number of zones and we previously didn't care for
+		 * the limit.
+		 */
+		zone_info->max_active_zones = 0;
+	} else {
 		atomic_set(&zone_info->active_zones_left,
-			   max_active_zones - nactive);
+				zone_info->max_active_zones - nactive);
 		set_bit(BTRFS_FS_ACTIVE_ZONE_TRACKING, &fs_info->flags);
 	}
 
-validate:
 	/* Validate superblock log */
 	nr_zones = BTRFS_NR_SB_LOG_ZONES;
 	for (i = 0; i < BTRFS_SUPER_MIRROR_MAX; i++) {
@@ -1311,7 +1327,7 @@ static int btrfs_load_zone_info(struct btrfs_fs_info *fs_info, int zone_idx,
 {
 	struct btrfs_dev_replace *dev_replace = &fs_info->dev_replace;
 	struct btrfs_device *device;
-	int dev_replace_is_ongoing = 0;
+	bool dev_replace_is_ongoing = false;
 	unsigned int nofs_flag;
 	struct blk_zone zone;
 	int ret;
@@ -1699,8 +1715,7 @@ static int btrfs_load_block_group_raid10(struct btrfs_block_group *bg,
 		return -EINVAL;
 	}
 
-	raid0_allocs = kcalloc(map->num_stripes / map->sub_stripes, sizeof(*raid0_allocs),
-			       GFP_NOFS);
+	raid0_allocs = kzalloc_objs(*raid0_allocs, map->num_stripes / map->sub_stripes, GFP_NOFS);
 	if (!raid0_allocs)
 		return -ENOMEM;
 
@@ -1918,7 +1933,7 @@ int btrfs_load_block_group_zone_info(struct btrfs_block_group *cache, bool new)
 
 	cache->physical_map = map;
 
-	zone_info = kcalloc(map->num_stripes, sizeof(*zone_info), GFP_NOFS);
+	zone_info = kzalloc_objs(*zone_info, map->num_stripes, GFP_NOFS);
 	if (!zone_info) {
 		ret = -ENOMEM;
 		goto out;
@@ -2123,9 +2138,8 @@ void btrfs_finish_ordered_zoned(struct btrfs_ordered_extent *ordered)
 	if (test_bit(BTRFS_ORDERED_PREALLOC, &ordered->flags))
 		return;
 
-	ASSERT(!list_empty(&ordered->list));
-	/* The ordered->list can be empty in the above pre-alloc case. */
-	sum = list_first_entry(&ordered->list, struct btrfs_ordered_sum, list);
+	ASSERT(!list_empty(&ordered->csum_list));
+	sum = list_first_entry(&ordered->csum_list, struct btrfs_ordered_sum, list);
 	logical = sum->logical;
 	len = sum->len;
 
@@ -2136,7 +2150,7 @@ void btrfs_finish_ordered_zoned(struct btrfs_ordered_extent *ordered)
 			continue;
 		}
 		if (!btrfs_zoned_split_ordered(ordered, logical, len)) {
-			set_bit(BTRFS_ORDERED_IOERR, &ordered->flags);
+			btrfs_mark_ordered_extent_error(ordered);
 			btrfs_err(fs_info, "failed to split ordered extent");
 			goto out;
 		}
@@ -2156,7 +2170,7 @@ out:
 	 */
 	if ((inode->flags & BTRFS_INODE_NODATASUM) ||
 	    test_bit(BTRFS_FS_STATE_NO_DATA_CSUMS, &fs_info->fs_state)) {
-		while ((sum = list_first_entry_or_null(&ordered->list,
+		while ((sum = list_first_entry_or_null(&ordered->csum_list,
 						       typeof(*sum), list))) {
 			list_del(&sum->list);
 			kfree(sum);
@@ -2384,6 +2398,9 @@ bool btrfs_zone_activate(struct btrfs_block_group *block_group)
 	int i;
 
 	if (!btrfs_is_zoned(block_group->fs_info))
+		return true;
+
+	if (unlikely(btrfs_is_testing(fs_info)))
 		return true;
 
 	map = block_group->physical_map;
@@ -2762,7 +2779,6 @@ void btrfs_zoned_reserve_data_reloc_bg(struct btrfs_fs_info *fs_info)
 	struct btrfs_block_group *bg;
 	struct list_head *bg_list;
 	u64 alloc_flags;
-	bool first = true;
 	bool did_chunk_alloc = false;
 	int index;
 	int ret;
@@ -2779,17 +2795,12 @@ void btrfs_zoned_reserve_data_reloc_bg(struct btrfs_fs_info *fs_info)
 	alloc_flags = btrfs_get_alloc_profile(fs_info, space_info->flags);
 	index = btrfs_bg_flags_to_raid_index(alloc_flags);
 
-	/* Scan the data space_info to find empty block groups. Take the second one. */
 again:
 	bg_list = &space_info->block_groups[index];
 	list_for_each_entry(bg, bg_list, list) {
+
 		if (bg->alloc_offset != 0)
 			continue;
-
-		if (first) {
-			first = false;
-			continue;
-		}
 
 		if (space_info == data_sinfo) {
 			/* Migrate the block group to the data relocation space_info. */
@@ -2802,8 +2813,6 @@ again:
 
 			down_write(&space_info->groups_sem);
 			list_del_init(&bg->list);
-			/* We can assume this as we choose the second empty one. */
-			ASSERT(!list_empty(&space_info->block_groups[index]));
 			up_write(&space_info->groups_sem);
 
 			spin_lock(&space_info->lock);
@@ -2848,7 +2857,6 @@ again:
 		 * We allocated a new block group in the data relocation space_info. We
 		 * can take that one.
 		 */
-		first = false;
 		did_chunk_alloc = true;
 		goto again;
 	}

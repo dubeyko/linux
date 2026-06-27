@@ -5,6 +5,8 @@
 
 #include <drm/drm_managed.h>
 #include <drm/intel/intel-gtt.h>
+#include <drm/intel/intel_gmd_interrupt_regs.h>
+#include <drm/intel/pci_config.h>
 
 #include "gem/i915_gem_internal.h"
 #include "gem/i915_gem_lmem.h"
@@ -27,7 +29,6 @@
 #include "intel_gt_requests.h"
 #include "intel_migrate.h"
 #include "intel_mocs.h"
-#include "intel_pci_config.h"
 #include "intel_rc6.h"
 #include "intel_renderstate.h"
 #include "intel_rps.h"

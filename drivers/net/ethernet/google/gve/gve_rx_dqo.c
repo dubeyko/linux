@@ -21,11 +21,13 @@
 static void gve_rx_free_hdr_bufs(struct gve_priv *priv, struct gve_rx_ring *rx)
 {
 	struct device *hdev = &priv->pdev->dev;
-	int buf_count = rx->dqo.bufq.mask + 1;
 
 	if (rx->dqo.hdr_bufs.data) {
-		dma_free_coherent(hdev, priv->header_buf_size * buf_count,
-				  rx->dqo.hdr_bufs.data, rx->dqo.hdr_bufs.addr);
+		size_t size =
+			(size_t)priv->header_buf_size * rx->dqo.num_buf_states;
+
+		dma_free_coherent(hdev, size, rx->dqo.hdr_bufs.data,
+				  rx->dqo.hdr_bufs.addr);
 		rx->dqo.hdr_bufs.data = NULL;
 	}
 }
@@ -218,7 +220,6 @@ int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 {
 	struct device *hdev = &priv->pdev->dev;
 	struct page_pool *pool;
-	int qpl_page_cnt;
 	size_t size;
 	u32 qpl_id;
 
@@ -246,7 +247,7 @@ int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 	XSK_CHECK_PRIV_TYPE(struct gve_xdp_buff);
 
 	rx->dqo.num_buf_states = cfg->raw_addressing ? buffer_queue_slots :
-		gve_get_rx_pages_per_qpl_dqo(cfg->ring_size);
+		cfg->pages_per_qpl;
 	rx->dqo.buf_states = kvcalloc_node(rx->dqo.num_buf_states,
 					   sizeof(rx->dqo.buf_states[0]),
 					   GFP_KERNEL, priv->numa_node);
@@ -255,7 +256,7 @@ int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 
 	/* Allocate header buffers for header-split */
 	if (cfg->enable_header_split)
-		if (gve_rx_alloc_hdr_bufs(priv, rx, buffer_queue_slots))
+		if (gve_rx_alloc_hdr_bufs(priv, rx, rx->dqo.num_buf_states))
 			goto err;
 
 	/* Allocate RX completion queue */
@@ -281,10 +282,9 @@ int gve_rx_alloc_ring_dqo(struct gve_priv *priv,
 		rx->dqo.page_pool = pool;
 	} else {
 		qpl_id = gve_get_rx_qpl_id(cfg->qcfg_tx, rx->q_num);
-		qpl_page_cnt = gve_get_rx_pages_per_qpl_dqo(cfg->ring_size);
 
 		rx->dqo.qpl = gve_alloc_queue_page_list(priv, qpl_id,
-							qpl_page_cnt);
+							cfg->pages_per_qpl);
 		if (!rx->dqo.qpl)
 			goto err;
 		rx->dqo.next_qpl_page_idx = 0;
@@ -383,10 +383,13 @@ void gve_rx_post_buffers_dqo(struct gve_rx_ring *rx)
 			break;
 		}
 
-		if (rx->dqo.hdr_bufs.data)
+		if (rx->dqo.hdr_bufs.data) {
+			u16 buf_id = le16_to_cpu(desc->buf_id);
+
 			desc->header_buf_addr =
 				cpu_to_le64(rx->dqo.hdr_bufs.addr +
-					    priv->header_buf_size * bufq->tail);
+					(size_t)priv->header_buf_size * buf_id);
+		}
 
 		bufq->tail = (bufq->tail + 1) & bufq->mask;
 		complq->num_free_slots--;
@@ -828,10 +831,13 @@ static int gve_rx_dqo(struct napi_struct *napi, struct gve_rx_ring *rx,
 		int unsplit = 0;
 
 		if (hdr_len && !hbo) {
-			rx->ctx.skb_head = gve_rx_copy_data(priv->dev, napi,
-							    rx->dqo.hdr_bufs.data +
-							    desc_idx * priv->header_buf_size,
-							    hdr_len);
+			size_t offset =
+				(size_t)buffer_id * priv->header_buf_size;
+
+			rx->ctx.skb_head =
+				gve_rx_copy_data(priv->dev, napi,
+						 rx->dqo.hdr_bufs.data + offset,
+						 hdr_len);
 			if (unlikely(!rx->ctx.skb_head))
 				goto error;
 			rx->ctx.skb_tail = rx->ctx.skb_head;
@@ -944,10 +950,17 @@ static int gve_rx_complete_rsc(struct sk_buff *skb,
 			       struct gve_ptype ptype)
 {
 	struct skb_shared_info *shinfo = skb_shinfo(skb);
+	int rsc_segments, rsc_seg_len, hdr_len;
+	skb_frag_t *frag;
+	void *va;
 
-	/* Only TCP is supported right now. */
+	/* HW-GRO only coalesces TCP. */
 	if (ptype.l4_type != GVE_L4_TYPE_TCP)
 		return -EINVAL;
+
+	rsc_seg_len = le16_to_cpu(desc->rsc_seg_len);
+	if (!rsc_seg_len)
+		return 0;
 
 	switch (ptype.l3_type) {
 	case GVE_L3_TYPE_IPV4:
@@ -960,7 +973,31 @@ static int gve_rx_complete_rsc(struct sk_buff *skb,
 		return -EINVAL;
 	}
 
-	shinfo->gso_size = le16_to_cpu(desc->rsc_seg_len);
+	if (skb_headlen(skb)) {
+		/* With header-split, payload is in the non-linear part */
+		rsc_segments = DIV_ROUND_UP(skb->data_len, rsc_seg_len);
+	} else {
+		/* HW-GRO packets are guaranteed to have complete TCP/IP
+		 * headers in frag[0] when header-split is not enabled.
+		 */
+		frag = &skb_shinfo(skb)->frags[0];
+		va = skb_frag_address(frag);
+		hdr_len =
+			eth_get_headlen(skb->dev, va, skb_frag_size(frag));
+		rsc_segments = DIV_ROUND_UP(skb->len - hdr_len, rsc_seg_len);
+		skb_copy_to_linear_data(skb, va, hdr_len);
+		skb_frag_size_sub(frag, hdr_len);
+		/* Verify we didn't empty the fragment completely as that could
+		 * otherwise lead to page leaks.
+		 */
+		DEBUG_NET_WARN_ON_ONCE(!skb_frag_size(frag));
+		skb_frag_off_add(frag, hdr_len);
+		skb->data_len -= hdr_len;
+		skb->tail += hdr_len;
+	}
+	shinfo->gso_size = rsc_seg_len;
+	shinfo->gso_segs = rsc_segments;
+
 	return 0;
 }
 
@@ -993,7 +1030,7 @@ static int gve_rx_complete_skb(struct gve_rx_ring *rx, struct napi_struct *napi,
 			return err;
 	}
 
-	if (skb_headlen(rx->ctx.skb_head) == 0)
+	if (rx->ctx.skb_head == napi->skb)
 		napi_gro_frags(napi);
 	else
 		napi_gro_receive(napi, rx->ctx.skb_head);

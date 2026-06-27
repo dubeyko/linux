@@ -406,6 +406,12 @@ static inline uint8_t is_hdmi_dvi_sl_hdcp(struct mod_hdcp *hdcp)
 	return (hdcp->connection.link.mode == MOD_HDCP_MODE_DEFAULT);
 }
 
+static inline uint8_t is_frl_hdcp(struct mod_hdcp *hdcp)
+{
+	return (hdcp->connection.link.mode == MOD_HDCP_MODE_DEFAULT &&
+			hdcp->connection.link.hdmi.frl_enabled);
+}
+
 /* hdcp state helpers */
 static inline uint8_t current_state(struct mod_hdcp *hdcp)
 {
@@ -501,6 +507,7 @@ static inline void callback_in_ms(uint16_t time, struct mod_hdcp_output *output)
 static inline void set_watchdog_in_ms(struct mod_hdcp *hdcp, uint16_t time,
 		struct mod_hdcp_output *output)
 {
+	(void)hdcp;
 	output->watchdog_timer_needed = 1;
 	output->watchdog_timer_delay = time;
 }

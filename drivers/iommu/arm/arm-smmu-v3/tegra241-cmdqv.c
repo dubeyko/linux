@@ -367,9 +367,9 @@ static irqreturn_t tegra241_cmdqv_isr(int irq, void *devid)
 
 /* Command Queue Function */
 
-static bool tegra241_guest_vcmdq_supports_cmd(struct arm_smmu_cmdq_ent *ent)
+static bool tegra241_guest_vcmdq_supports_cmd(struct arm_smmu_cmd *cmd)
 {
-	switch (ent->opcode) {
+	switch (FIELD_GET(CMDQ_0_OP, cmd->data[0])) {
 	case CMDQ_OP_TLBI_NH_ASID:
 	case CMDQ_OP_TLBI_NH_VA:
 	case CMDQ_OP_ATC_INV:
@@ -381,7 +381,7 @@ static bool tegra241_guest_vcmdq_supports_cmd(struct arm_smmu_cmdq_ent *ent)
 
 static struct arm_smmu_cmdq *
 tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu,
-			struct arm_smmu_cmdq_ent *ent)
+			struct arm_smmu_cmd *cmd)
 {
 	struct tegra241_cmdqv *cmdqv =
 		container_of(smmu, struct tegra241_cmdqv, smmu);
@@ -409,7 +409,7 @@ tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu,
 		return NULL;
 
 	/* Unsupported CMD goes for smmu->cmdq pathway */
-	if (!arm_smmu_cmdq_supports_cmd(&vcmdq->cmdq, ent))
+	if (!arm_smmu_cmdq_supports_cmd(&vcmdq->cmdq, cmd))
 		return NULL;
 	return &vcmdq->cmdq;
 }
@@ -427,16 +427,16 @@ tegra241_cmdqv_get_cmdq(struct arm_smmu_device *smmu,
 static void tegra241_vcmdq_hw_flush_timeout(struct tegra241_vcmdq *vcmdq)
 {
 	struct arm_smmu_device *smmu = &vcmdq->cmdqv->smmu;
-	u64 cmd_sync[CMDQ_ENT_DWORDS] = {};
+	struct arm_smmu_cmd cmd_sync = {};
 
-	cmd_sync[0] = FIELD_PREP(CMDQ_0_OP, CMDQ_OP_CMD_SYNC) |
-		      FIELD_PREP(CMDQ_SYNC_0_CS, CMDQ_SYNC_0_CS_NONE);
+	cmd_sync.data[0] = FIELD_PREP(CMDQ_0_OP, CMDQ_OP_CMD_SYNC) |
+			   FIELD_PREP(CMDQ_SYNC_0_CS, CMDQ_SYNC_0_CS_NONE);
 
 	/*
 	 * It does not hurt to insert another CMD_SYNC, taking advantage of the
 	 * arm_smmu_cmdq_issue_cmdlist() that waits for the CMD_SYNC completion.
 	 */
-	arm_smmu_cmdq_issue_cmdlist(smmu, &smmu->cmdq, cmd_sync, 1, true);
+	arm_smmu_cmdq_issue_cmdlist(smmu, &smmu->cmdq, &cmd_sync, 1, true);
 }
 
 /* This function is for LVCMDQ, so @vcmdq must not be unmapped yet */
@@ -478,6 +478,10 @@ static int tegra241_vcmdq_hw_init(struct tegra241_vcmdq *vcmdq)
 
 	/* Reset VCMDQ */
 	tegra241_vcmdq_hw_deinit(vcmdq);
+
+	/* vintf->hyp_own is a HW state finalized in tegra241_vintf_hw_init() */
+	if (!vcmdq->vintf->hyp_own)
+		vcmdq->cmdq.supports_cmd = tegra241_guest_vcmdq_supports_cmd;
 
 	/* Configure and enable VCMDQ */
 	writeq_relaxed(vcmdq->cmdq.q.q_base, REG_VCMDQ_PAGE1(vcmdq, BASE));
@@ -638,9 +642,6 @@ static int tegra241_vcmdq_alloc_smmu_cmdq(struct tegra241_vcmdq *vcmdq)
 	/* ...override q_base to write VCMDQ_BASE registers */
 	q->q_base = q->base_dma & VCMDQ_ADDR;
 	q->q_base |= FIELD_PREP(VCMDQ_LOG2SIZE, q->llq.max_n_shift);
-
-	if (!vcmdq->vintf->hyp_own)
-		cmdq->supports_cmd = tegra241_guest_vcmdq_supports_cmd;
 
 	return arm_smmu_cmdq_init(smmu, cmdq);
 }

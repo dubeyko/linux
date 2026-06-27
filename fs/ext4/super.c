@@ -161,7 +161,7 @@ MODULE_ALIAS("ext3");
 
 
 static inline void __ext4_read_bh(struct buffer_head *bh, blk_opf_t op_flags,
-				  bh_end_io_t *end_io, bool simu_fail)
+				  bio_end_io_t end_io, bool simu_fail)
 {
 	if (simu_fail) {
 		clear_buffer_uptodate(bh);
@@ -176,13 +176,13 @@ static inline void __ext4_read_bh(struct buffer_head *bh, blk_opf_t op_flags,
 	 */
 	clear_buffer_verified(bh);
 
-	bh->b_end_io = end_io ? end_io : end_buffer_read_sync;
-	get_bh(bh);
-	submit_bh(REQ_OP_READ | op_flags, bh);
+	if (!end_io)
+		end_io = bh_end_read;
+	bh_submit(bh, REQ_OP_READ | op_flags, end_io);
 }
 
 void ext4_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags,
-			 bh_end_io_t *end_io, bool simu_fail)
+			 bio_end_io_t end_io, bool simu_fail)
 {
 	BUG_ON(!buffer_locked(bh));
 
@@ -194,7 +194,7 @@ void ext4_read_bh_nowait(struct buffer_head *bh, blk_opf_t op_flags,
 }
 
 int ext4_read_bh(struct buffer_head *bh, blk_opf_t op_flags,
-		 bh_end_io_t *end_io, bool simu_fail)
+		 bio_end_io_t end_io, bool simu_fail)
 {
 	BUG_ON(!buffer_locked(bh));
 
@@ -521,6 +521,7 @@ static bool ext4_journalled_writepage_needs_redirty(struct jbd2_inode *jinode,
 {
 	struct buffer_head *bh, *head;
 	struct journal_head *jh;
+	transaction_t *trans = READ_ONCE(jinode->i_transaction);
 
 	bh = head = folio_buffers(folio);
 	do {
@@ -539,7 +540,7 @@ static bool ext4_journalled_writepage_needs_redirty(struct jbd2_inode *jinode,
 		 */
 		jh = bh2jh(bh);
 		if (buffer_dirty(bh) ||
-		    (jh && (jh->b_transaction != jinode->i_transaction ||
+		    (jh && (jh->b_transaction != trans ||
 			    jh->b_next_transaction)))
 			return true;
 	} while ((bh = bh->b_this_page) != head);
@@ -550,14 +551,19 @@ static bool ext4_journalled_writepage_needs_redirty(struct jbd2_inode *jinode,
 static int ext4_journalled_submit_inode_data_buffers(struct jbd2_inode *jinode)
 {
 	struct address_space *mapping = jinode->i_vfs_inode->i_mapping;
+	loff_t range_start, range_end;
 	struct writeback_control wbc = {
-		.sync_mode =  WB_SYNC_ALL,
+		.sync_mode = WB_SYNC_ALL,
 		.nr_to_write = LONG_MAX,
-		.range_start = jinode->i_dirty_start,
-		.range_end = jinode->i_dirty_end,
-        };
+	};
 	struct folio *folio = NULL;
 	int error;
+
+	if (!jbd2_jinode_get_dirty_range(jinode, &range_start, &range_end))
+		return 0;
+
+	wbc.range_start = range_start;
+	wbc.range_end = range_end;
 
 	/*
 	 * writeback_iter() already checks for dirty pages and calls
@@ -848,12 +854,12 @@ void __ext4_error_inode(struct inode *inode, const char *function,
 		vaf.va = &args;
 		if (block)
 			printk(KERN_CRIT "EXT4-fs error (device %s): %s:%d: "
-			       "inode #%lu: block %llu: comm %s: %pV\n",
+			       "inode #%llu: block %llu: comm %s: %pV\n",
 			       inode->i_sb->s_id, function, line, inode->i_ino,
 			       block, current->comm, &vaf);
 		else
 			printk(KERN_CRIT "EXT4-fs error (device %s): %s:%d: "
-			       "inode #%lu: comm %s: %pV\n",
+			       "inode #%llu: comm %s: %pV\n",
 			       inode->i_sb->s_id, function, line, inode->i_ino,
 			       current->comm, &vaf);
 		va_end(args);
@@ -888,13 +894,13 @@ void __ext4_error_file(struct file *file, const char *function,
 		vaf.va = &args;
 		if (block)
 			printk(KERN_CRIT
-			       "EXT4-fs error (device %s): %s:%d: inode #%lu: "
+			       "EXT4-fs error (device %s): %s:%d: inode #%llu: "
 			       "block %llu: comm %s: path %s: %pV\n",
 			       inode->i_sb->s_id, function, line, inode->i_ino,
 			       block, current->comm, path, &vaf);
 		else
 			printk(KERN_CRIT
-			       "EXT4-fs error (device %s): %s:%d: inode #%lu: "
+			       "EXT4-fs error (device %s): %s:%d: inode #%llu: "
 			       "comm %s: path %s: %pV\n",
 			       inode->i_sb->s_id, function, line, inode->i_ino,
 			       current->comm, path, &vaf);
@@ -1035,14 +1041,14 @@ void __ext4_warning_inode(const struct inode *inode, const char *function,
 	vaf.fmt = fmt;
 	vaf.va = &args;
 	printk(KERN_WARNING "EXT4-fs warning (device %s): %s:%d: "
-	       "inode #%lu: comm %s: %pV\n", inode->i_sb->s_id,
+	       "inode #%llu: comm %s: %pV\n", inode->i_sb->s_id,
 	       function, line, inode->i_ino, current->comm, &vaf);
 	va_end(args);
 }
 
 void __ext4_grp_locked_error(const char *function, unsigned int line,
 			     struct super_block *sb, ext4_group_t grp,
-			     unsigned long ino, ext4_fsblk_t block,
+			     u64 ino, ext4_fsblk_t block,
 			     const char *fmt, ...)
 __releases(bitlock)
 __acquires(bitlock)
@@ -1061,7 +1067,7 @@ __acquires(bitlock)
 		printk(KERN_CRIT "EXT4-fs error (device %s): %s:%d: group %u, ",
 		       sb->s_id, function, line, grp);
 		if (ino)
-			printk(KERN_CONT "inode %lu: ", ino);
+			printk(KERN_CONT "inode %llu: ", ino);
 		if (block)
 			printk(KERN_CONT "block %llu:",
 			       (unsigned long long) block);
@@ -1170,7 +1176,7 @@ static void dump_orphan_list(struct super_block *sb, struct ext4_sb_info *sbi)
 	list_for_each(l, &sbi->s_orphan) {
 		struct inode *inode = orphan_list_entry(l);
 		printk(KERN_ERR "  "
-		       "inode %s:%lu at %p: mode %o, nlink %d, next %d\n",
+		       "inode %s:%llu at %p: mode %o, nlink %d, next %d\n",
 		       inode->i_sb->s_id, inode->i_ino, inode,
 		       inode->i_mode, inode->i_nlink,
 		       NEXT_ORPHAN(inode));
@@ -1424,6 +1430,10 @@ static struct inode *ext4_alloc_inode(struct super_block *sb)
 	INIT_WORK(&ei->i_rsv_conversion_work, ext4_end_io_rsv_work);
 	ext4_fc_init_inode(&ei->vfs_inode);
 	spin_lock_init(&ei->i_fc_lock);
+	mmb_init(&ei->i_metadata_bhs, &ei->vfs_inode.i_data);
+#ifdef CONFIG_LOCKDEP
+	lockdep_set_subclass(&ei->i_data_sem, I_DATA_SEM_NORMAL);
+#endif
 	return &ei->vfs_inode;
 }
 
@@ -1442,7 +1452,7 @@ static void ext4_free_in_core_inode(struct inode *inode)
 {
 	fscrypt_free_inode(inode);
 	if (!list_empty(&(EXT4_I(inode)->i_fc_list))) {
-		pr_warn("%s: inode %ld still in fc list",
+		pr_warn("%s: inode %llu still in fc list",
 			__func__, inode->i_ino);
 	}
 	kmem_cache_free(ext4_inode_cachep, EXT4_I(inode));
@@ -1452,7 +1462,7 @@ static void ext4_destroy_inode(struct inode *inode)
 {
 	if (ext4_inode_orphan_tracked(inode)) {
 		ext4_msg(inode->i_sb, KERN_ERR,
-			 "Inode %lu (%p): inode tracked as orphan!",
+			 "Inode %llu (%p): inode tracked as orphan!",
 			 inode->i_ino, EXT4_I(inode));
 		print_hex_dump(KERN_INFO, "", DUMP_PREFIX_ADDRESS, 16, 4,
 				EXT4_I(inode), sizeof(struct ext4_inode_info),
@@ -1463,7 +1473,7 @@ static void ext4_destroy_inode(struct inode *inode)
 	if (!(EXT4_SB(inode->i_sb)->s_mount_state & EXT4_ERROR_FS) &&
 	    WARN_ON_ONCE(EXT4_I(inode)->i_reserved_data_blocks))
 		ext4_msg(inode->i_sb, KERN_ERR,
-			 "Inode %lu (%p): i_reserved_data_blocks (%u) not cleared!",
+			 "Inode %llu (%p): i_reserved_data_blocks (%u) not cleared!",
 			 inode->i_ino, EXT4_I(inode),
 			 EXT4_I(inode)->i_reserved_data_blocks);
 }
@@ -1520,7 +1530,8 @@ static void destroy_inodecache(void)
 void ext4_clear_inode(struct inode *inode)
 {
 	ext4_fc_del(inode);
-	invalidate_inode_buffers(inode);
+	if (!EXT4_SB(inode->i_sb)->s_journal)
+		mmb_invalidate(&EXT4_I(inode)->i_metadata_bhs);
 	clear_inode(inode);
 	ext4_discard_preallocations(inode);
 	/*
@@ -4533,6 +4544,7 @@ static void ext4_fast_commit_init(struct super_block *sb)
 	sbi->s_fc_ineligible_tid = 0;
 	mutex_init(&sbi->s_fc_lock);
 	memset(&sbi->s_fc_stats, 0, sizeof(sbi->s_fc_stats));
+	memset(&sbi->s_fc_snap_stats, 0, sizeof(sbi->s_fc_snap_stats));
 	sbi->s_fc_replay_state.fc_regions = NULL;
 	sbi->s_fc_replay_state.fc_regions_size = 0;
 	sbi->s_fc_replay_state.fc_regions_used = 0;
@@ -5902,6 +5914,11 @@ static struct inode *ext4_get_journal_inode(struct super_block *sb,
 		return ERR_PTR(-EFSCORRUPTED);
 	}
 
+#ifdef CONFIG_LOCKDEP
+	lockdep_set_subclass(&EXT4_I(journal_inode)->i_data_sem,
+			     I_DATA_SEM_JOURNAL);
+#endif
+
 	ext4_debug("Journal inode found at %p: %lld bytes\n",
 		  journal_inode, journal_inode->i_size);
 	return journal_inode;
@@ -5969,8 +5986,8 @@ static struct file *ext4_get_journal_blkdev(struct super_block *sb,
 		sb, &fs_holder_ops);
 	if (IS_ERR(bdev_file)) {
 		ext4_msg(sb, KERN_ERR,
-			 "failed to open journal device unknown-block(%u,%u) %ld",
-			 MAJOR(j_dev), MINOR(j_dev), PTR_ERR(bdev_file));
+			 "failed to open journal device unknown-block(%u,%u) %pe",
+			 MAJOR(j_dev), MINOR(j_dev), bdev_file);
 		return bdev_file;
 	}
 
@@ -6308,12 +6325,10 @@ static int ext4_commit_super(struct super_block *sb)
 		clear_buffer_write_io_error(sbh);
 		set_buffer_uptodate(sbh);
 	}
-	get_bh(sbh);
 	/* Clear potential dirty bit if it was journalled update */
 	clear_buffer_dirty(sbh);
-	sbh->b_end_io = end_buffer_write_sync;
-	submit_bh(REQ_OP_WRITE | REQ_SYNC |
-		  (test_opt(sb, BARRIER) ? REQ_FUA : 0), sbh);
+	bh_submit(sbh, REQ_OP_WRITE | REQ_SYNC |
+		  (test_opt(sb, BARRIER) ? REQ_FUA : 0), bh_end_write);
 	wait_on_buffer(sbh);
 	if (buffer_write_io_error(sbh)) {
 		ext4_msg(sb, KERN_ERR, "I/O error while writing "

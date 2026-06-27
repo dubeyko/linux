@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-15 Advanced Micro Devices, Inc.
+ * Copyright 2012-2026 Advanced Micro Devices, Inc.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -32,9 +32,9 @@ struct dc_bios;
 
 /* Contains CRTC vertical/horizontal pixel counters */
 struct crtc_position {
-	int32_t vertical_count;
-	int32_t horizontal_count;
-	int32_t nominal_vcount;
+	uint32_t vertical_count;
+	uint32_t horizontal_count;
+	uint32_t nominal_vcount;
 };
 
 struct dcp_gsl_params {
@@ -106,6 +106,7 @@ enum crc_selection {
 
 enum otg_out_mux_dest {
 	OUT_MUX_DIO = 0,
+	OUT_MUX_HPO_FRL = 1,
 	OUT_MUX_HPO_DP = 2,
 };
 
@@ -321,7 +322,7 @@ struct timing_generator {
 	const struct timing_generator_funcs *funcs;
 	struct dc_bios *bp;
 	struct dc_context *ctx;
-	int inst;
+	uint32_t inst;
 };
 
 struct dc_crtc_timing;
@@ -493,6 +494,10 @@ struct timing_generator_funcs {
 	void (*set_out_mux)(struct timing_generator *tg, enum otg_out_mux_dest dest);
 	void (*set_drr_trigger_window)(struct timing_generator *optc,
 			uint32_t window_start, uint32_t window_end);
+	int (*set_fva_factor)(struct timing_generator *optc, struct fva_adj *fva_adj);
+	int (*get_max_hw_supported_fva_factor)(struct timing_generator *optc,
+		struct dc_crtc_timing *timing,
+		unsigned int max_pixclk_100hz);
 	void (*set_vtotal_change_limit)(struct timing_generator *optc,
 			uint32_t limit);
 	void (*align_vblanks)(struct timing_generator *master_optc,
@@ -518,6 +523,8 @@ struct timing_generator_funcs {
 	bool (*wait_update_lock_status)(struct timing_generator *tg, bool locked);
 	void (*read_otg_state)(struct timing_generator *tg, struct dcn_otg_state *s);
 	void (*optc_read_reg_state)(struct timing_generator *tg, struct dcn_optc_reg_state *optc_reg_state);
+	void (*enable_otg_pwa)(struct timing_generator *tg,  struct otc_pwa_frame_sync *pwa_param);
+	void (*disable_otg_pwa)(struct timing_generator *tg);
 };
 
 #endif

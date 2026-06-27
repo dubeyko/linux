@@ -37,7 +37,10 @@ struct xe_lrc_snapshot {
 	} tail;
 	u32 start_seqno;
 	u32 seqno;
-	u32 ctx_timestamp;
+	u64 ctx_timestamp;
+	u64 ctx_timestamp_ms;
+	u64 queue_timestamp;
+	u64 queue_timestamp_ms;
 	u32 ctx_job_timestamp;
 };
 
@@ -49,6 +52,7 @@ struct xe_lrc_snapshot {
 #define XE_LRC_CREATE_RUNALONE		BIT(0)
 #define XE_LRC_CREATE_PXP		BIT(1)
 #define XE_LRC_CREATE_USER_CTX		BIT(2)
+#define XE_LRC_DISABLE_STATE_CACHE_PERF_FIX	BIT(3)
 
 struct xe_lrc *xe_lrc_create(struct xe_hw_engine *hwe, struct xe_vm *vm,
 			     void *replay_state, u32 ring_size, u16 msix_vec, u32 flags);
@@ -87,6 +91,11 @@ static inline void xe_lrc_put(struct xe_lrc *lrc)
 static inline size_t xe_lrc_ring_size(void)
 {
 	return SZ_16K;
+}
+
+static inline bool xe_lrc_is_multi_queue(struct xe_lrc *lrc)
+{
+	return lrc->multi_queue.primary_lrc;
 }
 
 size_t xe_gt_lrc_hang_replay_size(struct xe_gt *gt, enum xe_engine_class class);
@@ -129,11 +138,15 @@ u32 xe_lrc_parallel_ggtt_addr(struct xe_lrc *lrc);
 struct iosys_map xe_lrc_parallel_map(struct xe_lrc *lrc);
 
 size_t xe_lrc_reg_size(struct xe_device *xe);
-size_t xe_lrc_skip_size(struct xe_device *xe);
+size_t xe_lrc_engine_state_size(struct xe_gt *gt, enum xe_engine_class class);
 
 void xe_lrc_dump_default(struct drm_printer *p,
 			 struct xe_gt *gt,
 			 enum xe_engine_class);
+int xe_lrc_lookup_default_reg_value(struct xe_gt *gt,
+				    enum xe_engine_class hwe_class,
+				    u32 offset,
+				    u32 *value);
 
 u32 *xe_lrc_emit_hwe_state_instructions(struct xe_exec_queue *q, u32 *cs);
 

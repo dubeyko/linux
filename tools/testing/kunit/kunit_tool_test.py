@@ -24,6 +24,7 @@ import kunit_config
 import kunit_parser
 import kunit_kernel
 import kunit_json
+import kunit_junit
 import kunit
 from kunit_printer import stdout
 
@@ -235,9 +236,26 @@ class KUnitParserTest(unittest.TestCase):
 		with open(skipped_log) as file:
 			result = kunit_parser.parse_run_tests(file.readlines(), stdout)
 
+		# The test result is skipped, and the skip reason is valid
+		self.assertEqual(kunit_parser.TestStatus.SKIPPED, result.subtests[1].subtests[1].status)
+		self.assertEqual("this test should be skipped", result.subtests[1].subtests[1].skip_reason)
+
 		# A skipped test does not fail the whole suite.
 		self.assertEqual(kunit_parser.TestStatus.SUCCESS, result.status)
 		self.assertEqual(result.counts, kunit_parser.TestCounts(passed=4, skipped=1))
+
+	def test_skipped_reason_parse(self):
+		skipped_log = _test_data_path('test_skip_all_tests.log')
+		with open(skipped_log) as file:
+			result = kunit_parser.parse_run_tests(file.readlines(), stdout)
+
+		# The first test is skipped, with the correct reaons
+		self.assertEqual(kunit_parser.TestStatus.SKIPPED, result.subtests[0].subtests[0].status)
+		self.assertEqual("all tests skipped", result.subtests[0].subtests[0].skip_reason)
+
+		# The first suite is skipped, with no reason
+		self.assertEqual(kunit_parser.TestStatus.SKIPPED, result.subtests[0].status)
+		self.assertEqual("", result.subtests[0].skip_reason)
 
 	def test_skipped_all_tests(self):
 		skipped_log = _test_data_path('test_skip_all_tests.log')
@@ -529,6 +547,48 @@ class LinuxSourceTreeTest(unittest.TestCase):
 				self.assertIn('kunit.filter_glob=suite.test1', start_calls[0])
 				self.assertIn('kunit.filter_glob=suite.test2', start_calls[1])
 
+	def test_run_kernel_skips_terminal_reset_without_tty(self):
+		def fake_start(unused_args, unused_build_dir):
+			return subprocess.Popen(['printf', 'KTAP version 1\n'],
+						text=True, stdout=subprocess.PIPE)
+
+		non_tty_stdin = mock.Mock()
+		non_tty_stdin.isatty.return_value = False
+
+		with tempfile.TemporaryDirectory('') as build_dir:
+			tree = kunit_kernel.LinuxSourceTree(build_dir, kunitconfig_paths=[os.devnull])
+			with mock.patch.object(tree._ops, 'start', side_effect=fake_start), \
+			     mock.patch.object(kunit_kernel.sys, 'stdin', non_tty_stdin), \
+			     mock.patch.object(kunit_kernel.subprocess, 'call') as mock_call:
+				for _ in tree.run_kernel(build_dir=build_dir):
+					pass
+
+				mock_call.assert_not_called()
+
+	def test_signal_handler_skips_terminal_reset_without_tty(self):
+		non_tty_stdin = mock.Mock()
+		non_tty_stdin.isatty.return_value = False
+		tree = kunit_kernel.LinuxSourceTree('', kunitconfig_paths=[os.devnull])
+
+		with mock.patch.object(kunit_kernel.sys, 'stdin', non_tty_stdin), \
+		     mock.patch.object(kunit_kernel.subprocess, 'call') as mock_call, \
+		     mock.patch.object(kunit_kernel.logging, 'error') as mock_error:
+			tree.signal_handler(signal.SIGINT, None)
+			mock_error.assert_called_once()
+			mock_call.assert_not_called()
+
+	def test_signal_handler_resets_terminal_with_tty(self):
+		tty_stdin = mock.Mock()
+		tty_stdin.isatty.return_value = True
+		tree = kunit_kernel.LinuxSourceTree('', kunitconfig_paths=[os.devnull])
+
+		with mock.patch.object(kunit_kernel.sys, 'stdin', tty_stdin), \
+		     mock.patch.object(kunit_kernel.subprocess, 'call') as mock_call, \
+		     mock.patch.object(kunit_kernel.logging, 'error') as mock_error:
+			tree.signal_handler(signal.SIGINT, None)
+			mock_error.assert_called_once()
+			mock_call.assert_called_once_with(['stty', 'sane'])
+
 	def test_build_reconfig_no_config(self):
 		with tempfile.TemporaryDirectory('') as build_dir:
 			with open(kunit_kernel.get_kunitconfig_path(build_dir), 'w') as f:
@@ -633,6 +693,38 @@ class KUnitJsonTest(unittest.TestCase):
 class StrContains(str):
 	def __eq__(self, other):
 		return self in other
+
+class KUnitJUnitTest(unittest.TestCase):
+	def setUp(self):
+		self.print_mock = mock.patch('kunit_printer.Printer.print').start()
+		self.addCleanup(mock.patch.stopall)
+
+	def _junit_string(self, log_file):
+		with open(_test_data_path(log_file)) as file:
+			test_result = kunit_parser.parse_run_tests(file, stdout)
+			junit_string = kunit_junit.get_junit_result(
+					test=test_result)
+		print(junit_string)
+		return junit_string
+
+	def test_failed_test_junit(self):
+		result = self._junit_string('test_is_test_passed-failure.log')
+		self.assertTrue("<failure>" in result)
+
+	def test_skipped_test_junit(self):
+		result = self._junit_string('test_skip_tests.log')
+		self.assertTrue("<skipped>" in result)
+		self.assertTrue("skipped=\"1\"" in result)
+
+	def test_crashed_test_junit(self):
+		result = self._junit_string('test_kernel_panic_interrupt.log')
+		self.assertTrue("<error>" in result);
+
+	def test_no_tests_junit(self):
+		result = self._junit_string('test_is_test_passed-no_tests_run_with_header.log')
+		self.assertTrue("tests=\"0\"" in result)
+		self.assertFalse("testcase" in result)
+
 
 class KUnitMainTest(unittest.TestCase):
 	def setUp(self):
@@ -881,7 +973,7 @@ class KUnitMainTest(unittest.TestCase):
 		self.linux_source_mock.run_kernel.return_value = ['TAP version 14', 'init: random output'] + want
 
 		got = kunit._list_tests(self.linux_source_mock,
-				     kunit.KunitExecRequest(None, None, False, False, '.kunit', 300, 'suite*', '', None, None, 'suite', False, False))
+				     kunit.KunitExecRequest(None, None, None, False, False, '.kunit', 300, 'suite*', '', None, None, 'suite', False, False, False))
 		self.assertEqual(got, want)
 		# Should respect the user's filter glob when listing tests.
 		self.linux_source_mock.run_kernel.assert_called_once_with(
@@ -894,7 +986,7 @@ class KUnitMainTest(unittest.TestCase):
 
 		# Should respect the user's filter glob when listing tests.
 		mock_tests.assert_called_once_with(mock.ANY,
-				     kunit.KunitExecRequest(None, None, False, False, '.kunit', 300, 'suite*.test*', '', None, None, 'suite', False, False))
+				     kunit.KunitExecRequest(None, None, None, False, False, '.kunit', 300, 'suite*.test*', '', None, None, 'suite', False, False, False))
 		self.linux_source_mock.run_kernel.assert_has_calls([
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite.test*', filter='', filter_action=None, timeout=300),
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite2.test*', filter='', filter_action=None, timeout=300),
@@ -907,12 +999,22 @@ class KUnitMainTest(unittest.TestCase):
 
 		# Should respect the user's filter glob when listing tests.
 		mock_tests.assert_called_once_with(mock.ANY,
-				     kunit.KunitExecRequest(None, None, False, False, '.kunit', 300, 'suite*', '', None, None, 'test', False, False))
+				     kunit.KunitExecRequest(None, None, None, False, False, '.kunit', 300, 'suite*', '', None, None, 'test', False, False, False))
 		self.linux_source_mock.run_kernel.assert_has_calls([
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite.test1', filter='', filter_action=None, timeout=300),
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite.test2', filter='', filter_action=None, timeout=300),
 			mock.call(args=None, build_dir='.kunit', filter_glob='suite2.test1', filter='', filter_action=None, timeout=300),
 		])
+
+	@mock.patch.object(kunit, '_list_tests')
+	@mock.patch.object(sys, 'stdout', new_callable=io.StringIO)
+	def test_list_suites(self, mock_stdout, mock_tests):
+		mock_tests.return_value = ['suite.test1', 'suite.test2', 'suite2.test1']
+		kunit.main(['run', '--list_suites'])
+
+		want = ['suite', 'suite2']
+		output = mock_stdout.getvalue().split()
+		self.assertEqual(output, want)
 
 	@mock.patch.object(sys, 'stdout', new_callable=io.StringIO)
 	def test_list_cmds(self, mock_stdout):

@@ -11,8 +11,8 @@
 
 #include <drm/drm_file.h>
 #include <drm/drm_print.h>
+#include <drm/intel/pci_config.h>
 
-#include "i915_reg.h"
 #include "intel_backlight.h"
 #include "intel_backlight_regs.h"
 #include "intel_connector.h"
@@ -24,7 +24,6 @@
 #include "intel_dp_aux_backlight.h"
 #include "intel_dsi_dcs_backlight.h"
 #include "intel_panel.h"
-#include "intel_pci_config.h"
 #include "intel_pps.h"
 #include "intel_quirks.h"
 

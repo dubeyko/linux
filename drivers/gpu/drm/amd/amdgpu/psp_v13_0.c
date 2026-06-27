@@ -166,7 +166,7 @@ static void psp_v13_0_bootloader_print_status(struct psp_context *psp,
 			bl_status_reg =
 				(SOC15_REG_OFFSET(MP0, 0, regMP0_SMN_C2PMSG_92)
 				 << 2) +
-				adev->asic_funcs->encode_ext_smn_addressing(i);
+				amdgpu_reg_get_smn_base64(adev, MP0_HWIP, i);
 			at += snprintf(bl_status_msg + at,
 				       PSP13_BL_STATUS_SIZE - at,
 				       " status(%02i): 0x%08x", i,
@@ -271,10 +271,9 @@ static int psp_v13_0_bootloader_load_component(struct psp_context  	*psp,
 	if (ret)
 		return ret;
 
-	memset(psp->fw_pri_buf, 0, PSP_1_MEG);
-
-	/* Copy PSP KDB binary to memory */
-	memcpy(psp->fw_pri_buf, bin_desc->start_addr, bin_desc->size_bytes);
+	ret = psp_copy_fw(psp, bin_desc->start_addr, bin_desc->size_bytes);
+	if (ret)
+		return ret;
 
 	/* Provide the PSP KDB to bootloader */
 	WREG32_SOC15(MP0, 0, regMP0_SMN_C2PMSG_36,
@@ -353,10 +352,9 @@ static int psp_v13_0_bootloader_load_sos(struct psp_context *psp)
 	if (ret)
 		return ret;
 
-	memset(psp->fw_pri_buf, 0, PSP_1_MEG);
-
-	/* Copy Secure OS binary to PSP memory */
-	memcpy(psp->fw_pri_buf, psp->sos.start_addr, psp->sos.size_bytes);
+	ret = psp_copy_fw(psp, psp->sos.start_addr, psp->sos.size_bytes);
+	if (ret)
+		return ret;
 
 	/* Provide the PSP secure OS to bootloader */
 	WREG32_SOC15(MP0, 0, regMP0_SMN_C2PMSG_36,

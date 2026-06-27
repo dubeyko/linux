@@ -81,8 +81,13 @@
  * mini-semaphore synchronizes multiple users amongst themselves.
  */
 typedef struct {
-	spinlock_t		slock;
-	int			owned;
+	union {
+		struct slock_owned {
+			int		owned;
+			spinlock_t	slock;
+		};
+		long	combined;
+	};
 	wait_queue_head_t	wq;
 	/*
 	 * We express the mutex-alike socket_lock semantics
@@ -121,14 +126,14 @@ typedef __u64 __bitwise __addrpair;
  *	@skc_bypass_prot_mem: bypass the per-protocol memory accounting for skb
  *	@skc_bound_dev_if: bound device index if != 0
  *	@skc_bind_node: bind hash linkage for various protocol lookup tables
- *	@skc_portaddr_node: second hash linkage for UDP/UDP-Lite protocol
+ *	@skc_portaddr_node: second hash linkage for UDP
  *	@skc_prot: protocol handlers inside a network family
  *	@skc_net: reference to the network namespace of this socket
  *	@skc_v6_daddr: IPV6 destination address
  *	@skc_v6_rcv_saddr: IPV6 source address
  *	@skc_cookie: socket's cookie value
  *	@skc_node: main hash linkage for various protocol lookup tables
- *	@skc_nulls_node: main hash linkage for TCP/UDP/UDP-Lite protocol
+ *	@skc_nulls_node: main hash linkage for TCP
  *	@skc_tx_queue_mapping: tx queue number for this connection
  *	@skc_rx_queue_mapping: rx queue number for this connection
  *	@skc_flags: place holder for sk_flags
@@ -537,7 +542,7 @@ struct sock {
 	rwlock_t		sk_callback_lock;
 	u32			sk_ack_backlog;
 	u32			sk_max_ack_backlog;
-	unsigned long		sk_ino;
+	u64			sk_ino;
 	spinlock_t		sk_peer_lock;
 	int			sk_bind_phc;
 	struct pid		*sk_peer_pid;
@@ -1316,7 +1321,7 @@ struct proto {
 	int			(*sendmsg)(struct sock *sk, struct msghdr *msg,
 					   size_t len);
 	int			(*recvmsg)(struct sock *sk, struct msghdr *msg,
-					   size_t len, int flags, int *addr_len);
+					   size_t len, int flags);
 	void			(*splice_eof)(struct socket *sock);
 	int			(*bind)(struct sock *sk,
 					struct sockaddr_unsized *addr, int addr_len);
@@ -1387,7 +1392,6 @@ struct proto {
 
 	union {
 		struct inet_hashinfo	*hashinfo;
-		struct udp_table	*udp_table;
 		struct raw_hashinfo	*raw_hash;
 		struct smc_hashinfo	*smc_hash;
 	} h;
@@ -1709,7 +1713,6 @@ static inline void lock_sock(struct sock *sk)
 	lock_sock_nested(sk, 0);
 }
 
-void __lock_sock(struct sock *sk);
 void __release_sock(struct sock *sk);
 void release_sock(struct sock *sk);
 
@@ -1847,12 +1850,22 @@ static inline struct sock *sk_clone_lock(const struct sock *sk, const gfp_t prio
 
 struct sk_buff *sock_wmalloc(struct sock *sk, unsigned long size, int force,
 			     gfp_t priority);
-void __sock_wfree(struct sk_buff *skb);
 void sock_wfree(struct sk_buff *skb);
+void __sock_wfree(struct sk_buff *skb);
+void tcp_wfree(struct sk_buff *skb);
+
+static inline bool is_skb_wmem(const struct sk_buff *skb)
+{
+	return skb->destructor == sock_wfree ||
+	       (IS_ENABLED(CONFIG_INET) && skb->destructor == __sock_wfree) ||
+	       (IS_ENABLED(CONFIG_INET) && skb->destructor == tcp_wfree);
+}
+
 struct sk_buff *sock_omalloc(struct sock *sk, unsigned long size,
 			     gfp_t priority);
 void skb_orphan_partial(struct sk_buff *skb);
 void sock_rfree(struct sk_buff *skb);
+void sock_rmem_free(struct sk_buff *skb);
 void sock_efree(struct sk_buff *skb);
 #ifdef CONFIG_INET
 void sock_edemux(struct sk_buff *skb);
@@ -2140,7 +2153,7 @@ static inline void sock_graft(struct sock *sk, struct socket *parent)
 	write_unlock_bh(&sk->sk_callback_lock);
 }
 
-static inline unsigned long sock_i_ino(const struct sock *sk)
+static inline u64 sock_i_ino(const struct sock *sk)
 {
 	/* Paired with WRITE_ONCE() in sock_graft() and sock_orphan() */
 	return READ_ONCE(sk->sk_ino);
@@ -2247,6 +2260,20 @@ static inline void
 sk_dst_reset(struct sock *sk)
 {
 	sk_dst_set(sk, NULL);
+}
+
+/* Re-roll the socket txhash.  On a rehash, IPv6 also drops the cached route
+ * so the next transmit re-selects an ECMP path; IPv4 keeps its route, since
+ * IPv4 ECMP path selection does not use sk_txhash.
+ */
+static inline bool __sk_rethink_txhash_reset_dst(struct sock *sk)
+{
+	if (sk_rethink_txhash(sk)) {
+		if (sk->sk_family == AF_INET6)
+			__sk_dst_reset(sk);
+		return true;
+	}
+	return false;
 }
 
 struct dst_entry *__sk_dst_check(struct sock *sk, u32 cookie);
@@ -2499,12 +2526,23 @@ int __sk_queue_drop_skb(struct sock *sk, struct sk_buff_head *sk_queue,
 					   struct sk_buff *skb));
 int __sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb);
 
-int sock_queue_rcv_skb_reason(struct sock *sk, struct sk_buff *skb,
-			      enum skb_drop_reason *reason);
+enum skb_drop_reason
+sock_queue_rcv_skb_reason(struct sock *sk, struct sk_buff *skb);
 
 static inline int sock_queue_rcv_skb(struct sock *sk, struct sk_buff *skb)
 {
-	return sock_queue_rcv_skb_reason(sk, skb, NULL);
+	enum skb_drop_reason drop_reason = sock_queue_rcv_skb_reason(sk, skb);
+
+	switch (drop_reason) {
+	case SKB_DROP_REASON_SOCKET_RCVBUFF:
+		return -ENOMEM;
+	case SKB_DROP_REASON_PROTO_MEM:
+		return -ENOBUFS;
+	case 0:
+		return 0;
+	default:
+		return -EPERM;
+	}
 }
 
 int sock_queue_err_skb(struct sock *sk, struct sk_buff *skb);

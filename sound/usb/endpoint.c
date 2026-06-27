@@ -1379,9 +1379,6 @@ int snd_usb_endpoint_set_params(struct snd_usb_audio *chip,
 		return -EINVAL;
 	}
 
-	ep->packsize[0] = min(ep->packsize[0], ep->maxframesize);
-	ep->packsize[1] = min(ep->packsize[1], ep->maxframesize);
-
 	/* calculate the frequency in 16.16 format */
 	ep->freqm = ep->freqn;
 	ep->freqshift = INT_MIN;
@@ -1407,6 +1404,9 @@ int snd_usb_endpoint_set_params(struct snd_usb_audio *chip,
 	/* some unit conversions in runtime */
 	ep->maxframesize = ep->maxpacksize / ep->cur_frame_bytes;
 	ep->curframesize = ep->curpacksize / ep->cur_frame_bytes;
+
+	ep->packsize[0] = min(ep->packsize[0], ep->maxframesize);
+	ep->packsize[1] = min(ep->packsize[1], ep->maxframesize);
 
 	err = update_clock_ref_rate(chip, ep);
 	if (err >= 0) {
@@ -1780,8 +1780,16 @@ static void snd_usb_handle_sync_urb(struct snd_usb_endpoint *ep,
 		/*
 		 * skip empty packets. At least M-Audio's Fast Track Ultra stops
 		 * streaming once it received a 0-byte OUT URB
+		 *
+		 * However, on devices where bytes==0 means every sync-source
+		 * packet errored (e.g. Behringer Flow 8 returning -EXDEV bursts
+		 * for entire capture URBs), an unconditional return starves the
+		 * IFB-fed OUT ring permanently. Such devices set
+		 * QUIRK_FLAG_IFB_SILENCE_ON_EMPTY to fall through and enqueue a
+		 * packet_info with size 0 packets, so playback emits silence
+		 * and the OUT ring keeps moving.
 		 */
-		if (bytes == 0)
+		if (bytes == 0 && !(ep->chip->quirk_flags & QUIRK_FLAG_IFB_SILENCE_ON_EMPTY))
 			return;
 
 		spin_lock_irqsave(&ep->lock, flags);

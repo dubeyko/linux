@@ -3,7 +3,7 @@
 [![Dependency status](https://deps.rs/repo/github/Rust-for-Linux/pin-init/status.svg)](https://deps.rs/repo/github/Rust-for-Linux/pin-init)
 ![License](https://img.shields.io/crates/l/pin-init)
 [![Toolchain](https://img.shields.io/badge/toolchain-nightly-red)](#nightly-only)
-![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/Rust-for-Linux/pin-init/test.yml)
+![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/Rust-for-Linux/pin-init/ci.yml)
 # `pin-init`
 
 > [!NOTE]
@@ -160,7 +160,6 @@ actually does the initialization in the correct way. Here are the things to look
 ```rust
 use pin_init::{pin_data, pinned_drop, PinInit, PinnedDrop, pin_init_from_closure};
 use core::{
-    ptr::addr_of_mut,
     marker::PhantomPinned,
     cell::UnsafeCell,
     pin::Pin,
@@ -199,7 +198,7 @@ impl RawFoo {
         unsafe {
             pin_init_from_closure(move |slot: *mut Self| {
                 // `slot` contains uninit memory, avoid creating a reference.
-                let foo = addr_of_mut!((*slot).foo);
+                let foo = &raw mut (*slot).foo;
                 let foo = UnsafeCell::raw_get(foo).cast::<bindings::foo>();
 
                 // Initialize the `foo`

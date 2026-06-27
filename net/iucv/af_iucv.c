@@ -26,6 +26,7 @@
 #include <linux/init.h>
 #include <linux/poll.h>
 #include <linux/security.h>
+#include <linux/uio.h>
 #include <net/sock.h>
 #include <asm/machine.h>
 #include <asm/ebcdic.h>
@@ -127,6 +128,8 @@ static inline void low_nmcpy(unsigned char *dst, char *src)
  * if the socket data len is > 7, the function returns 8.
  *
  * Use this function to allocate socket buffers to store iucv message data.
+ *
+ * Returns: Length of the IUCV message.
  */
 static inline size_t iucv_msg_length(struct iucv_message *msg)
 {
@@ -145,7 +148,7 @@ static inline size_t iucv_msg_length(struct iucv_message *msg)
  * @state:	first iucv sk state
  * @state2:	second iucv sk state
  *
- * Returns true if the socket in either in the first or second state.
+ * Returns: true if the socket is either in the first or second state.
  */
 static int iucv_sock_in_state(struct sock *sk, int state, int state2)
 {
@@ -156,9 +159,9 @@ static int iucv_sock_in_state(struct sock *sk, int state, int state2)
  * iucv_below_msglim() - function to check if messages can be sent
  * @sk:		sock structure
  *
- * Returns true if the send queue length is lower than the message limit.
- * Always returns true if the socket is not connected (no iucv path for
- * checking the message limit).
+ * Returns: true, if either the socket is not connected (no iucv path for
+ * checking the message limit) or if the send queue length is lower
+ * than the message limit.
  */
 static inline int iucv_below_msglim(struct sock *sk)
 {
@@ -883,7 +886,7 @@ static int iucv_sock_getname(struct socket *sock, struct sockaddr *addr,
  * list and the socket data len at index 7 (last byte).
  * See also iucv_msg_length().
  *
- * Returns the error code from the iucv_message_send() call.
+ * Returns: the return code from the iucv_message_send() call.
  */
 static int iucv_send_iprm(struct iucv_path *path, struct iucv_message *msg,
 			  struct sk_buff *skb)
@@ -1533,48 +1536,53 @@ static int iucv_sock_setsockopt(struct socket *sock, int level, int optname,
 }
 
 static int iucv_sock_getsockopt(struct socket *sock, int level, int optname,
-				char __user *optval, int __user *optlen)
+				sockopt_t *opt)
 {
 	struct sock *sk = sock->sk;
 	struct iucv_sock *iucv = iucv_sk(sk);
 	unsigned int val;
-	int len;
+	int len, rc;
 
 	if (level != SOL_IUCV)
 		return -ENOPROTOOPT;
 
-	if (get_user(len, optlen))
-		return -EFAULT;
-
+	len = opt->optlen;
 	if (len < 0)
 		return -EINVAL;
 
 	len = min_t(unsigned int, len, sizeof(int));
 
+	rc = 0;
+
+	lock_sock(sk);
 	switch (optname) {
 	case SO_IPRMDATA_MSG:
 		val = (iucv->flags & IUCV_IPRMDATA) ? 1 : 0;
 		break;
 	case SO_MSGLIMIT:
-		lock_sock(sk);
 		val = (iucv->path != NULL) ? iucv->path->msglim	/* connected */
 					   : iucv->msglimit;	/* default */
-		release_sock(sk);
 		break;
 	case SO_MSGSIZE:
-		if (sk->sk_state == IUCV_OPEN)
-			return -EBADFD;
+		if (sk->sk_state == IUCV_OPEN) {
+			rc = -EBADFD;
+			break;
+		}
 		val = (iucv->hs_dev) ? iucv->hs_dev->mtu -
 				sizeof(struct af_iucv_trans_hdr) - ETH_HLEN :
 				0x7fffffff;
 		break;
 	default:
-		return -ENOPROTOOPT;
+		rc = -ENOPROTOOPT;
+		break;
 	}
+	release_sock(sk);
 
-	if (put_user(len, optlen))
-		return -EFAULT;
-	if (copy_to_user(optval, &val, len))
+	if (rc)
+		return rc;
+
+	opt->optlen = len;
+	if (copy_to_iter(&val, len, &opt->iter_out) != len)
 		return -EFAULT;
 
 	return 0;
@@ -2226,7 +2234,7 @@ static const struct proto_ops iucv_sock_ops = {
 	.socketpair	= sock_no_socketpair,
 	.shutdown	= iucv_sock_shutdown,
 	.setsockopt	= iucv_sock_setsockopt,
-	.getsockopt	= iucv_sock_getsockopt,
+	.getsockopt_iter = iucv_sock_getsockopt,
 };
 
 static int iucv_sock_create(struct net *net, struct socket *sock, int protocol,

@@ -71,6 +71,7 @@
 #include <asm/traps.h>
 #include <asm/sev.h>
 #include <asm/tdx.h>
+#include <asm/virt.h>
 #include <asm/posted_intr.h>
 #include <asm/runtime-const.h>
 
@@ -409,27 +410,29 @@ out:
 	cr4_clear_bits(X86_CR4_UMIP);
 }
 
-static __always_inline void setup_lass(struct cpuinfo_x86 *c)
+static int enable_lass(unsigned int cpu)
+{
+	cr4_set_bits(X86_CR4_LASS);
+
+	return 0;
+}
+
+/*
+ * Finalize features that need to be enabled just before entering
+ * userspace. Note that this only runs on a single CPU. Use appropriate
+ * callbacks if all the CPUs need to reflect the same change.
+ */
+static int cpu_finalize_pre_userspace(void)
 {
 	if (!cpu_feature_enabled(X86_FEATURE_LASS))
-		return;
+		return 0;
 
-	/*
-	 * Legacy vsyscall page access causes a #GP when LASS is active.
-	 * Disable LASS because the #GP handler doesn't support vsyscall
-	 * emulation.
-	 *
-	 * Also disable LASS when running under EFI, as some runtime and
-	 * boot services rely on 1:1 mappings in the lower half.
-	 */
-	if (IS_ENABLED(CONFIG_X86_VSYSCALL_EMULATION) ||
-	    IS_ENABLED(CONFIG_EFI)) {
-		setup_clear_cpu_cap(X86_FEATURE_LASS);
-		return;
-	}
+	/* Runs on all online CPUs and future CPUs that come online. */
+	cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "x86/lass:enable", enable_lass, NULL);
 
-	cr4_set_bits(X86_CR4_LASS);
+	return 0;
 }
+late_initcall(cpu_finalize_pre_userspace);
 
 /* These bits should not change their value after CPU init is finished. */
 static const unsigned long cr4_pinned_mask = X86_CR4_SMEP | X86_CR4_SMAP | X86_CR4_UMIP |
@@ -1734,13 +1737,6 @@ static void __init cpu_parse_early_param(void)
 	int arglen;
 
 #ifdef CONFIG_X86_32
-	if (cmdline_find_option_bool(boot_command_line, "no387"))
-#ifdef CONFIG_MATH_EMULATION
-		setup_clear_cpu_cap(X86_FEATURE_FPU);
-#else
-		pr_err("Option 'no387' required CONFIG_MATH_EMULATION enabled.\n");
-#endif
-
 	if (cmdline_find_option_bool(boot_command_line, "nofxsr"))
 		setup_clear_cpu_cap(X86_FEATURE_FXSR);
 #endif
@@ -1759,7 +1755,7 @@ static void __init cpu_parse_early_param(void)
 
 	/* Minimize the gap between FRED is available and available but disabled. */
 	arglen = cmdline_find_option(boot_command_line, "fred", arg, sizeof(arg));
-	if (arglen != 2 || strncmp(arg, "on", 2))
+	if (arglen == 3 && !strncmp(arg, "off", 3))
 		setup_clear_cpu_cap(X86_FEATURE_FRED);
 
 	arglen = cmdline_find_option(boot_command_line, "clearcpuid", arg, sizeof(arg));
@@ -1788,6 +1784,7 @@ static void __init cpu_parse_early_param(void)
 static void __init early_identify_cpu(struct cpuinfo_x86 *c)
 {
 	memset(&c->x86_capability, 0, sizeof(c->x86_capability));
+	memset(&c->cpuid, 0, sizeof(c->cpuid));
 	c->extended_cpuid_level = 0;
 
 	if (!cpuid_feature())
@@ -1795,6 +1792,7 @@ static void __init early_identify_cpu(struct cpuinfo_x86 *c)
 
 	/* cyrix could have cpuid enabled via c_identify()*/
 	if (cpuid_feature()) {
+		cpuid_scan_cpu(c);
 		cpu_detect(c);
 		get_cpu_vendor(c);
 		intel_unlock_cpuid_leafs(c);
@@ -1967,8 +1965,8 @@ static void generic_identify(struct cpuinfo_x86 *c)
 	if (!cpuid_feature())
 		return;
 
+	cpuid_scan_cpu(c);
 	cpu_detect(c);
-
 	get_cpu_vendor(c);
 	intel_unlock_cpuid_leafs(c);
 	get_cpu_cap(c);
@@ -2020,6 +2018,7 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 #endif
 	c->x86_cache_alignment = c->x86_clflush_size;
 	memset(&c->x86_capability, 0, sizeof(c->x86_capability));
+	memset(&c->cpuid, 0, sizeof(c->cpuid));
 #ifdef CONFIG_X86_VMX_FEATURE_NAMES
 	memset(&c->vmx_capability, 0, sizeof(c->vmx_capability));
 #endif
@@ -2061,7 +2060,6 @@ static void identify_cpu(struct cpuinfo_x86 *c)
 	setup_smep(c);
 	setup_smap(c);
 	setup_umip(c);
-	setup_lass(c);
 
 	/*
 	 * The vendor-specific functions might have changed features.
@@ -2161,6 +2159,7 @@ static __init void identify_boot_cpu(void)
 	cpu_detect_tlb(&boot_cpu_data);
 	setup_cr_pinning();
 
+	x86_virt_init();
 	tsx_init();
 	tdx_init();
 	lkgs_init();

@@ -244,12 +244,12 @@ static int acct_on(const char __user *name)
 	if (!S_ISREG(file_inode(file)->i_mode))
 		return -EACCES;
 
-	/* Exclude kernel kernel internal filesystems. */
+	/* Exclude kernel internal filesystems. */
 	if (file_inode(file)->i_sb->s_flags & (SB_NOUSER | SB_KERNMOUNT))
 		return -EINVAL;
 
 	/* Exclude procfs and sysfs. */
-	if (file_inode(file)->i_sb->s_iflags & SB_I_USERNS_VISIBLE)
+	if (file_inode(file)->i_sb->s_type->fs_flags & FS_USERNS_MOUNT_RESTRICTED)
 		return -EINVAL;
 
 	if (!(file->f_mode & FMODE_CAN_WRITE))

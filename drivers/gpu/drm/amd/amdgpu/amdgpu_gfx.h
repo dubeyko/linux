@@ -71,6 +71,11 @@ enum amdgpu_gfx_partition {
 	AMDGPU_AUTO_COMPUTE_PARTITION_MODE = -2,
 };
 
+enum amdgpu_gfx_partition_mem_alloc_mode {
+	AMDGPU_PARTITION_MEM_CAPPING_EVEN = 0,
+	AMDGPU_PARTITION_MEM_ALLOC_ALL  = 1,
+};
+
 #define NUM_XCC(x) hweight16(x)
 
 enum amdgpu_gfx_ras_mem_id_type {
@@ -463,6 +468,7 @@ struct amdgpu_gfx {
 	struct amdgpu_irq_src		cp_ecc_error_irq;
 	struct amdgpu_irq_src		sq_irq;
 	struct amdgpu_irq_src		rlc_gc_fed_irq;
+	struct amdgpu_irq_src		rlc_poison_irq;
 	struct sq_work			sq_work;
 
 	/* gfx status */
@@ -583,6 +589,8 @@ int amdgpu_gfx_kiq_init(struct amdgpu_device *adev,
 int amdgpu_gfx_mqd_sw_init(struct amdgpu_device *adev,
 			   unsigned mqd_size, int xcc_id);
 void amdgpu_gfx_mqd_sw_fini(struct amdgpu_device *adev, int xcc_id);
+void amdgpu_gfx_mqd_symmetrically_map_cu_mask(struct amdgpu_device *adev, const uint32_t *cu_mask,
+					      uint32_t cu_mask_count, uint32_t *se_mask);
 int amdgpu_gfx_disable_kcq(struct amdgpu_device *adev, int xcc_id);
 int amdgpu_gfx_enable_kcq(struct amdgpu_device *adev, int xcc_id);
 int amdgpu_gfx_disable_kgq(struct amdgpu_device *adev, int xcc_id);
@@ -607,7 +615,8 @@ void amdgpu_gfx_off_ctrl(struct amdgpu_device *adev, bool enable);
 void amdgpu_gfx_off_ctrl_immediate(struct amdgpu_device *adev, bool enable);
 int amdgpu_get_gfx_off_status(struct amdgpu_device *adev, uint32_t *value);
 int amdgpu_gfx_ras_late_init(struct amdgpu_device *adev, struct ras_common_if *ras_block);
-void amdgpu_gfx_ras_fini(struct amdgpu_device *adev);
+void amdgpu_gfx_ras_suspend(struct amdgpu_device *adev, struct ras_common_if *ras_block);
+void amdgpu_gfx_ras_fini(struct amdgpu_device *adev, struct ras_common_if *ras_block);
 int amdgpu_get_gfx_off_entrycount(struct amdgpu_device *adev, u64 *value);
 int amdgpu_get_gfx_off_residency(struct amdgpu_device *adev, u32 *residency);
 int amdgpu_set_gfx_off_residency(struct amdgpu_device *adev, bool value);
@@ -656,6 +665,8 @@ void amdgpu_gfx_csb_preamble_end(u32 *buffer, u32 count);
 void amdgpu_debugfs_gfx_sched_mask_init(struct amdgpu_device *adev);
 void amdgpu_debugfs_compute_sched_mask_init(struct amdgpu_device *adev);
 
+int amdgpu_gfx_ring_preempt_ib(struct amdgpu_ring *ring);
+
 static inline const char *amdgpu_gfx_compute_mode_desc(int mode)
 {
 	switch (mode) {
@@ -669,6 +680,18 @@ static inline const char *amdgpu_gfx_compute_mode_desc(int mode)
 		return "QPX";
 	case AMDGPU_CPX_PARTITION_MODE:
 		return "CPX";
+	default:
+		return "UNKNOWN";
+	}
+}
+
+static inline const char *amdgpu_gfx_compute_mem_alloc_mode_desc(int mode)
+{
+	switch (mode) {
+	case AMDGPU_PARTITION_MEM_CAPPING_EVEN:
+			return "CAPPING";
+	case AMDGPU_PARTITION_MEM_ALLOC_ALL:
+		return "ALL";
 	default:
 		return "UNKNOWN";
 	}

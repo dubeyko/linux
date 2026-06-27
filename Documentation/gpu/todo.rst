@@ -29,6 +29,38 @@ refactorings already and are an expert in the specific area
 Subsystem-wide refactorings
 ===========================
 
+Open-code drm_simple_encoder_init()
+-----------------------------------
+
+The helper drm_simple_encoder_init() was supposed to simplify encoder
+initialization. Instead it only added an intermediate layer between atomic
+modesetting and the DRM driver.
+
+The task here is to remove drm_simple_encoder_init(). Search for a driver
+that calls drm_simple_encoder_init() and inline the helper. The driver will
+also need its own instance of drm_encoder_funcs.
+
+Contact: Thomas Zimmermann, respective driver maintainer
+
+Level: Easy
+
+Replace struct drm_simple_display_pipe with regular atomic helpers
+------------------------------------------------------------------
+
+The data type struct drm_simple_display_pipe and its helpers were supposed
+to simplify driver development. Instead they only added an intermediate layer
+between atomic modesetting and the DRM driver.
+
+There are still drivers that use drm_simple_display_pipe. The task here is to
+convert them to use regular atomic helpers. Search for a driver that calls
+drm_simple_display_pipe_init() and inline all helpers from drm_simple_kms_helper.c
+into the driver, such that no simple-KMS interfaces are required. Please also
+rename all inlined fucntions according to driver conventions.
+
+Contact: Thomas Zimmermann, respective driver maintainer
+
+Level: Easy
+
 Remove custom dumb_map_offset implementations
 ---------------------------------------------
 
@@ -117,29 +149,6 @@ the new atomic_async_check/commit functionality in the helpers in drivers that
 still look at that flag.
 
 Contact: Simona Vetter, respective driver maintainers
-
-Level: Advanced
-
-Rename drm_atomic_state
------------------------
-
-The KMS framework uses two slightly different definitions for the ``state``
-concept. For a given object (plane, CRTC, encoder, etc., so
-``drm_$OBJECT_state``), the state is the entire state of that object. However,
-at the device level, ``drm_atomic_state`` refers to a state update for a
-limited number of objects.
-
-The state isn't the entire device state, but only the full state of some
-objects in that device. This is confusing to newcomers, and
-``drm_atomic_state`` should be renamed to something clearer like
-``drm_atomic_commit``.
-
-In addition to renaming the structure itself, it would also imply renaming some
-related functions (``drm_atomic_state_alloc``, ``drm_atomic_state_get``,
-``drm_atomic_state_put``, ``drm_atomic_state_init``,
-``__drm_atomic_state_free``, etc.).
-
-Contact: Maxime Ripard <mripard@kernel.org>
 
 Level: Advanced
 

@@ -325,7 +325,9 @@ static int search_csum_tree(struct btrfs_fs_info *fs_info,
 
 	csum_start = key.offset;
 	csum_len = (itemsize / csum_size) * sectorsize;
-	ASSERT(in_range(disk_bytenr, csum_start, csum_len));
+	ASSERT(in_range(disk_bytenr, csum_start, csum_len),
+	       "disk_bytenr=%llu csum_start=%llu csum_len=%llu",
+	       disk_bytenr, csum_start, csum_len);
 
 found:
 	ret = (min(csum_start + csum_len, disk_bytenr + len) -
@@ -1097,9 +1099,9 @@ static int find_next_csum_offset(struct btrfs_root *root,
 	return 0;
 }
 
-int btrfs_csum_file_blocks(struct btrfs_trans_handle *trans,
-			   struct btrfs_root *root,
-			   struct btrfs_ordered_sum *sums)
+int btrfs_insert_data_csums(struct btrfs_trans_handle *trans,
+			    struct btrfs_root *root,
+			    struct btrfs_ordered_sum *sums)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct btrfs_key file_key;
@@ -1307,7 +1309,7 @@ found:
 
 	index += ins_size;
 	ins_size /= csum_size;
-	total_bytes += ins_size * fs_info->sectorsize;
+	total_bytes += (ins_size << fs_info->sectorsize_bits);
 
 	if (total_bytes < sums->len) {
 		btrfs_release_path(path);

@@ -17,7 +17,6 @@ struct catpt_dev;
 
 extern const struct attribute_group *catpt_attr_groups[];
 
-void catpt_sram_init(struct resource *sram, u32 start, u32 size);
 void catpt_sram_free(struct resource *sram);
 struct resource *
 catpt_request_region(struct resource *root, resource_size_t size);
@@ -96,7 +95,7 @@ struct catpt_dev {
 	struct catpt_module_type modules[CATPT_MODULE_COUNT];
 	struct catpt_ssp_device_format devfmt[CATPT_SSP_COUNT];
 	struct list_head stream_list;
-	spinlock_t list_lock;
+	struct mutex stream_mutex;
 	struct mutex clk_mutex;
 
 	struct catpt_dx_context dx_ctx;

@@ -247,6 +247,10 @@ static inline int is_syscall_trace_event(struct trace_event_call *tp_event)
 	__diag_push();							\
 	__diag_ignore(GCC, 8, "-Wattribute-alias",			\
 		      "Type aliasing is used to sanitize syscall arguments");\
+	__diag_ignore(clang, 23, "-Wunknown-warning-option",		\
+		      "Avoid breaking versions without -Wattribute-alias");\
+	__diag_ignore(clang, 23, "-Wattribute-alias",			\
+		      "Type aliasing is used to sanitize syscall arguments");\
 	asmlinkage long sys##name(__MAP(x,__SC_DECL,__VA_ARGS__))	\
 		__attribute__((alias(__stringify(__se_sys##name))));	\
 	ALLOW_ERROR_INJECTION(sys##name, ERRNO);			\
@@ -936,7 +940,8 @@ asmlinkage long sys_seccomp(unsigned int op, unsigned int flags,
 asmlinkage long sys_getrandom(char __user *buf, size_t count,
 			      unsigned int flags);
 asmlinkage long sys_memfd_create(const char __user *uname_ptr, unsigned int flags);
-asmlinkage long sys_bpf(int cmd, union bpf_attr __user *attr, unsigned int size);
+asmlinkage long sys_bpf(int cmd, union bpf_attr __user *attr, unsigned int size,
+			struct bpf_common_attr __user *attr_common, unsigned int size_common);
 asmlinkage long sys_execveat(int dfd, const char __user *filename,
 			const char __user *const __user *argv,
 			const char __user *const __user *envp, int flags);
@@ -1283,19 +1288,9 @@ static inline long ksys_lchown(const char __user *filename, uid_t user,
 			     AT_SYMLINK_NOFOLLOW);
 }
 
-int do_sys_ftruncate(unsigned int fd, loff_t length, int small);
-
-static inline long ksys_ftruncate(unsigned int fd, loff_t length)
-{
-	return do_sys_ftruncate(fd, length, 1);
-}
-
-int do_sys_truncate(const char __user *pathname, loff_t length);
-
-static inline long ksys_truncate(const char __user *pathname, loff_t length)
-{
-	return do_sys_truncate(pathname, length);
-}
+#define FTRUNCATE_LFS	(1u << 0)	/* allow truncating > 32-bit */
+int ksys_ftruncate(unsigned int fd, loff_t length, unsigned int flags);
+int ksys_truncate(const char __user *pathname, loff_t length);
 
 static inline unsigned int ksys_personality(unsigned int personality)
 {

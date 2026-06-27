@@ -50,7 +50,7 @@ __nft_set_do_lookup(const struct net *net, const struct nft_set *set,
 	if (set->ops == &nft_set_rbtree_type.ops)
 		return nft_rbtree_lookup(net, set, key);
 
-	WARN_ON_ONCE(1);
+	DEBUG_NET_WARN_ON_ONCE(1);
 #endif
 	return set->ops->lookup(net, set, key);
 }
@@ -125,8 +125,8 @@ static const struct nla_policy nft_lookup_policy[NFTA_LOOKUP_MAX + 1] = {
 	[NFTA_LOOKUP_SET]	= { .type = NLA_STRING,
 				    .len = NFT_SET_MAXNAMELEN - 1 },
 	[NFTA_LOOKUP_SET_ID]	= { .type = NLA_U32 },
-	[NFTA_LOOKUP_SREG]	= { .type = NLA_U32 },
-	[NFTA_LOOKUP_DREG]	= { .type = NLA_U32 },
+	[NFTA_LOOKUP_SREG]	= NLA_POLICY_MAX(NLA_BE32, NFT_REG32_MAX),
+	[NFTA_LOOKUP_DREG]	= NLA_POLICY_MAX(NLA_BE32, NFT_REG32_MAX),
 	[NFTA_LOOKUP_FLAGS]	=
 		NLA_POLICY_MASK(NLA_BE32, NFT_LOOKUP_F_INV),
 };
@@ -266,17 +266,6 @@ static int nft_lookup_validate(const struct nft_ctx *ctx,
 	return 0;
 }
 
-static bool nft_lookup_reduce(struct nft_regs_track *track,
-			      const struct nft_expr *expr)
-{
-	const struct nft_lookup *priv = nft_expr_priv(expr);
-
-	if (priv->set->flags & NFT_SET_MAP)
-		nft_reg_track_cancel(track, priv->dreg, priv->set->dlen);
-
-	return false;
-}
-
 static const struct nft_expr_ops nft_lookup_ops = {
 	.type		= &nft_lookup_type,
 	.size		= NFT_EXPR_SIZE(sizeof(struct nft_lookup)),
@@ -287,7 +276,6 @@ static const struct nft_expr_ops nft_lookup_ops = {
 	.destroy	= nft_lookup_destroy,
 	.dump		= nft_lookup_dump,
 	.validate	= nft_lookup_validate,
-	.reduce		= nft_lookup_reduce,
 };
 
 struct nft_expr_type nft_lookup_type __read_mostly = {

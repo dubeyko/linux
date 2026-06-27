@@ -24,7 +24,6 @@
 #if IS_ENABLED(CONFIG_IPV6)
 #include <net/ipv6.h>
 #endif
-#include <net/ipv6_stubs.h>
 #include <net/rtnh.h>
 #include "internal.h"
 
@@ -656,12 +655,9 @@ static struct net_device *inet6_fib_lookup_dev(struct net *net,
 	struct dst_entry *dst;
 	struct flowi6 fl6;
 
-	if (!ipv6_stub)
-		return ERR_PTR(-EAFNOSUPPORT);
-
 	memset(&fl6, 0, sizeof(fl6));
 	memcpy(&fl6.daddr, addr, sizeof(struct in6_addr));
-	dst = ipv6_stub->ipv6_dst_lookup_flow(net, NULL, &fl6, NULL);
+	dst = ip6_dst_lookup_flow(net, NULL, &fl6, NULL);
 	if (IS_ERR(dst))
 		return ERR_CAST(dst);
 
@@ -2225,12 +2221,10 @@ static bool mpls_rt_uses_dev(struct mpls_route *rt,
 
 static int mpls_dump_routes(struct sk_buff *skb, struct netlink_callback *cb)
 {
+	struct mpls_route __rcu **platform_label;
 	const struct nlmsghdr *nlh = cb->nlh;
 	struct net *net = sock_net(skb->sk);
-	struct mpls_route __rcu **platform_label;
-	struct fib_dump_filter filter = {
-		.rtnl_held = false,
-	};
+	struct fib_dump_filter filter = {};
 	unsigned int flags = NLM_F_MULTI;
 	size_t platform_labels;
 	unsigned int index;

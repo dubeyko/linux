@@ -38,7 +38,6 @@
 #include <net/pkt_cls.h>
 #include <net/act_api.h>
 #include <net/devlink.h>
-#include <net/ipv6_stubs.h>
 
 #include "eswitch.h"
 #include "en.h"
@@ -419,6 +418,9 @@ static const struct ethtool_ops mlx5e_rep_ethtool_ops = {
 	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
 				     ETHTOOL_COALESCE_MAX_FRAMES |
 				     ETHTOOL_COALESCE_USE_ADAPTIVE,
+	.op_needs_rtnl	   = ETHTOOL_OP_NEEDS_RTNL_SCHANNELS |
+			     ETHTOOL_OP_NEEDS_RTNL_SRINGPARAM |
+			     ETHTOOL_OP_NEEDS_RTNL_GLINK,
 	.get_drvinfo	   = mlx5e_rep_get_drvinfo,
 	.get_link	   = ethtool_op_get_link,
 	.get_strings       = mlx5e_rep_get_strings,
@@ -1369,6 +1371,8 @@ static void mlx5e_uplink_rep_disable(struct mlx5e_priv *priv)
 	netdev_unlock(priv->netdev);
 	rtnl_unlock();
 
+	/* clean-up uplink's mpfs mac table */
+	queue_work(priv->wq, &priv->set_rx_mode_work);
 	mlx5e_rep_bridge_cleanup(priv);
 	mlx5e_dcbnl_delete_app(priv);
 	mlx5_notifier_unregister(mdev, &priv->events_nb);

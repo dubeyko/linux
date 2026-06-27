@@ -36,6 +36,7 @@
 #include "coredump.h"
 #include "cmn_defs.h"
 #include "dp_cmn.h"
+#include "thermal.h"
 
 #define SM(_v, _f) (((_v) << _f##_LSB) & _f##_MASK)
 
@@ -156,6 +157,7 @@ enum ath12k_hw_rev {
 	ATH12K_HW_WCN7850_HW20,
 	ATH12K_HW_IPQ5332_HW10,
 	ATH12K_HW_QCC2072_HW10,
+	ATH12K_HW_IPQ5424_HW10,
 };
 
 enum ath12k_firmware_mode {
@@ -351,6 +353,9 @@ struct ath12k_link_vif {
 	u16 num_stations;
 	bool is_csa_in_progress;
 	struct wiphy_work bcn_tx_work;
+
+	bool set_wds_vdev_param;
+	bool nawds_enabled;
 };
 
 struct ath12k_vif {
@@ -490,6 +495,10 @@ struct ath12k_link_sta {
 	/* link address similar to ieee80211_link_sta */
 	u8 addr[ETH_ALEN];
 
+	u16 tcl_metadata;
+	u16 ast_hash;
+	u16 ast_idx;
+
 	/* the following are protected by ar->data_lock */
 	u32 changed; /* IEEE80211_RC_* */
 	u32 bw;
@@ -522,9 +531,11 @@ struct ath12k_sta {
 	u16 links_map;
 	u8 assoc_link_id;
 	u16 ml_peer_id;
-	u8 num_peer;
+	u16 free_logical_link_idx_map;
 
 	enum ieee80211_sta_state state;
+
+	bool enable_4addr;
 };
 
 #define ATH12K_HALF_20MHZ_BW	10
@@ -540,8 +551,8 @@ struct ath12k_sta {
 #define ATH12K_MAX_5GHZ_FREQ	(ATH12K_5GHZ_MAX_CENTER + ATH12K_HALF_20MHZ_BW)
 #define ATH12K_MIN_6GHZ_FREQ	(ATH12K_6GHZ_MIN_CENTER - ATH12K_HALF_20MHZ_BW)
 #define ATH12K_MAX_6GHZ_FREQ	(ATH12K_6GHZ_MAX_CENTER + ATH12K_HALF_20MHZ_BW)
-#define ATH12K_NUM_CHANS 101
-#define ATH12K_MAX_5GHZ_CHAN 173
+#define ATH12K_NUM_CHANS 102
+#define ATH12K_MAX_5GHZ_CHAN 177
 
 static inline bool ath12k_is_2ghz_channel_freq(u32 freq)
 {
@@ -587,6 +598,7 @@ struct ath12k_dbg_htt_stats {
 struct ath12k_debug {
 	struct dentry *debugfs_pdev;
 	struct dentry *debugfs_pdev_symlink;
+	struct dentry *debugfs_pdev_symlink_default;
 	struct ath12k_dbg_htt_stats htt_stats;
 	enum wmi_halphy_ctrl_path_stats_id tpc_stats_type;
 	bool tpc_request;
@@ -672,6 +684,7 @@ struct ath12k {
 	u8 pdev_idx;
 	u8 lmac_id;
 	u8 hw_link_id;
+	u8 radio_idx;
 
 	struct completion peer_assoc_done;
 	struct completion peer_delete_done;
@@ -757,6 +770,16 @@ struct ath12k {
 
 	s8 max_allowed_tx_power;
 	struct ath12k_pdev_rssi_offsets rssi_info;
+
+	struct ath12k_thermal thermal;
+
+	/* Protected by ar->data_lock */
+	struct ath12k_incumbent_signal_interference {
+		u32 center_freq;
+		enum nl80211_chan_width width;
+		u32 chan_bw_interference_bitmap;
+		bool handling_in_progress;
+	} incumbent_signal_interference;
 };
 
 struct ath12k_hw {
@@ -1363,13 +1386,13 @@ static inline struct ath12k_hw *ath12k_hw_to_ah(struct ieee80211_hw  *hw)
 	return hw->priv;
 }
 
-static inline struct ath12k *ath12k_ah_to_ar(struct ath12k_hw *ah, u8 hw_link_id)
+static inline struct ath12k *ath12k_ah_to_ar(struct ath12k_hw *ah, u8 radio_idx)
 {
-	if (WARN(hw_link_id >= ah->num_radio,
-		 "bad hw link id %d, so switch to default link\n", hw_link_id))
-		hw_link_id = 0;
+	if (WARN(radio_idx >= ah->num_radio,
+		 "bad radio index %d, use default radio\n", radio_idx))
+		radio_idx = 0;
 
-	return &ah->radio[hw_link_id];
+	return &ah->radio[radio_idx];
 }
 
 static inline struct ath12k_hw *ath12k_ar_to_ah(struct ath12k *ar)

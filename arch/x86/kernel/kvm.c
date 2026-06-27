@@ -41,6 +41,7 @@
 #include <asm/hypervisor.h>
 #include <asm/mtrr.h>
 #include <asm/tlb.h>
+#include <asm/cpuid/api.h>
 #include <asm/cpuidle_haltpoll.h>
 #include <asm/msr.h>
 #include <asm/ptrace.h>
@@ -75,12 +76,6 @@ DEFINE_PER_CPU_DECRYPTED(struct kvm_steal_time, steal_time) __aligned(64) __visi
 static int has_steal_clock = 0;
 
 static int has_guest_poll = 0;
-/*
- * No need for any "IO delay" on KVM
- */
-static void kvm_io_delay(void)
-{
-}
 
 #define KVM_TASK_SLEEP_HASHBITS 8
 #define KVM_TASK_SLEEP_HASHSIZE (1<<KVM_TASK_SLEEP_HASHBITS)
@@ -310,7 +305,7 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_kvm_asyncpf_interrupt)
 
 	apic_eoi();
 
-	inc_irq_stat(irq_hv_callback_count);
+	inc_irq_stat(HYPERVISOR_CALLBACK);
 
 	if (__this_cpu_read(async_pf_enabled)) {
 		token = __this_cpu_read(apf_reason.token);
@@ -327,7 +322,7 @@ static void __init paravirt_ops_setup(void)
 	pv_info.name = "KVM";
 
 	if (kvm_para_has_feature(KVM_FEATURE_NOP_IO_DELAY))
-		pv_ops.cpu.io_delay = kvm_io_delay;
+		pv_info.io_delay = false;
 
 #ifdef CONFIG_X86_IO_APIC
 	no_timer_check = 1;

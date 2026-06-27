@@ -196,9 +196,22 @@ static void hisi_spi_flush_fifo(struct hisi_spi *hs)
 	unsigned long limit = loops_per_jiffy << 1;
 
 	do {
-		while (hisi_spi_rx_not_empty(hs))
+		unsigned long inner_limit = loops_per_jiffy;
+
+		while (hisi_spi_rx_not_empty(hs) && --inner_limit) {
 			readl(hs->regs + HISI_SPI_DOUT);
-	} while (hisi_spi_busy(hs) && limit--);
+			cpu_relax();
+		}
+
+		if (!inner_limit) {
+			dev_warn_ratelimited(hs->dev, "RX FIFO flush timeout\n");
+			break;
+		}
+
+	} while (hisi_spi_busy(hs) && --limit);
+
+	if (!limit)
+		dev_warn_ratelimited(hs->dev, "SPI busy timeout\n");
 }
 
 /* Disable the controller and all interrupts */
@@ -450,6 +463,7 @@ static int hisi_spi_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct spi_controller *host;
 	struct hisi_spi *hs;
+	u32 num_cs;
 	int ret, irq;
 
 	irq = platform_get_irq(pdev, 0);
@@ -482,10 +496,11 @@ static int hisi_spi_probe(struct platform_device *pdev)
 	if (host->max_speed_hz == 0)
 		return dev_err_probe(dev, -EINVAL, "spi-max-frequency can't be 0\n");
 
-	ret = device_property_read_u16(dev, "num-cs",
-					&host->num_chipselect);
+	ret = device_property_read_u32(dev, "num-cs", &num_cs);
 	if (ret)
 		host->num_chipselect = DEFAULT_NUM_CS;
+	else
+		host->num_chipselect = num_cs;
 
 	host->use_gpio_descriptors = true;
 	host->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_LOOP;
@@ -507,10 +522,8 @@ static int hisi_spi_probe(struct platform_device *pdev)
 	}
 
 	ret = spi_register_controller(host);
-	if (ret) {
-		dev_err(dev, "failed to register spi host, ret=%d\n", ret);
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to register spi host\n");
 
 	if (hisi_spi_debugfs_init(hs))
 		dev_info(dev, "failed to create debugfs dir\n");

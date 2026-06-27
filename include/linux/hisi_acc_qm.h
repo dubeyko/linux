@@ -102,6 +102,12 @@
 #define QM_MIG_REGION_SEL		0x100198
 #define QM_MIG_REGION_EN		BIT(0)
 
+#define QM_MAX_CHANNEL_NUM		8
+#define QM_CHANNEL_USAGE_OFFSET		0x1100
+#define QM_MAX_DEV_USAGE		100
+#define QM_DEV_USAGE_RATE		100
+#define QM_CHANNEL_ADDR_INTRVL		0x4
+
 /* uacce mode of the driver */
 #define UACCE_MODE_NOUACCE		0 /* don't use uacce */
 #define UACCE_MODE_SVA			1 /* use uacce sva mode */
@@ -109,10 +115,22 @@
 
 #define QM_ECC_MBIT			BIT(2)
 
+/**
+ * enum qm_stop_reason - Queue manager stop reasons
+ * @QM_NORMAL:      Graceful stop. Used for device unbind, driver removal,
+ *                  or runtime power management (runtime_suspend).
+ * @QM_SOFT_RESET:  Error recovery reset. Triggered by unrecoverable hardware
+ *                  errors (e.g., PCIe AER, timeout) to recover device state.
+ * @QM_DOWN:        Function Level Reset. Used when the device needs to
+ *                  be reset at the function level without resetting the link.
+ * @QM_SHUTDOWN:    System shutdown. Used during system poweroff, reboot, or
+ *                  kexec to ensure hardware is in a safe state.
+ */
 enum qm_stop_reason {
 	QM_NORMAL,
 	QM_SOFT_RESET,
 	QM_DOWN,
+	QM_SHUTDOWN,
 };
 
 enum qm_state {
@@ -152,7 +170,6 @@ enum qm_vf_state {
 
 enum qm_misc_ctl_bits {
 	QM_DRIVER_REMOVING = 0x0,
-	QM_RST_SCHED,
 	QM_RESETTING,
 	QM_MODULE_PARAM,
 };
@@ -243,6 +260,7 @@ enum acc_err_result {
 	ACC_ERR_NONE,
 	ACC_ERR_NEED_RESET,
 	ACC_ERR_RECOVERED,
+	ACC_ERR_NEED_FUNC_RESET,
 };
 
 struct hisi_qm_err_mask {
@@ -359,6 +377,11 @@ struct qm_rsv_buf {
 	struct qm_dma qcdma;
 };
 
+struct qm_channel {
+	int channel_num;
+	const char *channel_name[QM_MAX_CHANNEL_NUM];
+};
+
 struct hisi_qm {
 	enum qm_hw_ver ver;
 	enum qm_fun_type fun_type;
@@ -433,6 +456,7 @@ struct hisi_qm {
 	struct qm_err_isolate isolate_data;
 
 	struct hisi_qm_cap_tables cap_tables;
+	struct qm_channel channel_data;
 };
 
 struct hisi_qp_status {
@@ -540,14 +564,13 @@ static inline void hisi_qm_del_list(struct hisi_qm *qm, struct hisi_qm_list *qm_
 	mutex_unlock(&qm_list->lock);
 }
 
+int hisi_qm_register_uacce(struct hisi_qm *qm);
 int hisi_qm_q_num_set(const char *val, const struct kernel_param *kp,
 		      unsigned int device);
 int hisi_qm_init(struct hisi_qm *qm);
 void hisi_qm_uninit(struct hisi_qm *qm);
 int hisi_qm_start(struct hisi_qm *qm);
 int hisi_qm_stop(struct hisi_qm *qm, enum qm_stop_reason r);
-int hisi_qm_start_qp(struct hisi_qp *qp, unsigned long arg);
-void hisi_qm_stop_qp(struct hisi_qp *qp);
 int hisi_qp_send(struct hisi_qp *qp, const void *msg);
 void hisi_qm_debug_init(struct hisi_qm *qm);
 void hisi_qm_debug_regs_clear(struct hisi_qm *qm);

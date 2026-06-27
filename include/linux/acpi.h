@@ -324,6 +324,17 @@ int acpi_unmap_cpu(int cpu);
 
 acpi_handle acpi_get_processor_handle(int cpu);
 
+/**
+ * acpi_get_cpu_uid() - Get ACPI Processor UID of from MADT table
+ * @cpu: Logical CPU number (0-based)
+ * @uid: Pointer to store ACPI Processor UID
+ *
+ * Return: 0 on success (ACPI Processor ID stored in *uid);
+ *         -EINVAL if CPU number is invalid or out of range;
+ *         -ENODEV if ACPI Processor UID for the CPU is not found.
+ */
+int acpi_get_cpu_uid(unsigned int cpu, u32 *uid);
+
 #ifdef CONFIG_ACPI_HOTPLUG_IOAPIC
 int acpi_get_ioapic_id(acpi_handle handle, u32 gsi_base, u64 *phys_addr);
 #endif
@@ -787,9 +798,19 @@ int acpi_get_local_u64_address(acpi_handle handle, u64 *addr);
 int acpi_get_local_address(acpi_handle handle, u32 *addr);
 const char *acpi_get_subsystem_id(acpi_handle handle);
 
+struct device *acpi_bus_find_device_by_name(const char *name);
+
 #ifdef CONFIG_ACPI_MRRM
 int acpi_mrrm_max_mem_region(void);
 #endif
+
+#define ACPI_CMOS_RTC_IDS	\
+	{ "PNP0B00", },		\
+	{ "PNP0B01", },		\
+	{ "PNP0B02", },		\
+	{ "", }
+
+extern bool cmos_rtc_platform_device_present;
 
 #else	/* !CONFIG_ACPI */
 
@@ -940,6 +961,12 @@ static inline int acpi_table_parse(char *id,
 	return -ENODEV;
 }
 
+static inline int acpi_get_cpu_uid(unsigned int cpu, u32 *uid)
+{
+	*uid = cpu;
+	return 0;
+}
+
 static inline int acpi_nvs_register(__u64 start, __u64 size)
 {
 	return 0;
@@ -1081,6 +1108,11 @@ static inline const char *acpi_get_subsystem_id(acpi_handle handle)
 	return ERR_PTR(-ENODEV);
 }
 
+static inline struct device *acpi_bus_find_device_by_name(const char *name)
+{
+	return NULL;
+}
+
 static inline int acpi_register_wakeup_handler(int wake_irq,
 	bool (*wakeup)(void *context), void *context)
 {
@@ -1115,6 +1147,8 @@ static inline int acpi_mrrm_max_mem_region(void)
 {
 	return 1;
 }
+
+#define cmos_rtc_platform_device_present	false
 
 #endif	/* !CONFIG_ACPI */
 

@@ -138,9 +138,11 @@ static const struct pci_device_id *pci_match_device(struct pci_driver *drv,
 {
 	struct pci_dynid *dynid;
 	const struct pci_device_id *found_id = NULL, *ids;
+	int ret;
 
 	/* When driver_override is set, only bind to the matching driver */
-	if (dev->driver_override && strcmp(dev->driver_override, drv->name))
+	ret = device_match_driver_override(&dev->dev, &drv->driver);
+	if (ret == 0)
 		return NULL;
 
 	/* Look at the dynamic ids first, before the static ones */
@@ -164,7 +166,7 @@ static const struct pci_device_id *pci_match_device(struct pci_driver *drv,
 		 * matching.
 		 */
 		if (found_id->override_only) {
-			if (dev->driver_override)
+			if (ret > 0)
 				return found_id;
 		} else {
 			return found_id;
@@ -172,9 +174,14 @@ static const struct pci_device_id *pci_match_device(struct pci_driver *drv,
 	}
 
 	/* driver_override will always match, send a dummy id */
-	if (dev->driver_override)
+	if (ret > 0)
 		return &pci_device_id_any;
 	return NULL;
+}
+
+static void _pci_free_device(struct device *dev)
+{
+	kfree(to_pci_dev(dev));
 }
 
 /**
@@ -212,11 +219,13 @@ static ssize_t new_id_store(struct device_driver *driver, const char *buf,
 		pdev->subsystem_vendor = subvendor;
 		pdev->subsystem_device = subdevice;
 		pdev->class = class;
+		pdev->dev.release = _pci_free_device;
 
+		device_initialize(&pdev->dev);
 		if (pci_match_device(pdrv, pdev))
 			retval = -EEXIST;
 
-		kfree(pdev);
+		put_device(&pdev->dev);
 
 		if (retval)
 			return retval;
@@ -452,7 +461,7 @@ static int __pci_device_probe(struct pci_driver *drv, struct pci_dev *pci_dev)
 static inline bool pci_device_can_probe(struct pci_dev *pdev)
 {
 	return (!pdev->is_virtfn || pdev->physfn->sriov->drivers_autoprobe ||
-		pdev->driver_override);
+		device_has_driver_override(&pdev->dev));
 }
 #else
 static inline bool pci_device_can_probe(struct pci_dev *pdev)
@@ -509,13 +518,6 @@ static void pci_device_remove(struct device *dev)
 
 	/* Undo the runtime PM settings in local_pci_probe() */
 	pm_runtime_put_sync(dev);
-
-	/*
-	 * If the device is still on, set the power state as "unknown",
-	 * since it might change by the next time we load the driver.
-	 */
-	if (pci_dev->current_state == PCI_D0)
-		pci_dev->current_state = PCI_UNKNOWN;
 
 	/*
 	 * We would love to complain here if pci_dev->is_enabled is set, that
@@ -891,7 +893,7 @@ static int pci_pm_suspend_noirq(struct device *dev)
 
 	if (!pm) {
 		pci_save_state(pci_dev);
-		goto Fixup;
+		goto set_unknown;
 	}
 
 	if (pm->suspend_noirq) {
@@ -943,6 +945,7 @@ static int pci_pm_suspend_noirq(struct device *dev)
 		goto Fixup;
 	}
 
+set_unknown:
 	pci_pm_set_unknown_state(pci_dev);
 
 	/*
@@ -1722,6 +1725,7 @@ static const struct cpumask *pci_device_irq_get_affinity(struct device *dev,
 
 const struct bus_type pci_bus_type = {
 	.name		= "pci",
+	.driver_override = true,
 	.match		= pci_bus_match,
 	.uevent		= pci_uevent,
 	.probe		= pci_device_probe,

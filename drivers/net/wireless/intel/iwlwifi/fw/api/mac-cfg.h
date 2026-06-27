@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2012-2014, 2018-2019, 2021-2025 Intel Corporation
+ * Copyright (C) 2012-2014, 2018-2019, 2021-2026 Intel Corporation
  * Copyright (C) 2013-2015 Intel Mobile Communications GmbH
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
  */
@@ -8,6 +8,7 @@
 #define __iwl_fw_api_mac_cfg_h__
 
 #include "mac.h"
+#include "phy-ctxt.h"
 
 /**
  * enum iwl_mac_conf_subcmd_ids - mac configuration command IDs
@@ -26,7 +27,7 @@ enum iwl_mac_conf_subcmd_ids {
 	 */
 	MISSED_VAP_NOTIF = 0xFA,
 	/**
-	 * @SESSION_PROTECTION_CMD: &struct iwl_mvm_session_prot_cmd
+	 * @SESSION_PROTECTION_CMD: &struct iwl_session_prot_cmd
 	 */
 	SESSION_PROTECTION_CMD = 0x5,
 	/**
@@ -34,7 +35,8 @@ enum iwl_mac_conf_subcmd_ids {
 	 */
 	CANCEL_CHANNEL_SWITCH_CMD = 0x6,
 	/**
-	 * @MAC_CONFIG_CMD: &struct iwl_mac_config_cmd
+	 * @MAC_CONFIG_CMD: &struct iwl_mac_config_cmd_v3 or
+	 *	&struct iwl_mac_config_cmd
 	 */
 	MAC_CONFIG_CMD = 0x8,
 	/**
@@ -42,7 +44,8 @@ enum iwl_mac_conf_subcmd_ids {
 	 */
 	LINK_CONFIG_CMD = 0x9,
 	/**
-	 * @STA_CONFIG_CMD: &struct iwl_sta_cfg_cmd
+	 * @STA_CONFIG_CMD: &struct iwl_sta_cfg_cmd_v1,
+	 *	&struct iwl_sta_cfg_cmd_v2, or &struct iwl_sta_cfg_cmd
 	 */
 	STA_CONFIG_CMD = 0xA,
 	/**
@@ -69,6 +72,23 @@ enum iwl_mac_conf_subcmd_ids {
 	 * @NAN_CFG_CMD: &struct iwl_nan_config_cmd
 	 */
 	NAN_CFG_CMD = 0x12,
+	/**
+	 * @NAN_SCHEDULE_CMD: &struct iwl_nan_schedule_cmd
+	 */
+	NAN_SCHEDULE_CMD = 0x13,
+	/**
+	 * @NAN_PEER_CMD: &struct iwl_nan_peer_cmd
+	 */
+	NAN_PEER_CMD = 0x14,
+	/**
+	 * @NAN_ULW_ATTR_NOTIF: &struct iwl_nan_ulw_attr_notif
+	 */
+	NAN_ULW_ATTR_NOTIF = 0xf2,
+	/**
+	 * @NAN_SCHED_UPDATE_COMPLETED_NOTIF:
+	 *	&struct iwl_nan_sched_update_completed_notif
+	 */
+	NAN_SCHED_UPDATE_COMPLETED_NOTIF = 0xf3,
 	/**
 	 * @NAN_DW_END_NOTIF: &struct iwl_nan_dw_end_notif
 	 */
@@ -356,7 +376,7 @@ struct iwl_mac_wifi_gen_support {
 } __packed;
 
 /**
- * struct iwl_mac_config_cmd - command structure to configure MAC contexts in
+ * struct iwl_mac_config_cmd_v3 - command structure to configure MAC contexts in
  *	MLD API for versions 2 and 3
  * ( MAC_CONTEXT_CONFIG_CMD = 0x8 )
  *
@@ -375,7 +395,7 @@ struct iwl_mac_wifi_gen_support {
  * @client: client mac data
  * @p2p_dev: mac data for p2p device
  */
-struct iwl_mac_config_cmd {
+struct iwl_mac_config_cmd_v3 {
 	__le32 id_and_color;
 	__le32 action;
 	/* MAC_CONTEXT_TYPE_API_E */
@@ -393,7 +413,62 @@ struct iwl_mac_config_cmd {
 		struct iwl_mac_client_data client;
 		struct iwl_mac_p2p_dev_data p2p_dev;
 	};
-} __packed; /* MAC_CONTEXT_CONFIG_CMD_API_S_VER_2_VER_3 */
+} __packed; /* MAC_CONTEXT_CONFIG_CMD_API_S_VER_2, _VER_3 */
+
+/**
+ * struct iwl_mac_nan_data - NAN specific MAC data
+ * @ndi_addrs: extra NDI addresses being used
+ * @ndi_addrs_count: number of extra NDI addresses
+ */
+struct iwl_mac_nan_data {
+	struct {
+		u8 addr[ETH_ALEN];
+		__le16 reserved;
+	} __packed ndi_addrs[2];
+	__le32 ndi_addrs_count;
+} __packed; /* MAC_CONTEXT_CONFIG_NAN_DATA_API_S_VER_1 */
+
+/**
+ * struct iwl_mac_config_cmd - command structure to configure MAC contexts in
+ *	MLD API for versions 4
+ * ( MAC_CONTEXT_CONFIG_CMD = 0x8 )
+ *
+ * @id_and_color: ID and color of the MAC
+ * @action: action to perform, see &enum iwl_ctxt_action
+ * @mac_type: one of &enum iwl_mac_types
+ * @local_mld_addr: mld address
+ * @reserved_for_local_mld_addr: reserved
+ * @filter_flags: combination of &enum iwl_mac_config_filter_flags
+ * @wifi_gen_v2: he/eht parameters as in cmd version 2
+ * @wifi_gen: he/eht/uhr parameters as in cmd version 3
+ * @nic_not_ack_enabled: mark that the NIC doesn't support receiving
+ *	ACK-enabled AGG, (i.e. both BACK and non-BACK frames in single AGG).
+ *	If the NIC is not ACK_ENABLED it may use the EOF-bit in first non-0
+ *	len delim to determine if AGG or single.
+ * @client: client mac data
+ * @p2p_dev: mac data for p2p device
+ * @nan: NAN specific data (NAN data interface addresses)
+ */
+struct iwl_mac_config_cmd {
+	__le32 id_and_color;
+	__le32 action;
+	/* MAC_CONTEXT_TYPE_API_E */
+	__le32 mac_type;
+	u8 local_mld_addr[6];
+	__le16 reserved_for_local_mld_addr;
+	__le32 filter_flags;
+	union {
+		struct iwl_mac_wifi_gen_support_v2 wifi_gen_v2;
+		struct iwl_mac_wifi_gen_support wifi_gen;
+	};
+	__le32 nic_not_ack_enabled;
+	/* MAC_CONTEXT_CONFIG_SPECIFIC_DATA_API_U_VER_3 */
+	union {
+		struct iwl_mac_client_data client;
+		struct iwl_mac_p2p_dev_data p2p_dev;
+		struct iwl_mac_nan_data nan;
+	};
+} __packed; /* MAC_CONTEXT_CONFIG_CMD_API_S_VER_4 */
 
 /**
  * enum iwl_link_ctx_modify_flags - indicate to the fw what fields are being
@@ -479,12 +554,20 @@ enum iwl_link_ctx_protection_flags {
  *      radar pulses).
  * @LINK_FLG_NDP_FEEDBACK_ENABLED: mark support for NDP feedback and change
  *	of threshold
+ * @LINK_FLG_NPCA: NPCA enabled
+ * @LINK_FLG_DPS: AP is a DPS assisting AP
+ * @LINK_FLG_MLPM: AP supports UHR multi-link PM
+ * @LINK_FLG_DUO: AP supports UHR DUO
  */
 enum iwl_link_ctx_flags {
 	LINK_FLG_BSS_COLOR_DIS		= BIT(0),
 	LINK_FLG_MU_EDCA_CW		= BIT(1),
 	LINK_FLG_RU_2MHZ_BLOCK		= BIT(2),
 	LINK_FLG_NDP_FEEDBACK_ENABLED	= BIT(3),
+	LINK_FLG_NPCA			= BIT(4),
+	LINK_FLG_DPS			= BIT(6),
+	LINK_FLG_MLPM			= BIT(7),
+	LINK_FLG_DUO			= BIT(8),
 }; /* LINK_CONTEXT_FLAG_E_VER_1 */
 
 /**
@@ -521,7 +604,7 @@ enum iwl_npca_flags {
  * @initial_qsrc: Indicates the value that is used to initialize the
  *	EDCAF QSRC[AC] variables
  * @min_dur_threshold: minimum PPDU time to switch to the non-primary
- *	NPCA channel (usec)
+ *	NPCA channel (spec representation)
  * @flags: NPCA flags, see &enum iwl_npca_flags
  * @reserved: reserved for alignment purposes
  */
@@ -652,6 +735,7 @@ struct iwl_link_config_cmd {
  */
 #define IWL_FW_MAX_ACTIVE_LINKS_NUM 2
 #define IWL_FW_MAX_LINK_ID 3
+#define IWL_FW_MAX_LINKS IWL_FW_MAX_LINK_ID + 1
 
 /**
  * enum iwl_fw_sta_type - FW station types
@@ -662,6 +746,19 @@ struct iwl_link_config_cmd {
  * @STATION_TYPE_MCAST: the station used for BCAST / MCAST in GO. Will be
  *	suspended / resumed at the right timing depending on the clients'
  *	power save state and the DTIM timing
+ * @STATION_TYPE_NAN_PEER_NMI: NAN management peer station type. A station
+ *	of this type can have any number of links (even none) set in the
+ *	link_mask. (Supported since version 3.)
+ * @STATION_TYPE_NAN_PEER_NDI: NAN data peer station type. A station
+ *	of this type can have any number of links (even none) set in the
+ *	link_mask. (Supported since version 3.)
+ * @STATION_TYPE_NAN_BCAST: NAN station used for synchronization and
+ *	discovery. No queue is associated with this station.
+ * @STATION_TYPE_NAN_MGMT: NAN station used for NAN management frames, e.g.,
+ *	SDFs and NAFs.
+ * @STATION_TYPE_NAN_MCAST_DATA: NAN station used for multicast NAN data
+ *	frames.
+ * @STATION_TYPE_MAX: maximum number of FW station types
  * @STATION_TYPE_AUX: aux sta. In the FW there is no need for a special type
  *	for the aux sta, so this type is only for driver - internal use.
  */
@@ -669,8 +766,14 @@ enum iwl_fw_sta_type {
 	STATION_TYPE_PEER,
 	STATION_TYPE_BCAST_MGMT,
 	STATION_TYPE_MCAST,
-	STATION_TYPE_AUX,
-}; /* STATION_TYPE_E_VER_1 */
+	STATION_TYPE_NAN_PEER_NMI,
+	STATION_TYPE_NAN_PEER_NDI,
+	STATION_TYPE_NAN_BCAST,
+	STATION_TYPE_NAN_MGMT,
+	STATION_TYPE_NAN_MCAST_DATA,
+	STATION_TYPE_MAX,
+	STATION_TYPE_AUX = STATION_TYPE_MAX /* this doesn't exist in FW */
+}; /* STATION_TYPE_E_VER_1, _VER_2 */
 
 /**
  * struct iwl_sta_cfg_cmd_v1 - cmd structure to add a peer sta to the uCode's
@@ -729,7 +832,7 @@ struct iwl_sta_cfg_cmd_v1 {
 } __packed; /* STA_CMD_API_S_VER_1 */
 
 /**
- * struct iwl_sta_cfg_cmd - cmd structure to add a peer sta to the uCode's
+ * struct iwl_sta_cfg_cmd_v2 - cmd structure to add a peer sta to the uCode's
  *	station table
  * ( STA_CONFIG_CMD = 0xA )
  *
@@ -769,7 +872,7 @@ struct iwl_sta_cfg_cmd_v1 {
  * @mic_compute_pad_delay: MIC compute time padding
  * @reserved: Reserved for alignment
  */
-struct iwl_sta_cfg_cmd {
+struct iwl_sta_cfg_cmd_v2 {
 	__le32 sta_id;
 	__le32 link_id;
 	u8 peer_mld_address[ETH_ALEN];
@@ -798,6 +901,86 @@ struct iwl_sta_cfg_cmd {
 	u8 mic_compute_pad_delay;
 	u8 reserved[2];
 } __packed; /* STA_CMD_API_S_VER_2 */
+
+/**
+ * struct iwl_sta_cfg_cmd - cmd structure to add a peer sta to the uCode's
+ *	station table
+ * ( STA_CONFIG_CMD = 0xA )
+ *
+ * @sta_id: index of station in uCode's station table
+ * @link_mask: bitmap of link FW IDs used with this STA. Should be set to 0
+ *	for STATION_TYPE_NAN_BCAST and STATION_TYPE_NAN_MGMT as they are not
+ *	associated with any link added by the driver.
+ * @peer_mld_address: the peers mld address
+ * @reserved_for_peer_mld_address: reserved
+ * @peer_link_address: the address of the link that is used to communicate
+ *	with this sta
+ * @reserved_for_peer_link_address: reserved
+ * @station_type: type of this station. See &enum iwl_fw_sta_type
+ * @assoc_id: for GO only
+ * @beamform_flags: beam forming controls
+ * @mfp: indicates whether the STA uses management frame protection or not.
+ * @mimo: indicates whether the sta uses mimo or not
+ * @mimo_protection: indicates whether the sta uses mimo protection or not
+ * @ack_enabled: indicates that the AP supports receiving ACK-
+ *	enabled AGG, i.e. both BACK and non-BACK frames in a single AGG
+ * @trig_rnd_alloc: indicates that trigger based random allocation
+ *	is enabled according to UORA element existence
+ * @tx_ampdu_spacing: minimum A-MPDU spacing:
+ *	4 - 2us density, 5 - 4us density, 6 - 8us density, 7 - 16us density
+ * @tx_ampdu_max_size: maximum A-MPDU length: 0 - 8K, 1 - 16K, 2 - 32K,
+ *	3 - 64K, 4 - 128K, 5 - 256K, 6 - 512K, 7 - 1024K.
+ * @sp_length: the size of the SP in actual number of frames
+ * @uapsd_acs:  4 LS bits are trigger enabled ACs, 4 MS bits are the deliver
+ *	enabled ACs.
+ * @pkt_ext: optional, exists according to PPE-present bit in the HE/EHT-PHY
+ *	capa
+ * @htc_flags: which features are supported in HTC
+ * @use_ldpc_x2_cw: Indicates whether to use LDPC with double CW
+ * @use_icf: Indicates whether to use ICF instead of RTS
+ * @dps_pad_time: DPS (Dynamic Power Save) padding delay resolution to ensure
+ *	proper timing alignment
+ * @dps_trans_delay: DPS minimal time that takes the peer to return to low power
+ * @dps_enabled: flag indicating whether or not DPS is enabled
+ * @mic_prep_pad_delay: MIC prep time padding
+ * @mic_compute_pad_delay: MIC compute time padding
+ * @nmi_sta_id: for an NDI peer STA, the NMI peer STA ID it relates to
+ * @ndi_local_addr: for an NDI peer STA or NAN multicast data station,
+ *	the local NDI interface MAC address
+ * @reserved: Reserved for alignment
+ */
+struct iwl_sta_cfg_cmd {
+	__le32 sta_id;
+	__le32 link_mask;
+	u8 peer_mld_address[ETH_ALEN];
+	__le16 reserved_for_peer_mld_address;
+	u8 peer_link_address[ETH_ALEN];
+	__le16 reserved_for_peer_link_address;
+	__le32 station_type;
+	__le32 assoc_id;
+	__le32 beamform_flags;
+	__le32 mfp;
+	__le32 mimo;
+	__le32 mimo_protection;
+	__le32 ack_enabled;
+	__le32 trig_rnd_alloc;
+	__le32 tx_ampdu_spacing;
+	__le32 tx_ampdu_max_size;
+	__le32 sp_length;
+	__le32 uapsd_acs;
+	struct iwl_he_pkt_ext_v2 pkt_ext;
+	__le32 htc_flags;
+	u8 use_ldpc_x2_cw;
+	u8 use_icf;
+	u8 dps_pad_time;
+	u8 dps_trans_delay;
+	u8 dps_enabled;
+	u8 mic_prep_pad_delay;
+	u8 mic_compute_pad_delay;
+	u8 nmi_sta_id;
+	u8 ndi_local_addr[ETH_ALEN];
+	u8 reserved[2];
+} __packed; /* STA_CMD_API_S_VER_3 */
 
 /**
  * struct iwl_aux_sta_cmd - command for AUX STA configuration
@@ -1059,7 +1242,8 @@ enum iwl_nan_flags {
  * @discovery_beacon_interval: discovery beacon interval in TUs
  * @cluster_id: lower last two bytes of the cluster ID, in case the local
  *	device starts a cluster
- * @sta_id: station ID of the NAN station
+ * @sta_id: station ID of the NAN station. Used only in version 1, in version 2
+ *	it is reserved.
  * @hb_channel: channel for 5 GHz if the device supports operation on 5 GHz.
  *	Valid values are 44 and 149, which correspond to the 5 GHz channel, and
  *	0 which means that NAN operation on the 5 GHz band is disabled.
@@ -1097,7 +1281,102 @@ struct iwl_nan_config_cmd {
 	__le32 nan_attr_len;
 	__le32 nan_vendor_elems_len;
 	u8 beacon_data[];
-} __packed; /*  NAN_CONFIG_CMD_API_S_VER_1 */
+} __packed; /*  NAN_CONFIG_CMD_API_S_VER_1, NAN_CONFIG_CMD_API_S_VER_2 */
+
+/**
+ * struct iwl_nan_schedule_cmd_v1 - NAN schedule command
+ * @channels: per channel information
+ * @channels.availability_map: bitmap of slots this channel is advertising
+ *	availability on, will be ULW'ed out if no link/inactive link is
+ *	referenced by the link ID below
+ * @channels.channel_entry: NAN channel entry descriptor
+ * @channels.link_id: FW link ID, or %0xFF for unset
+ * @channels.reserved: (reserved)
+ */
+struct iwl_nan_schedule_cmd_v1 {
+	struct {
+		__le32 availability_map;
+		u8 channel_entry[6];
+		u8 link_id;
+		u8 reserved;
+	} __packed channels[NUM_PHY_CTX];
+} __packed; /* NAN_SCHEDULE_CMD_API_S_VER_1 */
+
+#define IWL_MAX_AVAILABILITY_ATTR_LEN 54
+
+/**
+ * struct iwl_nan_schedule_cmd - NAN schedule command
+ * @channels: per channel information
+ * @channels.availability_map: bitmap of slots this channel is advertising
+ *	availability on, will be ULW'ed out if no link/inactive link is
+ *	referenced by the link ID below
+ * @channels.channel_entry: NAN channel entry descriptor
+ * @channels.link_id: FW link ID, or %0xFF for unset
+ * @channels.reserved: (reserved)
+ * @avail_attr: NAN availability attribute information
+ * @avail_attr.attr_len: length of the availability attribute
+ * @avail_attr.reserved: reserved
+ * @avail_attr.attr: the availability attribute including the attribute header
+ * @deferred: true if the firmware should defer applying the schedule until
+ *	notifying all peers. For a deferred schedule update, the firmware should
+ *	send a notification to the driver after the new schedule is applied.
+ * @reserved: reserved
+ */
+struct iwl_nan_schedule_cmd {
+	struct {
+		__le32 availability_map;
+		u8 channel_entry[6];
+		u8 link_id;
+		u8 reserved;
+	} __packed channels[NUM_PHY_CTX];
+
+	struct {
+		u8 attr_len;
+		u8 reserved;
+		u8 attr[IWL_MAX_AVAILABILITY_ATTR_LEN];
+	} __packed avail_attr;
+
+	u8 deferred;
+	u8 reserved[3];
+} __packed; /* NAN_SCHEDULE_CMD_API_S_VER_2 */
+
+/**
+ * struct iwl_nan_peer_cmd - NAN peer command
+ * @nmi_sta_id: NAN management station ID
+ * @sequence_id: NAN Availability attribute sequence ID
+ * @committed_dw_info: committed DW info from the NAN Device
+ *	Capability attribute
+ * @max_channel_switch_time: maximum channel switch time
+ *	(in microseconds); 0 means unavailable
+ * @reserved: (reserved)
+ * @per_phy: per-PHY information for this peer, indexed by PHY ID
+ * @per_phy.availability_map: bitmap of which slots this peer
+ *	is available in on this PHY. 0 indicates the this per-PHY entry
+ *	is unused.
+ * @per_phy.channel_entry: the channel description the peer is using,
+ *	used for comparisons in ULW management
+ * @per_phy.link_id: FW link ID, should be a valid id.
+ * @per_phy.map_id: map ID from peer's NAN Availability attributec
+ * @initial_ulw_size: size of the initial ULW blob
+ * @initial_ulw: initial ULW data from the peer
+ */
+struct iwl_nan_peer_cmd {
+	u8 nmi_sta_id;
+	u8 sequence_id;
+	__le16 committed_dw_info;
+	__le16 max_channel_switch_time;
+	__le16 reserved;
+
+	struct {
+		__le32 availability_map;
+		u8 channel_entry[6];
+		u8 link_id;
+		u8 map_id;
+	} __packed per_phy[NUM_PHY_CTX];
+
+	__le32 initial_ulw_size;
+	u8 initial_ulw[];
+} __packed; /* NAN_PEER_SCHEDULE_CMD_API_S_VER_1 */
 
 /**
  * enum iwl_nan_cluster_notif_flags - flags for the cluster notification
@@ -1134,5 +1413,45 @@ struct iwl_nan_dw_end_notif {
 	u8 band;
 	u8 reserved[3];
 } __packed; /* NAN_DW_END_NTF_API_S_VER_1 */
+
+#define IWL_NAN_MAX_ENDLESS_ULW_ATTR_LEN	48
+
+/**
+ * struct iwl_nan_ulw_attr_notif - sent to notify the host of a change in the
+ *	ULW attribute
+ *
+ * @attr_len: length of the ULW attribute in bytes
+ * @reserved: reserved
+ * @attr: the ULW attribute including the attribute header
+ */
+struct iwl_nan_ulw_attr_notif {
+	u8 attr_len;
+	u8 reserved[3];
+	u8 attr[IWL_NAN_MAX_ENDLESS_ULW_ATTR_LEN];
+} __packed; /* NAN_ULW_ATTR_NOTIF_API_S_VER_1 */
+
+/**
+ * enum iwl_nan_sched_update_status - NAN schedule update status
+ *
+ * @IWL_NAN_SCHED_UPDATE_SUCCESS: schedule update completed successfully
+ * @IWL_NAN_SCHED_UPDATE_FAILURE: schedule update failed. Currently not expected
+ *	to happen, but reserved for future use.
+ */
+enum iwl_nan_sched_update_status {
+	IWL_NAN_SCHED_UPDATE_SUCCESS = 0,
+	IWL_NAN_SCHED_UPDATE_FAILURE = 1,
+};
+
+/**
+ * struct iwl_nan_sched_update_completed_notif - NAN schedule update completed
+ *
+ * @status: status of the schedule update operation. See
+ *	&enum iwl_nan_sched_update_status
+ * @reserved: reserved
+ */
+struct iwl_nan_sched_update_completed_notif {
+	u8 status;
+	u8 reserved[3];
+} __packed; /* NAN_SCHED_UPDATE_COMPLETED_NTF_API_S_VER_1 */
 
 #endif /* __iwl_fw_api_mac_cfg_h__ */

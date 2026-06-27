@@ -3339,7 +3339,7 @@ static int ath12k_qmi_aux_uc_load(struct ath12k_base *ab)
 		goto out;
 	}
 
-	 aux_uc_mem->total_size = aux_uc_len;
+	aux_uc_mem->total_size = aux_uc_len;
 
 copy:
 	memcpy(aux_uc_mem->vaddr, aux_uc_data, aux_uc_len);
@@ -4061,7 +4061,7 @@ int ath12k_qmi_init_service(struct ath12k_base *ab)
 	spin_lock_init(&ab->qmi.event_lock);
 	INIT_WORK(&ab->qmi.event_work, ath12k_qmi_driver_event_work);
 
-	ret = qmi_add_lookup(&ab->qmi.handle, ATH12K_QMI_WLFW_SERVICE_ID_V01,
+	ret = qmi_add_lookup(&ab->qmi.handle, QMI_SERVICE_ID_WLFW,
 			     ATH12K_QMI_WLFW_SERVICE_VERS_V01,
 			     ab->qmi.service_ins_id);
 	if (ret < 0) {

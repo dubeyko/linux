@@ -17,7 +17,6 @@
 #include <linux/compat.h>
 #include <linux/uaccess.h>
 #include <linux/mount.h>
-#include <linux/pagevec.h>
 #include <linux/uio.h>
 #include <linux/uuid.h>
 #include <linux/file.h>
@@ -82,8 +81,17 @@ static vm_fault_t f2fs_vm_page_mkwrite(struct vm_fault *vmf)
 	int err = 0;
 	vm_fault_t ret;
 
-	if (unlikely(IS_IMMUTABLE(inode)))
+	/*
+	 * We only support large folio on the read case.
+	 * Don't make any dirty pages.
+	 */
+	if (unlikely(IS_IMMUTABLE(inode)) ||
+	    mapping_large_folio_support(inode->i_mapping)) {
+		f2fs_err(sbi, "Not expected: immutable: %d large_folio: %d",
+				IS_IMMUTABLE(inode),
+				mapping_large_folio_support(inode->i_mapping));
 		return VM_FAULT_SIGBUS;
+	}
 
 	if (is_inode_flag_set(inode, FI_COMPRESS_RELEASED)) {
 		err = -EIO;
@@ -1090,6 +1098,8 @@ int f2fs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 		return -EPERM;
 
 	if ((attr->ia_valid & ATTR_SIZE)) {
+		if (mapping_large_folio_support(inode->i_mapping))
+			return -EOPNOTSUPP;
 		if (!f2fs_is_compress_backend_ready(inode) ||
 				IS_DEVICE_ALIASING(inode))
 			return -EOPNOTSUPP;
@@ -1906,8 +1916,15 @@ static int f2fs_expand_inode_data(struct inode *inode, loff_t offset,
 
 	if (f2fs_is_pinned_file(inode)) {
 		block_t sec_blks = CAP_BLKS_PER_SEC(sbi);
-		block_t sec_len = roundup(map.m_len, sec_blks);
+		block_t sec_len;
 
+		if (map.m_lblk % sec_blks) {
+			map.m_lblk = rounddown(map.m_lblk, sec_blks);
+			map.m_len = pg_end - map.m_lblk;
+			if (off_end)
+				map.m_len++;
+		}
+		sec_len = roundup(map.m_len, sec_blks);
 		map.m_len = sec_blks;
 next_alloc:
 		f2fs_down_write(&sbi->pin_sem);
@@ -1917,7 +1934,7 @@ next_alloc:
 				f2fs_up_write(&sbi->pin_sem);
 				err = -ENOSPC;
 				f2fs_warn_ratelimited(sbi,
-					"ino:%lu, start:%lu, end:%lu, need to trigger GC to "
+					"ino:%llu, start:%lu, end:%lu, need to trigger GC to "
 					"reclaim enough free segment when checkpoint is enabled",
 					inode->i_ino, pg_start, pg_end);
 				goto out_err;
@@ -2307,7 +2324,7 @@ static int f2fs_ioc_start_atomic_write(struct file *filp, bool truncate)
 	 * f2fs_is_atomic_file.
 	 */
 	if (get_dirty_pages(inode))
-		f2fs_warn(sbi, "Unexpected flush for atomic writes: ino=%lu, npages=%u",
+		f2fs_warn(sbi, "Unexpected flush for atomic writes: ino=%llu, npages=%u",
 			  inode->i_ino, get_dirty_pages(inode));
 	ret = filemap_write_and_wait_range(inode->i_mapping, 0, LLONG_MAX);
 	if (ret)
@@ -3043,8 +3060,10 @@ out:
 	clear_inode_flag(inode, FI_OPU_WRITE);
 unlock_out:
 	inode_unlock(inode);
-	if (!err)
+	if (!err) {
 		range->len = (u64)total << PAGE_SHIFT;
+		stat_inc_defrag_blk_count(sbi, total);
+	}
 	return err;
 }
 
@@ -3494,7 +3513,7 @@ int f2fs_pin_file_control(struct inode *inode, bool inc)
 		return -EINVAL;
 
 	if (fi->i_gc_failures >= sbi->gc_pin_file_threshold) {
-		f2fs_warn(sbi, "%s: Enable GC = ino %lx after %x GC trials",
+		f2fs_warn(sbi, "%s: Enable GC = ino %llx after %x GC trials",
 			  __func__, inode->i_ino, fi->i_gc_failures);
 		clear_inode_flag(inode, FI_PIN_FILE);
 		return -EAGAIN;
@@ -3679,7 +3698,7 @@ static int f2fs_ioc_enable_verity(struct file *filp, unsigned long arg)
 
 	if (!f2fs_sb_has_verity(F2FS_I_SB(inode))) {
 		f2fs_warn(F2FS_I_SB(inode),
-			  "Can't enable fs-verity on inode %lu: the verity feature is not enabled on this filesystem",
+			  "Can't enable fs-verity on inode %llu: the verity feature is not enabled on this filesystem",
 			  inode->i_ino);
 		return -EOPNOTSUPP;
 	}
@@ -3950,7 +3969,7 @@ out:
 	} else if (released_blocks &&
 			atomic_read(&fi->i_compr_blocks)) {
 		set_sbi_flag(sbi, SBI_NEED_FSCK);
-		f2fs_warn(sbi, "%s: partial blocks were released i_ino=%lx "
+		f2fs_warn(sbi, "%s: partial blocks were released i_ino=%llx "
 			"iblocks=%llu, released=%u, compr_blocks=%u, "
 			"run fsck to fix.",
 			__func__, inode->i_ino, inode->i_blocks,
@@ -4133,7 +4152,7 @@ unlock_inode:
 	} else if (reserved_blocks &&
 			atomic_read(&fi->i_compr_blocks)) {
 		set_sbi_flag(sbi, SBI_NEED_FSCK);
-		f2fs_warn(sbi, "%s: partial blocks were reserved i_ino=%lx "
+		f2fs_warn(sbi, "%s: partial blocks were reserved i_ino=%llx "
 			"iblocks=%llu, reserved=%u, compr_blocks=%u, "
 			"run fsck to fix.",
 			__func__, inode->i_ino, inode->i_blocks,
@@ -4162,7 +4181,9 @@ static int f2fs_secure_erase(struct block_device *bdev, struct inode *inode,
 
 	if (!ret && (flags & F2FS_TRIM_FILE_ZEROOUT)) {
 		if (IS_ENCRYPTED(inode))
-			ret = fscrypt_zeroout_range(inode, off, block, len);
+			ret = fscrypt_zeroout_range(inode,
+					(loff_t)off << inode->i_blkbits, sector,
+					(u64)len << inode->i_blkbits);
 		else
 			ret = blkdev_issue_zeroout(bdev, sector, nr_sects,
 					GFP_NOFS, 0);
@@ -4772,6 +4793,33 @@ static bool f2fs_should_use_dio(struct inode *inode, struct kiocb *iocb,
 	return true;
 }
 
+#ifdef CONFIG_F2FS_IOSTAT
+static void f2fs_dio_end_bio(struct bio *bio)
+{
+	struct bio_iostat_ctx *iostat_ctx = bio->bi_private;
+	void *orig_bi_private = iostat_ctx->post_read_ctx;
+
+	iostat_update_and_unbind_ctx(bio);
+	bio->bi_private = orig_bi_private;
+	iomap_dio_bio_end_io(bio);
+}
+
+static void f2fs_dio_iostat_start(struct f2fs_sb_info *sbi, struct bio *bio)
+{
+	void *bi_private = bio->bi_private;
+
+	if (!sbi->iostat_enable)
+		return;
+
+	iostat_alloc_and_bind_ctx(sbi, bio, bi_private);
+	iostat_update_submit_ctx(bio, DATA);
+	bio->bi_end_io = f2fs_dio_end_bio;
+}
+#else
+static inline void f2fs_dio_iostat_start(struct f2fs_sb_info *sbi,
+					 struct bio *bio) {}
+#endif
+
 static int f2fs_dio_read_end_io(struct kiocb *iocb, ssize_t size, int error,
 				unsigned int flags)
 {
@@ -4784,8 +4832,18 @@ static int f2fs_dio_read_end_io(struct kiocb *iocb, ssize_t size, int error,
 	return 0;
 }
 
+static void f2fs_dio_read_submit_io(const struct iomap_iter *iter,
+					struct bio *bio, loff_t file_offset)
+{
+	struct f2fs_sb_info *sbi = F2FS_I_SB(iter->inode);
+
+	f2fs_dio_iostat_start(sbi, bio);
+	blk_crypto_submit_bio(bio);
+}
+
 static const struct iomap_dio_ops f2fs_iomap_dio_read_ops = {
 	.end_io = f2fs_dio_read_end_io,
+	.submit_io = f2fs_dio_read_submit_io,
 };
 
 static ssize_t f2fs_dio_read_iter(struct kiocb *iocb, struct iov_iter *to)
@@ -5055,15 +5113,35 @@ static int f2fs_dio_write_end_io(struct kiocb *iocb, ssize_t size, int error,
 	return 0;
 }
 
+static bool f2fs_valid_write_stream(struct f2fs_sb_info *sbi, u8 write_stream)
+{
+	int i;
+
+	if (!write_stream)
+		return true;
+	if (!f2fs_is_multi_device(sbi))
+		return write_stream <= bdev_max_write_streams(sbi->sb->s_bdev);
+
+	for (i = 0; i < sbi->s_ndevs; i++)
+		if (write_stream > bdev_max_write_streams(FDEV(i).bdev))
+			return false;
+	return true;
+}
+
 static void f2fs_dio_write_submit_io(const struct iomap_iter *iter,
 					struct bio *bio, loff_t file_offset)
 {
 	struct inode *inode = iter->inode;
 	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct kiocb *iocb = iter->private;
 	enum log_type type = f2fs_rw_hint_to_seg_type(sbi, inode->i_write_hint);
 	enum temp_type temp = f2fs_get_segment_temp(sbi, type);
 
 	bio->bi_write_hint = f2fs_io_type_to_rw_hint(sbi, DATA, temp);
+	bio->bi_write_stream =
+		iocb->ki_write_stream ? iocb->ki_write_stream :
+		f2fs_io_type_to_write_stream(bio->bi_bdev, DATA, temp);
+	f2fs_dio_iostat_start(sbi, bio);
 	blk_crypto_submit_bio(bio);
 }
 
@@ -5100,6 +5178,11 @@ static ssize_t f2fs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from,
 	ssize_t ret;
 
 	trace_f2fs_direct_IO_enter(inode, iocb, count, WRITE);
+
+	if (!f2fs_valid_write_stream(sbi, iocb->ki_write_stream)) {
+		ret = -EINVAL;
+		goto out;
+	}
 
 	if (iocb->ki_flags & IOCB_NOWAIT) {
 		/* f2fs_convert_inline_inode() and block allocation can block */
@@ -5138,7 +5221,7 @@ static ssize_t f2fs_dio_write_iter(struct kiocb *iocb, struct iov_iter *from,
 	if (pos + count > inode->i_size)
 		dio_flags |= IOMAP_DIO_FORCE_WAIT;
 	dio = __iomap_dio_rw(iocb, from, &f2fs_iomap_ops,
-			     &f2fs_iomap_dio_write_ops, dio_flags, NULL, 0);
+			     &f2fs_iomap_dio_write_ops, dio_flags, iocb, 0);
 	if (IS_ERR_OR_NULL(dio)) {
 		ret = PTR_ERR_OR_ZERO(dio);
 		if (ret == -ENOTBLK)

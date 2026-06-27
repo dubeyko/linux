@@ -716,6 +716,10 @@ static int mlx5_cmd_set_fte(struct mlx5_core_dev *dev,
 				id = dst->dest_attr.ft->id;
 				ifc_type = MLX5_IFC_FLOW_DESTINATION_TYPE_TABLE_TYPE;
 				break;
+			case MLX5_FLOW_DESTINATION_TYPE_VHCA_RX:
+				id = dst->dest_attr.vhca.id;
+				ifc_type = MLX5_IFC_FLOW_DESTINATION_TYPE_VHCA_RX;
+				break;
 			default:
 				id = dst->dest_attr.tir_num;
 				ifc_type = MLX5_IFC_FLOW_DESTINATION_TYPE_TIR;
@@ -1183,7 +1187,7 @@ int mlx5_fs_cmd_set_l2table_entry_silent(struct mlx5_core_dev *dev, u8 silent_mo
 {
 	u32 in[MLX5_ST_SZ_DW(set_l2_table_entry_in)] = {};
 
-	if (silent_mode && !MLX5_CAP_GEN(dev, silent_mode))
+	if (silent_mode && !MLX5_CAP_GEN(dev, silent_mode_set))
 		return -EOPNOTSUPP;
 
 	MLX5_SET(set_l2_table_entry_in, in, opcode, MLX5_CMD_OP_SET_L2_TABLE_ENTRY);
@@ -1212,4 +1216,25 @@ int mlx5_fs_cmd_set_tx_flow_table_root(struct mlx5_core_dev *dev, u32 ft_id, boo
 		MLX5_SET(set_flow_table_root_in, in, table_id, ft_id);
 
 	return mlx5_cmd_exec(dev, in, sizeof(in), out, sizeof(out));
+}
+
+int mlx5_fs_cmd_query_l2table_silent(struct mlx5_core_dev *dev, u8 *silent_mode)
+{
+	u32 out[MLX5_ST_SZ_DW(query_l2_table_entry_out)] = {};
+	u32 in[MLX5_ST_SZ_DW(query_l2_table_entry_in)] = {};
+	int err;
+
+	if (!MLX5_CAP_GEN(dev, silent_mode_query))
+		return -EOPNOTSUPP;
+
+	MLX5_SET(query_l2_table_entry_in, in, opcode,
+		 MLX5_CMD_OP_QUERY_L2_TABLE_ENTRY);
+	MLX5_SET(query_l2_table_entry_in, in, silent_mode_query, 1);
+
+	err = mlx5_cmd_exec_inout(dev, query_l2_table_entry, in, out);
+	if (err)
+		return err;
+
+	*silent_mode = MLX5_GET(query_l2_table_entry_out, out, silent_mode);
+	return 0;
 }

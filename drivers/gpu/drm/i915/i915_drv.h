@@ -61,6 +61,7 @@
 #include "intel_uncore.h"
 
 struct drm_i915_clock_gating_funcs;
+struct i915_overlay;
 struct intel_display;
 struct intel_pxp;
 struct vlv_s0ix_state;
@@ -248,7 +249,7 @@ struct drm_i915_private {
 	 *
 	 * This workqueue should be used for all unordered work
 	 * scheduling within i915, which used to be scheduled on the
-	 * system_wq before moving to a driver instance due
+	 * system_percpu_wq before moving to a driver instance due
 	 * deprecation of flush_scheduled_work().
 	 */
 	struct workqueue_struct *unordered_wq;
@@ -307,10 +308,14 @@ struct drm_i915_private {
 
 	struct intel_pxp *pxp;
 
+	struct i915_overlay *overlay;
+
 	struct i915_pmu pmu;
 
 	/* The TTM device structure. */
 	struct ttm_device bdev;
+
+	atomic_t pending_fb_pin;
 
 	I915_SELFTEST_DECLARE(struct i915_selftest_stash selftest;)
 

@@ -706,22 +706,19 @@ artpec6_crypto_setup_out_descr(struct artpec6_crypto_req_common *common,
 			       void *dst, unsigned int len, bool eop,
 			       bool use_short)
 {
-	if (use_short && len < 7) {
+	dma_addr_t dma_addr;
+	int ret;
+
+	if (use_short && len < 7)
 		return artpec6_crypto_setup_out_descr_short(common, dst, len,
 							    eop);
-	} else {
-		int ret;
-		dma_addr_t dma_addr;
 
-		ret = artpec6_crypto_dma_map_single(common, dst, len,
-						   DMA_TO_DEVICE,
-						   &dma_addr);
-		if (ret)
-			return ret;
+	ret = artpec6_crypto_dma_map_single(common, dst, len, DMA_TO_DEVICE,
+					    &dma_addr);
+	if (ret)
+		return ret;
 
-		return artpec6_crypto_setup_out_descr_phys(common, dma_addr,
-							   len, eop);
-	}
+	return artpec6_crypto_setup_out_descr_phys(common, dma_addr, len, eop);
 }
 
 /** artpec6_crypto_setup_in_descr_phys - Setup an in channel with a
@@ -1323,7 +1320,7 @@ static int artpec6_crypto_prepare_hash(struct ahash_request *areq)
 
 	artpec6_crypto_init_dma_operation(common);
 
-	/* Upload HMAC key, must be first the first packet */
+	/* Upload HMAC key, it must be the first packet */
 	if (req_ctx->hash_flags & HASH_FLAG_HMAC) {
 		if (variant == ARTPEC6_CRYPTO) {
 			req_ctx->key_md = FIELD_PREP(A6_CRY_MD_OPER,
@@ -1333,11 +1330,8 @@ static int artpec6_crypto_prepare_hash(struct ahash_request *areq)
 						     a7_regk_crypto_dlkey);
 		}
 
-		/* Copy and pad up the key */
-		memcpy(req_ctx->key_buffer, ctx->hmac_key,
-		       ctx->hmac_key_length);
-		memset(req_ctx->key_buffer + ctx->hmac_key_length, 0,
-		       blocksize - ctx->hmac_key_length);
+		memcpy_and_pad(req_ctx->key_buffer, blocksize, ctx->hmac_key,
+			       ctx->hmac_key_length, 0);
 
 		error = artpec6_crypto_setup_out_descr(common,
 					(void *)&req_ctx->key_md,

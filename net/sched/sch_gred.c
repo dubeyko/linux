@@ -251,10 +251,10 @@ static int gred_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 
 	q->stats.pdrop++;
 drop:
-	return qdisc_drop_reason(skb, sch, to_free, SKB_DROP_REASON_QDISC_OVERLIMIT);
+	return qdisc_drop_reason(skb, sch, to_free, QDISC_DROP_OVERLIMIT);
 
 congestion_drop:
-	qdisc_drop_reason(skb, sch, to_free, SKB_DROP_REASON_QDISC_CONGESTED);
+	qdisc_drop_reason(skb, sch, to_free, QDISC_DROP_CONGESTED);
 	return NET_XMIT_CN;
 }
 
@@ -388,8 +388,8 @@ static int gred_offload_dump_stats(struct Qdisc *sch)
 		bytes += u64_stats_read(&hw_stats->stats.bstats[i].bytes);
 		packets += u64_stats_read(&hw_stats->stats.bstats[i].packets);
 		sch->qstats.qlen += hw_stats->stats.qstats[i].qlen;
-		sch->qstats.backlog += hw_stats->stats.qstats[i].backlog;
-		sch->qstats.drops += hw_stats->stats.qstats[i].drops;
+		qstats_backlog_add(sch, hw_stats->stats.qstats[i].backlog);
+		__qdisc_qstats_drop(sch, hw_stats->stats.qstats[i].drops);
 		sch->qstats.requeues += hw_stats->stats.qstats[i].requeues;
 		sch->qstats.overlimits += hw_stats->stats.qstats[i].overlimits;
 	}

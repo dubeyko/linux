@@ -250,6 +250,7 @@ void opp1_set_dyn_expansion(
 	enum dc_color_depth color_dpth,
 	enum signal_type signal)
 {
+	(void)color_sp;
 	struct dcn10_opp *oppn10 = TO_DCN10_OPP(opp);
 
 	REG_UPDATE_2(FMT_DYNAMIC_EXP_CNTL,
@@ -262,6 +263,7 @@ void opp1_set_dyn_expansion(
 	/*00 - 10-bit -> 12-bit dynamic expansion*/
 	/*01 - 8-bit  -> 12-bit dynamic expansion*/
 	if (signal == SIGNAL_TYPE_HDMI_TYPE_A ||
+		signal == SIGNAL_TYPE_HDMI_FRL ||
 		signal == SIGNAL_TYPE_DISPLAY_PORT ||
 		signal == SIGNAL_TYPE_DISPLAY_PORT_MST ||
 		signal == SIGNAL_TYPE_VIRTUAL) {

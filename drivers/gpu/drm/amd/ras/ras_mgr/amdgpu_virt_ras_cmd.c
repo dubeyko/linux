@@ -30,43 +30,114 @@
 #include "amdgpu_virt_ras_cmd.h"
 #include "amdgpu_ras_mgr.h"
 
+static int amdgpu_virt_ras_get_cmd_shared_mem(struct ras_core_context *ras_core,
+		uint32_t cmd, uint32_t mem_size, struct amdgpu_virt_shared_mem *shared_mem)
+{
+	struct amdgpu_device *adev = ras_core->dev;
+	struct amdsriov_ras_telemetry *ras_telemetry_cpu;
+	struct amdsriov_ras_telemetry *ras_telemetry_gpu;
+	void *fw_va = adev->mman.resv_region[AMDGPU_RESV_FW_VRAM_USAGE].cpu_ptr;
+	void *drv_va = adev->mman.resv_region[AMDGPU_RESV_DRV_VRAM_USAGE].cpu_ptr;
+	uint64_t fw_vram_usage_start_offset = 0;
+	uint64_t ras_telemetry_offset = 0;
+
+	if (!adev->virt.fw_reserve.ras_telemetry)
+		return -EINVAL;
+
+	if (fw_va && fw_va <= adev->virt.fw_reserve.ras_telemetry) {
+		fw_vram_usage_start_offset = adev->mman.resv_region[AMDGPU_RESV_FW_VRAM_USAGE].offset;
+		ras_telemetry_offset = (uintptr_t)adev->virt.fw_reserve.ras_telemetry -
+				(uintptr_t)fw_va;
+	} else if (drv_va && drv_va <= adev->virt.fw_reserve.ras_telemetry) {
+		fw_vram_usage_start_offset = adev->mman.resv_region[AMDGPU_RESV_DRV_VRAM_USAGE].offset;
+		ras_telemetry_offset = (uintptr_t)adev->virt.fw_reserve.ras_telemetry -
+				(uintptr_t)drv_va;
+	} else {
+		return -EINVAL;
+	}
+
+	ras_telemetry_cpu =
+		(struct amdsriov_ras_telemetry *)adev->virt.fw_reserve.ras_telemetry;
+	ras_telemetry_gpu =
+		(struct amdsriov_ras_telemetry *)(uintptr_t)(fw_vram_usage_start_offset +
+				ras_telemetry_offset);
+
+	if (cmd == RAS_CMD__GET_ALL_BLOCK_ECC_STATUS) {
+		if (mem_size > AMD_SRIOV_UNIRAS_BLOCKS_BUF_SIZE)
+			return -ENOMEM;
+
+		shared_mem->cpu_addr = ras_telemetry_cpu->uniras_shared_mem.blocks_ecc_buf;
+		shared_mem->gpa =
+			(uintptr_t)ras_telemetry_gpu->uniras_shared_mem.blocks_ecc_buf -
+					adev->gmc.vram_start;
+		shared_mem->size = mem_size;
+	} else {
+		if (mem_size > AMD_SRIOV_UNIRAS_CMD_MAX_SIZE)
+			return -ENOMEM;
+
+		shared_mem->cpu_addr = ras_telemetry_cpu->uniras_shared_mem.cmd_buf;
+		shared_mem->gpa =
+			(uintptr_t)ras_telemetry_gpu->uniras_shared_mem.cmd_buf -
+					adev->gmc.vram_start;
+		shared_mem->size = mem_size;
+	}
+
+	return 0;
+}
+
 static int amdgpu_virt_ras_remote_ioctl_cmd(struct ras_core_context *ras_core,
 			struct ras_cmd_ctx *cmd, void *output_data, uint32_t output_size)
 {
-	struct amdgpu_device *adev = (struct amdgpu_device *)ras_core->dev;
+	struct amdgpu_ras_mgr *ras_mgr = amdgpu_ras_mgr_get_context(ras_core->dev);
+	struct amdgpu_virt_ras_cmd *virt_ras = ras_mgr->virt_ras_cmd;
 	uint32_t mem_len = ALIGN(sizeof(*cmd) + output_size, AMDGPU_GPU_PAGE_SIZE);
 	struct ras_cmd_ctx *rcmd;
-	struct amdgpu_bo *rcmd_bo = NULL;
-	uint64_t mc_addr = 0;
-	void *cpu_addr = NULL;
+	struct ras_cmd_ctx hdr_snap;
+	struct amdgpu_virt_shared_mem shared_mem = {0};
 	int ret = 0;
 
-	ret = amdgpu_bo_create_kernel(adev, mem_len, PAGE_SIZE,
-			AMDGPU_GEM_DOMAIN_VRAM, &rcmd_bo, &mc_addr, (void **)&cpu_addr);
-	if (ret)
-		return ret;
+	mutex_lock(&virt_ras->remote_access_lock);
 
-	rcmd = (struct ras_cmd_ctx *)cpu_addr;
+	ret = amdgpu_virt_ras_get_cmd_shared_mem(ras_core, cmd->cmd_id, mem_len, &shared_mem);
+	if (ret)
+		goto out;
+
+	rcmd = (struct ras_cmd_ctx *)shared_mem.cpu_addr;
 	memset(rcmd, 0, mem_len);
 	memcpy(rcmd, cmd, sizeof(*cmd));
 
 	ret = amdgpu_virt_send_remote_ras_cmd(ras_core->dev,
-				mc_addr - adev->gmc.vram_start, mem_len);
+				shared_mem.gpa, mem_len);
 	if (!ret) {
-		if (rcmd->cmd_res) {
-			ret = rcmd->cmd_res;
+		/*
+		 * rcmd lives in shared memory the PF can mutate at any time.
+		 * Snapshot the entire fixed-size response header into a local
+		 * struct in one shot so every subsequent decision (cmd_res,
+		 * output_size, version, etc.) operates on a stable copy. This
+		 * defeats double-fetch / TOCTOU attacks where a malicious or
+		 * buggy PF could flip cmd_res from SUCCESS to an error after
+		 * our success branch, or enlarge output_size between the
+		 * bounds check and the memcpy below to corrupt the caller's
+		 * local output buffer.
+		 */
+		memcpy(&hdr_snap, rcmd, sizeof(hdr_snap));
+		barrier();
+
+		if (hdr_snap.cmd_res) {
+			ret = hdr_snap.cmd_res;
 			goto out;
 		}
 
-		cmd->cmd_res = rcmd->cmd_res;
-		cmd->output_size = rcmd->output_size;
-		if (rcmd->output_size && (rcmd->output_size <= output_size) && output_data)
-			memcpy(output_data, rcmd->output_buff_raw, rcmd->output_size);
+		cmd->cmd_res = hdr_snap.cmd_res;
+		cmd->output_size = hdr_snap.output_size;
+
+		if (hdr_snap.output_size && output_data &&
+		    hdr_snap.output_size <= output_size)
+			memcpy(output_data, rcmd->output_buff_raw, hdr_snap.output_size);
 	}
 
 out:
-	amdgpu_bo_free_kernel(&rcmd_bo, &mc_addr, &cpu_addr);
-
+	mutex_unlock(&virt_ras->remote_access_lock);
 	return ret;
 }
 
@@ -76,6 +147,9 @@ static int amdgpu_virt_ras_send_remote_cmd(struct ras_core_context *ras_core,
 {
 	struct ras_cmd_ctx rcmd = {0};
 	int ret;
+
+	if (input_size > RAS_CMD_MAX_IN_SIZE)
+		return RAS_CMD__ERROR_INVALID_INPUT_SIZE;
 
 	rcmd.cmd_id = cmd_id;
 	rcmd.input_size = input_size;
@@ -135,8 +209,17 @@ static int amdgpu_virt_ras_get_cper_snapshot(struct ras_core_context *ras_core,
 	return RAS_CMD__SUCCESS;
 }
 
+static bool amdgpu_virt_ras_check_batch_cached(struct ras_cmd_batch_trace_record_rsp *rsp,
+				       uint64_t batch_id)
+{
+	return rsp->real_batch_num &&
+	       rsp->real_batch_num <= RAS_CMD_MAX_BATCH_NUM &&
+	       batch_id >= rsp->start_batch_id &&
+	       (batch_id - rsp->start_batch_id) < rsp->real_batch_num;
+}
+
 static int amdgpu_virt_ras_get_batch_records(struct ras_core_context *ras_core, uint64_t batch_id,
-			struct ras_log_info **trace_arr, uint32_t arr_num,
+			struct ras_log_info *trace_arr, uint32_t arr_num,
 			struct ras_cmd_batch_trace_record_rsp *rsp_cache)
 {
 	struct ras_cmd_batch_trace_record_req req = {
@@ -146,27 +229,34 @@ static int amdgpu_virt_ras_get_batch_records(struct ras_core_context *ras_core, 
 	struct ras_cmd_batch_trace_record_rsp *rsp = rsp_cache;
 	struct batch_ras_trace_info *batch;
 	int ret = 0;
-	uint8_t i;
+	uint32_t i;
+	uint32_t idx;
 
-	if (!rsp->real_batch_num || (batch_id < rsp->start_batch_id) ||
-		(batch_id >=  (rsp->start_batch_id + rsp->real_batch_num))) {
-
+	if (!amdgpu_virt_ras_check_batch_cached(rsp, batch_id)) {
 		memset(rsp, 0, sizeof(*rsp));
 		ret = amdgpu_virt_ras_send_remote_cmd(ras_core, RAS_CMD__GET_BATCH_TRACE_RECORD,
 			&req, sizeof(req), rsp, sizeof(*rsp));
 		if (ret)
 			return -EPIPE;
+
+		if (!amdgpu_virt_ras_check_batch_cached(rsp, batch_id)) {
+			memset(rsp, 0, sizeof(*rsp));
+			return -EIO;
+		}
 	}
 
-	batch = &rsp->batchs[batch_id - rsp->start_batch_id];
-	if (batch_id != batch->batch_id)
-		return -ENODATA;
-
-	for (i = 0; i < batch->trace_num; i++) {
-		if (i >= arr_num)
-			break;
-		trace_arr[i] = &rsp->records[batch->offset + i];
+	idx = (uint32_t)(batch_id - rsp->start_batch_id);
+	batch = &rsp->batchs[idx];
+	if (batch_id != batch->batch_id ||
+	    batch->trace_num > MAX_RECORD_PER_BATCH ||
+	    (uint32_t)batch->offset + batch->trace_num > RAS_CMD_MAX_TRACE_NUM) {
+		memset(rsp, 0, sizeof(*rsp));
+		return -EIO;
 	}
+
+	for (i = 0; i < batch->trace_num && i < arr_num; i++)
+		memcpy(&trace_arr[i],
+			&rsp->records[batch->offset + i], sizeof(*trace_arr));
 
 	return i;
 }
@@ -183,19 +273,22 @@ static int amdgpu_virt_ras_get_cper_records(struct ras_core_context *ras_core,
 		(struct ras_cmd_cper_record_rsp *)cmd->output_buff_raw;
 	struct ras_log_batch_overview *overview = &virt_ras->batch_mgr.batch_overview;
 	struct ras_cmd_batch_trace_record_rsp *rsp_cache = &virt_ras->batch_mgr.batch_trace;
-	struct ras_log_info **trace;
+	struct ras_log_info *trace;
+	uint32_t trace_count = MAX_RECORD_PER_BATCH;
 	uint32_t offset = 0, real_data_len = 0;
 	uint64_t batch_id;
 	uint8_t *out_buf;
 	int ret = 0, i, count;
 
-	if (cmd->input_size != sizeof(struct ras_cmd_cper_record_req))
+	if (cmd->input_size != sizeof(struct ras_cmd_cper_record_req) ||
+		(cmd->output_buf_size < sizeof(*rsp)))
 		return RAS_CMD__ERROR_INVALID_INPUT_SIZE;
 
-	if (!req->buf_size || !req->buf_ptr || !req->cper_num)
+	if (!req->buf_size || !req->buf_ptr || !req->cper_num ||
+	    req->buf_size > RAS_CMD_MAX_CPER_BUF_SZ)
 		return RAS_CMD__ERROR_INVALID_INPUT_DATA;
 
-	trace = kzalloc_objs(*trace, MAX_RECORD_PER_BATCH);
+	trace = kzalloc_objs(*trace, trace_count);
 	if (!trace)
 		return RAS_CMD__ERROR_GENERIC;
 
@@ -212,7 +305,7 @@ static int amdgpu_virt_ras_get_cper_records(struct ras_core_context *ras_core,
 		if (batch_id >= overview->last_batch_id)
 			break;
 		count = amdgpu_virt_ras_get_batch_records(ras_core, batch_id,
-							  trace, MAX_RECORD_PER_BATCH,
+							  trace, trace_count,
 							  rsp_cache);
 		if (count > 0) {
 			ret = ras_cper_generate_cper(ras_core, trace, count,
@@ -249,14 +342,14 @@ static int __fill_get_blocks_ecc_cmd(struct amdgpu_device *adev,
 {
 	struct ras_cmd_ctx *rcmd;
 
-	if (!blks_ecc || !blks_ecc->bo || !blks_ecc->cpu_addr)
+	if (!blks_ecc || !blks_ecc->shared_mem.cpu_addr)
 		return -EINVAL;
 
-	rcmd = (struct ras_cmd_ctx *)blks_ecc->cpu_addr;
+	rcmd = (struct ras_cmd_ctx *)blks_ecc->shared_mem.cpu_addr;
 
 	rcmd->cmd_id = RAS_CMD__GET_ALL_BLOCK_ECC_STATUS;
 	rcmd->input_size = sizeof(struct ras_cmd_blocks_ecc_req);
-	rcmd->output_buf_size = blks_ecc->size - sizeof(*rcmd);
+	rcmd->output_buf_size = blks_ecc->shared_mem.size - sizeof(*rcmd);
 
 	return 0;
 }
@@ -305,15 +398,15 @@ static int amdgpu_virt_ras_get_block_ecc(struct ras_core_context *ras_core,
 
 	if (!virt_ras->blocks_ecc.auto_update_actived) {
 		ret = __set_cmd_auto_update(adev, RAS_CMD__GET_ALL_BLOCK_ECC_STATUS,
-				blks_ecc->mc_addr - adev->gmc.vram_start,
-				blks_ecc->size, true);
+				blks_ecc->shared_mem.gpa,
+				blks_ecc->shared_mem.size, true);
 		if (ret)
 			return ret;
 
 		blks_ecc->auto_update_actived = true;
 	}
 
-	blks_ecc_cmd_ctx = blks_ecc->cpu_addr;
+	blks_ecc_cmd_ctx = blks_ecc->shared_mem.cpu_addr;
 	blks_ecc_rsp = (struct ras_cmd_blocks_ecc_rsp *)blks_ecc_cmd_ctx->output_buff_raw;
 
 	output_data->ce_count = blks_ecc_rsp->blocks[input_data->block_id].ce_count;
@@ -322,6 +415,53 @@ static int amdgpu_virt_ras_get_block_ecc(struct ras_core_context *ras_core,
 
 	cmd->output_size = sizeof(struct ras_cmd_block_ecc_info_rsp);
 	return RAS_CMD__SUCCESS;
+}
+
+int amdgpu_virt_ras_check_address_validity(struct amdgpu_device *adev,
+			uint64_t address, bool *hit)
+{
+	struct ras_cmd_address_check_req req = {0};
+	struct ras_cmd_address_check_rsp rsp = {0};
+	int ret = 0;
+
+	req.address = address;
+
+	ret = amdgpu_ras_mgr_handle_ras_cmd(adev, RAS_CMD__CHECK_ADDRESS_VALIDITY,
+		&req, sizeof(req), &rsp, sizeof(rsp));
+
+	if (ret)
+		return RAS_CMD__ERROR_GENERIC;
+
+	*hit = rsp.result ? true : false;
+
+	return RAS_CMD__SUCCESS;
+}
+
+int amdgpu_virt_ras_convert_retired_address(struct amdgpu_device *adev,
+			uint64_t address, uint64_t *pfn, uint32_t max_pfn_sz)
+{
+	struct ras_cmd_convert_retired_address_req req = {0};
+	struct ras_cmd_convert_retired_address_rsp rsp = {0};
+	int ret = 0, i;
+	int retired_page_count;
+
+	if (!pfn || !max_pfn_sz)
+		return -EINVAL;
+
+	req.address = address;
+
+	ret = amdgpu_ras_mgr_handle_ras_cmd(adev, RAS_CMD__CONVERT_RETIRED_ADDRESS,
+		&req, sizeof(req), &rsp, sizeof(rsp));
+
+	if (ret || rsp.retired_count == 0)
+		return -EINVAL;
+
+	retired_page_count = rsp.retired_count > max_pfn_sz ? max_pfn_sz : rsp.retired_count;
+
+	for (i = 0; i < retired_page_count; i++)
+		pfn[i] = rsp.retired_addr[i] >> AMDGPU_GPU_PAGE_SHIFT;
+
+	return retired_page_count;
 }
 
 static struct ras_cmd_func_map amdgpu_virt_ras_cmd_maps[] = {
@@ -351,7 +491,7 @@ int amdgpu_virt_ras_handle_cmd(struct ras_core_context *ras_core,
 
 	cmd->cmd_res = res;
 
-	if (cmd->output_size > cmd->output_buf_size) {
+	if (!res && (cmd->output_size > cmd->output_buf_size)) {
 		RAS_DEV_ERR(ras_core->dev,
 			"Output data size 0x%x exceeds buffer size 0x%x!\n",
 			cmd->output_size, cmd->output_buf_size);
@@ -364,10 +504,14 @@ int amdgpu_virt_ras_handle_cmd(struct ras_core_context *ras_core,
 int amdgpu_virt_ras_sw_init(struct amdgpu_device *adev)
 {
 	struct amdgpu_ras_mgr *ras_mgr = amdgpu_ras_mgr_get_context(adev);
+	struct amdgpu_virt_ras_cmd *virt_ras_cmd;
 
 	ras_mgr->virt_ras_cmd = kzalloc_obj(struct amdgpu_virt_ras_cmd);
 	if (!ras_mgr->virt_ras_cmd)
 		return -ENOMEM;
+
+	virt_ras_cmd = ras_mgr->virt_ras_cmd;
+	mutex_init(&virt_ras_cmd->remote_access_lock);
 
 	return 0;
 }
@@ -375,7 +519,9 @@ int amdgpu_virt_ras_sw_init(struct amdgpu_device *adev)
 int amdgpu_virt_ras_sw_fini(struct amdgpu_device *adev)
 {
 	struct amdgpu_ras_mgr *ras_mgr = amdgpu_ras_mgr_get_context(adev);
+	struct amdgpu_virt_ras_cmd *virt_ras_cmd = ras_mgr->virt_ras_cmd;
 
+	mutex_destroy(&virt_ras_cmd->remote_access_lock);
 	kfree(ras_mgr->virt_ras_cmd);
 	ras_mgr->virt_ras_cmd = NULL;
 
@@ -392,11 +538,9 @@ int amdgpu_virt_ras_hw_init(struct amdgpu_device *adev)
 	amdgpu_virt_get_ras_capability(adev);
 
 	memset(blks_ecc, 0, sizeof(*blks_ecc));
-	blks_ecc->size = PAGE_SIZE;
-	if (amdgpu_bo_create_kernel(adev, blks_ecc->size,
-			PAGE_SIZE, AMDGPU_GEM_DOMAIN_VRAM,
-			&blks_ecc->bo, &blks_ecc->mc_addr,
-			(void **)&blks_ecc->cpu_addr))
+	if (amdgpu_virt_ras_get_cmd_shared_mem(ras_mgr->ras_core,
+			RAS_CMD__GET_ALL_BLOCK_ECC_STATUS,
+			AMD_SRIOV_UNIRAS_BLOCKS_BUF_SIZE, &blks_ecc->shared_mem))
 		return -ENOMEM;
 
 	return 0;
@@ -409,18 +553,10 @@ int amdgpu_virt_ras_hw_fini(struct amdgpu_device *adev)
 			(struct amdgpu_virt_ras_cmd *)ras_mgr->virt_ras_cmd;
 	struct vram_blocks_ecc *blks_ecc = &virt_ras->blocks_ecc;
 
-	if (blks_ecc->bo) {
-		__set_cmd_auto_update(adev,
-			RAS_CMD__GET_ALL_BLOCK_ECC_STATUS,
-			blks_ecc->mc_addr - adev->gmc.vram_start,
-			blks_ecc->size, false);
+	if (blks_ecc->shared_mem.cpu_addr)
+		memset(blks_ecc->shared_mem.cpu_addr, 0, blks_ecc->shared_mem.size);
 
-		memset(blks_ecc->cpu_addr, 0, blks_ecc->size);
-		amdgpu_bo_free_kernel(&blks_ecc->bo,
-			&blks_ecc->mc_addr, &blks_ecc->cpu_addr);
-
-		memset(blks_ecc, 0, sizeof(*blks_ecc));
-	}
+	memset(blks_ecc, 0, sizeof(*blks_ecc));
 
 	return 0;
 }

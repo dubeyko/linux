@@ -13,11 +13,6 @@ enum { MAX_NESTED_LINKS = 8 };
 
 #define MAXSYMLINKS 40
 
-/*
- * Type of the last component on LOOKUP_PARENT
- */
-enum {LAST_NORM, LAST_ROOT, LAST_DOT, LAST_DOTDOT};
-
 /* pathwalk mode */
 #define LOOKUP_FOLLOW		BIT(0)	/* follow links at the end */
 #define LOOKUP_DIRECTORY	BIT(1)	/* require a directory */
@@ -54,9 +49,6 @@ extern int path_pts(struct path *path);
 
 extern int user_path_at(int, const char __user *, unsigned, struct path *);
 
-struct dentry *lookup_one_qstr_excl(const struct qstr *name,
-				    struct dentry *base,
-				    unsigned int flags);
 extern int kern_path(const char *, unsigned, struct path *);
 struct dentry *kern_path_parent(const char *name, struct path *parent);
 
@@ -64,13 +56,12 @@ extern struct dentry *start_creating_path(int, const char *, struct path *, unsi
 extern struct dentry *start_creating_user_path(int, const char __user *, struct path *, unsigned int);
 extern void end_creating_path(const struct path *, struct dentry *);
 extern struct dentry *start_removing_path(const char *, struct path *);
-extern struct dentry *start_removing_user_path_at(int , const char __user *, struct path *);
 static inline void end_removing_path(const struct path *path , struct dentry *dentry)
 {
 	end_creating_path(path, dentry);
 }
 int vfs_path_parent_lookup(struct filename *filename, unsigned int flags,
-			   struct path *parent, struct qstr *last, int *type,
+			   struct path *parent, struct qstr *last,
 			   const struct path *root);
 int vfs_path_lookup(struct dentry *, struct vfsmount *, const char *,
 		    unsigned int, struct path *);
@@ -168,9 +159,6 @@ extern int follow_down_one(struct path *);
 extern int follow_down(struct path *path, unsigned int flags);
 extern int follow_up(struct path *);
 
-extern struct dentry *lock_rename(struct dentry *, struct dentry *);
-extern struct dentry *lock_rename_child(struct dentry *, struct dentry *);
-extern void unlock_rename(struct dentry *, struct dentry *);
 int start_renaming(struct renamedata *rd, int lookup_flags,
 		   struct qstr *old_last, struct qstr *new_last);
 int start_renaming_dentry(struct renamedata *rd, int lookup_flags,

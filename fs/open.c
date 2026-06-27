@@ -126,7 +126,7 @@ mnt_drop_write_and_out:
 }
 EXPORT_SYMBOL_GPL(vfs_truncate);
 
-int do_sys_truncate(const char __user *pathname, loff_t length)
+int ksys_truncate(const char __user *pathname, loff_t length)
 {
 	unsigned int lookup_flags = LOOKUP_FOLLOW;
 	struct path path;
@@ -151,33 +151,31 @@ retry:
 
 SYSCALL_DEFINE2(truncate, const char __user *, path, long, length)
 {
-	return do_sys_truncate(path, length);
+	return ksys_truncate(path, length);
 }
 
 #ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE2(truncate, const char __user *, path, compat_off_t, length)
 {
-	return do_sys_truncate(path, length);
+	return ksys_truncate(path, length);
 }
 #endif
 
-int do_ftruncate(struct file *file, loff_t length, int small)
+int do_ftruncate(struct file *file, loff_t length, unsigned int flags)
 {
-	struct inode *inode;
-	struct dentry *dentry;
+	struct dentry *dentry = file->f_path.dentry;
+	struct inode *inode = dentry->d_inode;
 	int error;
 
-	/* explicitly opened as large or we are on 64-bit box */
-	if (file->f_flags & O_LARGEFILE)
-		small = 0;
-
-	dentry = file->f_path.dentry;
-	inode = dentry->d_inode;
 	if (!S_ISREG(inode->i_mode) || !(file->f_mode & FMODE_WRITE))
 		return -EINVAL;
 
-	/* Cannot ftruncate over 2^31 bytes without large file support */
-	if (small && length > MAX_NON_LFS)
+	/*
+	 * Cannot ftruncate over 2^31 bytes without large file support, either
+	 * through opening with O_LARGEFILE or by using ftruncate64().
+	 */
+	if (length > MAX_NON_LFS &&
+	    !(file->f_flags & O_LARGEFILE) && !(flags & FTRUNCATE_LFS))
 		return -EINVAL;
 
 	/* Check IS_APPEND on real upper inode */
@@ -197,7 +195,7 @@ int do_ftruncate(struct file *file, loff_t length, int small)
 				   ATTR_MTIME | ATTR_CTIME, file);
 }
 
-int do_sys_ftruncate(unsigned int fd, loff_t length, int small)
+int ksys_ftruncate(unsigned int fd, loff_t length, unsigned int flags)
 {
 	if (length < 0)
 		return -EINVAL;
@@ -205,18 +203,18 @@ int do_sys_ftruncate(unsigned int fd, loff_t length, int small)
 	if (fd_empty(f))
 		return -EBADF;
 
-	return do_ftruncate(fd_file(f), length, small);
+	return do_ftruncate(fd_file(f), length, flags);
 }
 
 SYSCALL_DEFINE2(ftruncate, unsigned int, fd, off_t, length)
 {
-	return do_sys_ftruncate(fd, length, 1);
+	return ksys_ftruncate(fd, length, 0);
 }
 
 #ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE2(ftruncate, unsigned int, fd, compat_off_t, length)
 {
-	return do_sys_ftruncate(fd, length, 1);
+	return ksys_ftruncate(fd, length, 0);
 }
 #endif
 
@@ -224,12 +222,12 @@ COMPAT_SYSCALL_DEFINE2(ftruncate, unsigned int, fd, compat_off_t, length)
 #if BITS_PER_LONG == 32
 SYSCALL_DEFINE2(truncate64, const char __user *, path, loff_t, length)
 {
-	return do_sys_truncate(path, length);
+	return ksys_truncate(path, length);
 }
 
 SYSCALL_DEFINE2(ftruncate64, unsigned int, fd, loff_t, length)
 {
-	return do_sys_ftruncate(fd, length, 0);
+	return ksys_ftruncate(fd, length, FTRUNCATE_LFS);
 }
 #endif /* BITS_PER_LONG == 32 */
 
@@ -245,7 +243,7 @@ COMPAT_SYSCALL_DEFINE3(truncate64, const char __user *, pathname,
 COMPAT_SYSCALL_DEFINE3(ftruncate64, unsigned int, fd,
 		       compat_arg_u64_dual(length))
 {
-	return ksys_ftruncate(fd, compat_arg_u64_glue(length));
+	return ksys_ftruncate(fd, compat_arg_u64_glue(length), FTRUNCATE_LFS);
 }
 #endif
 
@@ -962,40 +960,13 @@ static int do_dentry_open(struct file *f,
 	if (f->f_mapping->a_ops && f->f_mapping->a_ops->direct_IO)
 		f->f_mode |= FMODE_CAN_ODIRECT;
 
-	f->f_flags &= ~(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC);
+	f->f_flags &= ~(O_CREAT | O_EXCL | O_NOCTTY | O_TRUNC | __O_REGULAR);
 	f->f_iocb_flags = iocb_flags(f);
 
 	file_ra_state_init(&f->f_ra, f->f_mapping->host->i_mapping);
 
 	if ((f->f_flags & O_DIRECT) && !(f->f_mode & FMODE_CAN_ODIRECT))
 		return -EINVAL;
-
-	/*
-	 * XXX: Huge page cache doesn't support writing yet. Drop all page
-	 * cache for this file before processing writes.
-	 */
-	if (f->f_mode & FMODE_WRITE) {
-		/*
-		 * Depends on full fence from get_write_access() to synchronize
-		 * against collapse_file() regarding i_writecount and nr_thps
-		 * updates. Ensures subsequent insertion of THPs into the page
-		 * cache will fail.
-		 */
-		if (filemap_nr_thps(inode->i_mapping)) {
-			struct address_space *mapping = inode->i_mapping;
-
-			filemap_invalidate_lock(inode->i_mapping);
-			/*
-			 * unmap_mapping_range just need to be called once
-			 * here, because the private pages is not need to be
-			 * unmapped mapping (e.g. data segment of dynamic
-			 * shared libraries here).
-			 */
-			unmap_mapping_range(mapping, 0, 0, 0);
-			truncate_inode_pages(mapping, 0);
-			filemap_invalidate_unlock(inode->i_mapping);
-		}
-	}
 
 	return 0;
 
@@ -1160,7 +1131,7 @@ struct file *kernel_file_open(const struct path *path, int flags,
 EXPORT_SYMBOL_GPL(kernel_file_open);
 
 #define WILL_CREATE(flags)	(flags & (O_CREAT | __O_TMPFILE))
-#define O_PATH_FLAGS		(O_DIRECTORY | O_NOFOLLOW | O_PATH | O_CLOEXEC)
+#define O_PATH_FLAGS		(O_DIRECTORY | O_NOFOLLOW | O_PATH | O_CLOEXEC | O_EMPTYPATH)
 
 inline struct open_how build_open_how(int flags, umode_t mode)
 {
@@ -1186,7 +1157,15 @@ inline int build_open_flags(const struct open_how *how, struct open_flags *op)
 	int acc_mode = ACC_MODE(flags);
 
 	BUILD_BUG_ON_MSG(upper_32_bits(VALID_OPEN_FLAGS),
-			 "struct open_flags doesn't yet handle flags > 32 bits");
+			 "VALID_OPEN_FLAGS must fit in 32 bits");
+	/* The whole point: OPENAT2_REGULAR must be unrepresentable in int. */
+	BUILD_BUG_ON_MSG(!upper_32_bits(OPENAT2_REGULAR),
+			 "OPENAT2_REGULAR must live in the upper 32 bits of open_how::flags");
+	/* Prevent a future bit collision between UAPI and internal carrier. */
+	BUILD_BUG_ON_MSG(OPENAT2_REGULAR & VALID_OPEN_FLAGS,
+			 "OPENAT2_REGULAR must not alias any open()/openat() flag");
+	BUILD_BUG_ON_MSG(__O_REGULAR & VALID_OPENAT2_FLAGS,
+			 "__O_REGULAR must not alias any user-visible flag");
 
 	/*
 	 * Strip flags that aren't relevant in determining struct open_flags.
@@ -1198,7 +1177,7 @@ inline int build_open_flags(const struct open_how *how, struct open_flags *op)
 	 * values before calling build_open_flags(), but openat2(2) checks all
 	 * of its arguments.
 	 */
-	if (flags & ~VALID_OPEN_FLAGS)
+	if (flags & ~VALID_OPENAT2_FLAGS)
 		return -EINVAL;
 	if (how->resolve & ~VALID_RESOLVE_FLAGS)
 		return -EINVAL;
@@ -1238,6 +1217,14 @@ inline int build_open_flags(const struct open_how *how, struct open_flags *op)
 		if (!(acc_mode & MAY_WRITE))
 			return -EINVAL;
 	}
+	/*
+	 * Asking to open a directory and a regular file at the same time is
+	 * contradictory.
+	 */
+	if ((flags & (O_DIRECTORY | OPENAT2_REGULAR)) ==
+	    (O_DIRECTORY | OPENAT2_REGULAR))
+		return -EINVAL;
+
 	if (flags & O_PATH) {
 		/* O_PATH only permits certain other flags to be set. */
 		if (flags & ~O_PATH_FLAGS)
@@ -1253,6 +1240,19 @@ inline int build_open_flags(const struct open_how *how, struct open_flags *op)
 	 */
 	if (flags & __O_SYNC)
 		flags |= O_DSYNC;
+
+	/*
+	 * Translate the upper-32-bit UAPI bit OPENAT2_REGULAR into the
+	 * kernel-internal lower-32-bit __O_REGULAR carrier so the bit
+	 * survives the assignment to op->open_flag (an int) below and the
+	 * subsequent flow through f->f_flags (unsigned int) and the
+	 * i_op->atomic_open() callback (unsigned). do_dentry_open() strips
+	 * __O_REGULAR before the file becomes visible to userspace.
+	 */
+	if (flags & OPENAT2_REGULAR) {
+		flags &= ~OPENAT2_REGULAR;
+		flags |= __O_REGULAR;
+	}
 
 	op->open_flag = flags;
 
@@ -1281,6 +1281,8 @@ inline int build_open_flags(const struct open_how *how, struct open_flags *op)
 		lookup_flags |= LOOKUP_DIRECTORY;
 	if (!(flags & O_NOFOLLOW))
 		lookup_flags |= LOOKUP_FOLLOW;
+	if (flags & O_EMPTYPATH)
+		lookup_flags |= LOOKUP_EMPTY;
 
 	if (how->resolve & RESOLVE_NO_XDEV)
 		lookup_flags |= LOOKUP_NO_XDEV;
@@ -1362,7 +1364,7 @@ static int do_sys_openat2(int dfd, const char __user *filename,
 	if (unlikely(err))
 		return err;
 
-	CLASS(filename, name)(filename);
+	CLASS(filename_flags, name)(filename, op.lookup_flags);
 	return FD_ADD(how->flags, do_file_open(dfd, name, &op));
 }
 

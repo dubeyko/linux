@@ -91,6 +91,18 @@ static struct vhost_vsock *vhost_vsock_get(u32 guest_cid, struct net *net)
 	return NULL;
 }
 
+static bool vhost_transport_has_remote_cid(struct vsock_sock *vsk, u32 cid)
+{
+	struct sock *sk = sk_vsock(vsk);
+	struct net *net = sock_net(sk);
+	bool found;
+
+	rcu_read_lock();
+	found = !!vhost_vsock_get(cid, net);
+	rcu_read_unlock();
+	return found;
+}
+
 static void
 vhost_transport_do_send_pkt(struct vhost_vsock *vsock,
 			    struct vhost_virtqueue *vq)
@@ -290,6 +302,22 @@ vhost_transport_send_pkt(struct sk_buff *skb, struct net *net)
 		return -ENODEV;
 	}
 
+	/* Fast-fail if the guest hasn't enabled the RX vq yet. Queuing the packet
+	 * and making the caller wait is pointless: even if the guest manages to init
+	 * within the timeout, it'll immediately reply with RST, because there's no
+	 * listener on the port yet.
+	 *
+	 * vhost_vq_get_backend() without vq->mutex is acceptable here: locking
+	 * the mutex would be too expensive in this hot path, and we already have
+	 * all the outcomes covered: if the backend becomes NULL right after the check,
+	 * vhost_transport_do_send_pkt() will check it under the mutex anyway.
+	 */
+	if (unlikely(!data_race(vhost_vq_get_backend(&vsock->vqs[VSOCK_VQ_RX])))) {
+		rcu_read_unlock();
+		kfree_skb(skb);
+		return -EHOSTUNREACH;
+	}
+
 	if (virtio_vsock_skb_reply(skb))
 		atomic_inc(&vsock->queued_replies);
 
@@ -424,6 +452,7 @@ static struct virtio_transport vhost_transport = {
 		.module                   = THIS_MODULE,
 
 		.get_local_cid            = vhost_transport_get_local_cid,
+		.has_remote_cid           = vhost_transport_has_remote_cid,
 
 		.init                     = virtio_transport_do_socket_init,
 		.destruct                 = virtio_transport_destruct,

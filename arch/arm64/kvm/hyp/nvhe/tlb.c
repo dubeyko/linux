@@ -110,7 +110,7 @@ static void enter_vmid_context(struct kvm_s2_mmu *mmu,
 	if (vcpu)
 		__load_host_stage2();
 	else
-		__load_stage2(mmu, kern_hyp_va(mmu->arch));
+		__load_stage2(mmu);
 
 	asm(ALTERNATIVE("isb", "nop", ARM64_WORKAROUND_SPECULATIVE_AT));
 }
@@ -128,7 +128,7 @@ static void exit_vmid_context(struct tlb_inv_context *cxt)
 		return;
 
 	if (vcpu)
-		__load_stage2(mmu, kern_hyp_va(mmu->arch));
+		__load_stage2(mmu);
 	else
 		__load_host_stage2();
 
@@ -158,7 +158,6 @@ void __kvm_tlb_flush_vmid_ipa(struct kvm_s2_mmu *mmu,
 	 * Instead, we invalidate Stage-2 for this IPA, and the
 	 * whole of Stage-1. Weep...
 	 */
-	ipa >>= 12;
 	__tlbi_level(ipas2e1is, ipa, level);
 
 	/*
@@ -188,7 +187,6 @@ void __kvm_tlb_flush_vmid_ipa_nsh(struct kvm_s2_mmu *mmu,
 	 * Instead, we invalidate Stage-2 for this IPA, and the
 	 * whole of Stage-1. Weep...
 	 */
-	ipa >>= 12;
 	__tlbi_level(ipas2e1, ipa, level);
 
 	/*

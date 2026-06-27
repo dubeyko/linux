@@ -15,7 +15,7 @@ various deferrals etc...
 Sometimes housekeeping is just some unbound work (unbound workqueues,
 unbound timers, ...) that gets easily assigned to non-isolated CPUs.
 But sometimes housekeeping is tied to a specific CPU and requires
-elaborated tricks to be offloaded to non-isolated CPUs (RCU_NOCB, remote
+elaborate tricks to be offloaded to non-isolated CPUs (RCU_NOCB, remote
 scheduler tick, etc...).
 
 Thus, a housekeeping CPU can be considered as the reverse of an isolated
@@ -99,7 +99,7 @@ the same RCU read side critical section.
 A typical layout example would look like this on the update side
 (``housekeeping_update()``)::
 
-	rcu_assign_pointer(housekeeping_cpumasks[type], trial);
+	rcu_assign_pointer(housekeeping.cpumasks[type], trial);
 	synchronize_rcu();
 	flush_workqueue(example_workqueue);
 

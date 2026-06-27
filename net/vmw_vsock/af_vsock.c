@@ -155,6 +155,7 @@
 #include <linux/random.h>
 #include <linux/skbuff.h>
 #include <linux/smp.h>
+#include <linux/uio.h>
 #include <linux/socket.h>
 #include <linux/stddef.h>
 #include <linux/sysctl.h>
@@ -483,6 +484,7 @@ void vsock_add_pending(struct sock *listener, struct sock *pending)
 	sock_hold(pending);
 	sock_hold(listener);
 	list_add_tail(&vpending->pending_links, &vlistener->pending_links);
+	sk_acceptq_added(listener);
 }
 EXPORT_SYMBOL_GPL(vsock_add_pending);
 
@@ -493,8 +495,19 @@ void vsock_remove_pending(struct sock *listener, struct sock *pending)
 	list_del_init(&vpending->pending_links);
 	sock_put(listener);
 	sock_put(pending);
+	sk_acceptq_removed(listener);
 }
 EXPORT_SYMBOL_GPL(vsock_remove_pending);
+
+void vsock_pending_to_accept(struct sock *listener, struct sock *pending)
+{
+	struct vsock_sock *vpending = vsock_sk(pending);
+	struct vsock_sock *vlistener = vsock_sk(listener);
+
+	list_del_init(&vpending->pending_links);
+	list_add_tail(&vpending->accept_queue, &vlistener->accept_queue);
+}
+EXPORT_SYMBOL_GPL(vsock_pending_to_accept);
 
 void vsock_enqueue_accept(struct sock *listener, struct sock *connected)
 {
@@ -507,6 +520,7 @@ void vsock_enqueue_accept(struct sock *listener, struct sock *connected)
 	sock_hold(connected);
 	sock_hold(listener);
 	list_add_tail(&vconnected->accept_queue, &vlistener->accept_queue);
+	sk_acceptq_added(listener);
 }
 EXPORT_SYMBOL_GPL(vsock_enqueue_accept);
 
@@ -545,9 +559,13 @@ static void vsock_deassign_transport(struct vsock_sock *vsk)
  * The vsk->remote_addr is used to decide which transport to use:
  *  - remote CID == VMADDR_CID_LOCAL or g2h->local_cid or VMADDR_CID_HOST if
  *    g2h is not loaded, will use local transport;
- *  - remote CID <= VMADDR_CID_HOST or h2g is not loaded or remote flags field
- *    includes VMADDR_FLAG_TO_HOST flag value, will use guest->host transport;
- *  - remote CID > VMADDR_CID_HOST will use host->guest transport;
+ *  - remote CID <= VMADDR_CID_HOST or remote flags field includes
+ *    VMADDR_FLAG_TO_HOST, will use guest->host transport;
+ *  - remote CID > VMADDR_CID_HOST and h2g is loaded and h2g claims that CID,
+ *    will use host->guest transport;
+ *  - h2g not loaded or h2g does not claim that CID and g2h claims the CID via
+ *    has_remote_cid, will use guest->host transport (when g2h_fallback=1)
+ *  - anything else goes to h2g or returns -ENODEV if no h2g is available
  */
 int vsock_assign_transport(struct vsock_sock *vsk, struct vsock_sock *psk)
 {
@@ -581,11 +599,21 @@ int vsock_assign_transport(struct vsock_sock *vsk, struct vsock_sock *psk)
 	case SOCK_SEQPACKET:
 		if (vsock_use_local_transport(remote_cid))
 			new_transport = transport_local;
-		else if (remote_cid <= VMADDR_CID_HOST || !transport_h2g ||
+		else if (remote_cid <= VMADDR_CID_HOST ||
 			 (remote_flags & VMADDR_FLAG_TO_HOST))
 			new_transport = transport_g2h;
-		else
+		else if (transport_h2g &&
+			 (!transport_h2g->has_remote_cid ||
+			  transport_h2g->has_remote_cid(vsk, remote_cid)))
 			new_transport = transport_h2g;
+		else if (sock_net(sk)->vsock.g2h_fallback &&
+			 transport_g2h && transport_g2h->has_remote_cid &&
+			 transport_g2h->has_remote_cid(vsk, remote_cid)) {
+			vsk->remote_addr.svm_flags |= VMADDR_FLAG_TO_HOST;
+			new_transport = transport_g2h;
+		} else {
+			new_transport = transport_h2g;
+		}
 		break;
 	default:
 		ret = -ESOCKTNOSUPPORT;
@@ -628,7 +656,7 @@ int vsock_assign_transport(struct vsock_sock *vsk, struct vsock_sock *psk)
 		 */
 		sock_reset_flag(sk, SOCK_DONE);
 		sk->sk_state = TCP_CLOSE;
-		vsk->peer_shutdown = 0;
+		WRITE_ONCE(vsk->peer_shutdown, 0);
 	}
 
 	if (sk->sk_type == SOCK_SEQPACKET) {
@@ -746,8 +774,6 @@ static void vsock_pending_work(struct work_struct *work)
 
 	if (vsock_is_pending(sk)) {
 		vsock_remove_pending(listener, sk);
-
-		sk_acceptq_removed(listener);
 	} else if (!vsk->rejected) {
 		/* We are not on the pending list and accept() did not reject
 		 * us, so we must have been accepted by our user process.  We
@@ -919,7 +945,7 @@ static struct sock *__vsock_create(struct net *net,
 	vsk->rejected = false;
 	vsk->sent_request = false;
 	vsk->ignore_connecting_rst = false;
-	vsk->peer_shutdown = 0;
+	WRITE_ONCE(vsk->peer_shutdown, 0);
 	INIT_DELAYED_WORK(&vsk->connect_work, vsock_connect_timeout);
 	INIT_DELAYED_WORK(&vsk->pending_work, vsock_pending_work);
 
@@ -1227,6 +1253,25 @@ out:
 	return err;
 }
 
+static __poll_t vsock_poll_shutdown(struct sock *sk, u32 peer_shutdown)
+{
+	__poll_t mask = 0;
+
+	/* INET sockets treat local write shutdown and peer write shutdown as a
+	 * case of EPOLLHUP set.
+	 */
+	if (sk->sk_shutdown == SHUTDOWN_MASK ||
+	    ((sk->sk_shutdown & SEND_SHUTDOWN) &&
+	     (peer_shutdown & SEND_SHUTDOWN)))
+		mask |= EPOLLHUP;
+
+	if (sk->sk_shutdown & RCV_SHUTDOWN ||
+	    peer_shutdown & SEND_SHUTDOWN)
+		mask |= EPOLLRDHUP;
+
+	return mask;
+}
+
 static __poll_t vsock_poll(struct file *file, struct socket *sock,
 			       poll_table *wait)
 {
@@ -1244,24 +1289,17 @@ static __poll_t vsock_poll(struct file *file, struct socket *sock,
 		/* Signify that there has been an error on this socket. */
 		mask |= EPOLLERR;
 
-	/* INET sockets treat local write shutdown and peer write shutdown as a
-	 * case of EPOLLHUP set.
-	 */
-	if ((sk->sk_shutdown == SHUTDOWN_MASK) ||
-	    ((sk->sk_shutdown & SEND_SHUTDOWN) &&
-	     (vsk->peer_shutdown & SEND_SHUTDOWN))) {
-		mask |= EPOLLHUP;
-	}
-
-	if (sk->sk_shutdown & RCV_SHUTDOWN ||
-	    vsk->peer_shutdown & SEND_SHUTDOWN) {
-		mask |= EPOLLRDHUP;
-	}
-
 	if (sk_is_readable(sk))
 		mask |= EPOLLIN | EPOLLRDNORM;
 
 	if (sock->type == SOCK_DGRAM) {
+		u32 peer_shutdown = READ_ONCE(vsk->peer_shutdown);
+
+		/* DGRAM sockets do not take lock_sock() in poll(), so use one
+		 * lockless snapshot for all shutdown-derived mask bits.
+		 */
+		mask |= vsock_poll_shutdown(sk, peer_shutdown);
+
 		/* For datagram sockets we can read if there is something in
 		 * the queue and write as long as the socket isn't shutdown for
 		 * sending.
@@ -1276,6 +1314,7 @@ static __poll_t vsock_poll(struct file *file, struct socket *sock,
 
 	} else if (sock_type_connectible(sk->sk_type)) {
 		const struct vsock_transport *transport;
+		u32 peer_shutdown;
 
 		lock_sock(sk);
 
@@ -1308,8 +1347,10 @@ static __poll_t vsock_poll(struct file *file, struct socket *sock,
 		 * terminated should also be considered read, and we check the
 		 * shutdown flag for that.
 		 */
+		peer_shutdown = READ_ONCE(vsk->peer_shutdown);
+		mask |= vsock_poll_shutdown(sk, peer_shutdown);
 		if (sk->sk_shutdown & RCV_SHUTDOWN ||
-		    vsk->peer_shutdown & SEND_SHUTDOWN) {
+		    peer_shutdown & SEND_SHUTDOWN) {
 			mask |= EPOLLIN | EPOLLRDNORM;
 		}
 
@@ -1502,7 +1543,7 @@ int vsock_dgram_recvmsg(struct socket *sock, struct msghdr *msg,
 
 	prot = READ_ONCE(sk->sk_prot);
 	if (prot != &vsock_proto)
-		return prot->recvmsg(sk, msg, len, flags, NULL);
+		return prot->recvmsg(sk, msg, len, flags);
 #endif
 
 	return __vsock_dgram_recvmsg(sock, msg, len, flags);
@@ -1850,10 +1891,10 @@ static int vsock_accept(struct socket *sock, struct socket *newsock,
 	 * created upon connection establishment.
 	 */
 	timeout = sock_rcvtimeo(listener, arg->flags & O_NONBLOCK);
-	prepare_to_wait(sk_sleep(listener), &wait, TASK_INTERRUPTIBLE);
 
 	while ((connected = vsock_dequeue_accept(listener)) == NULL &&
-	       listener->sk_err == 0) {
+	       listener->sk_err == 0 && timeout != 0) {
+		prepare_to_wait(sk_sleep(listener), &wait, TASK_INTERRUPTIBLE);
 		release_sock(listener);
 		timeout = schedule_timeout(timeout);
 		finish_wait(sk_sleep(listener), &wait);
@@ -1862,17 +1903,14 @@ static int vsock_accept(struct socket *sock, struct socket *newsock,
 		if (signal_pending(current)) {
 			err = sock_intr_errno(timeout);
 			goto out;
-		} else if (timeout == 0) {
-			err = -EAGAIN;
-			goto out;
 		}
-
-		prepare_to_wait(sk_sleep(listener), &wait, TASK_INTERRUPTIBLE);
 	}
-	finish_wait(sk_sleep(listener), &wait);
 
-	if (listener->sk_err)
+	if (listener->sk_err) {
 		err = -listener->sk_err;
+	} else if (!connected) {
+		err = -EAGAIN;
+	}
 
 	if (connected) {
 		sk_acceptq_removed(listener);
@@ -1951,11 +1989,11 @@ static void vsock_update_buffer_size(struct vsock_sock *vsk,
 				     const struct vsock_transport *transport,
 				     u64 val)
 {
-	if (val > vsk->buffer_max_size)
-		val = vsk->buffer_max_size;
-
 	if (val < vsk->buffer_min_size)
 		val = vsk->buffer_min_size;
+
+	if (val > vsk->buffer_max_size)
+		val = vsk->buffer_max_size;
 
 	if (val != vsk->buffer_size &&
 	    transport && transport->notify_buffer_size)
@@ -2080,8 +2118,7 @@ exit:
 
 static int vsock_connectible_getsockopt(struct socket *sock,
 					int level, int optname,
-					char __user *optval,
-					int __user *optlen)
+					sockopt_t *opt)
 {
 	struct sock *sk = sock->sk;
 	struct vsock_sock *vsk = vsock_sk(sk);
@@ -2099,8 +2136,7 @@ static int vsock_connectible_getsockopt(struct socket *sock,
 	if (level != AF_VSOCK)
 		return -ENOPROTOOPT;
 
-	if (get_user(len, optlen))
-		return -EFAULT;
+	len = opt->optlen;
 
 	memset(&v, 0, sizeof(v));
 
@@ -2131,11 +2167,10 @@ static int vsock_connectible_getsockopt(struct socket *sock,
 		return -EINVAL;
 	if (len > lv)
 		len = lv;
-	if (copy_to_user(optval, &v, len))
+	if (copy_to_iter(&v, len, &opt->iter_out) != len)
 		return -EFAULT;
 
-	if (put_user(len, optlen))
-		return -EFAULT;
+	opt->optlen = len;
 
 	return 0;
 }
@@ -2575,7 +2610,7 @@ vsock_connectible_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 
 	prot = READ_ONCE(sk->sk_prot);
 	if (prot != &vsock_proto)
-		return prot->recvmsg(sk, msg, len, flags, NULL);
+		return prot->recvmsg(sk, msg, len, flags);
 #endif
 
 	return __vsock_connectible_recvmsg(sock, msg, len, flags);
@@ -2620,7 +2655,7 @@ static const struct proto_ops vsock_stream_ops = {
 	.listen = vsock_listen,
 	.shutdown = vsock_shutdown,
 	.setsockopt = vsock_connectible_setsockopt,
-	.getsockopt = vsock_connectible_getsockopt,
+	.getsockopt_iter = vsock_connectible_getsockopt,
 	.sendmsg = vsock_connectible_sendmsg,
 	.recvmsg = vsock_connectible_recvmsg,
 	.mmap = sock_no_mmap,
@@ -2642,7 +2677,7 @@ static const struct proto_ops vsock_seqpacket_ops = {
 	.listen = vsock_listen,
 	.shutdown = vsock_shutdown,
 	.setsockopt = vsock_connectible_setsockopt,
-	.getsockopt = vsock_connectible_getsockopt,
+	.getsockopt_iter = vsock_connectible_getsockopt,
 	.sendmsg = vsock_connectible_sendmsg,
 	.recvmsg = vsock_connectible_recvmsg,
 	.mmap = sock_no_mmap,
@@ -2879,6 +2914,15 @@ static struct ctl_table vsock_table[] = {
 		.mode		= 0644,
 		.proc_handler	= vsock_net_child_mode_string
 	},
+	{
+		.procname	= "g2h_fallback",
+		.data		= &init_net.vsock.g2h_fallback,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 };
 
 static int __net_init vsock_sysctl_register(struct net *net)
@@ -2894,6 +2938,7 @@ static int __net_init vsock_sysctl_register(struct net *net)
 
 		table[0].data = &net->vsock.mode;
 		table[1].data = &net->vsock.child_ns_mode;
+		table[2].data = &net->vsock.g2h_fallback;
 	}
 
 	net->vsock.sysctl_hdr = register_net_sysctl_sz(net, "net/vsock", table,
@@ -2929,6 +2974,7 @@ static void vsock_net_init(struct net *net)
 
 	net->vsock.child_ns_mode = net->vsock.mode;
 	net->vsock.child_ns_mode_locked = 0;
+	net->vsock.g2h_fallback = 1;
 }
 
 static __net_init int vsock_sysctl_init_net(struct net *net)

@@ -11,6 +11,13 @@
 #include <linux/fscrypt.h>
 #include "transaction.h"
 
+enum btrfs_log_mode {
+	/* Log everything about an inode. */
+	LOG_INODE_ALL,
+	/* Log just enough to recreate the inode during log replay. */
+	LOG_INODE_EXISTS,
+};
+
 struct inode;
 struct dentry;
 struct btrfs_ordered_extent;
@@ -71,9 +78,8 @@ static inline int btrfs_need_log_full_commit(struct btrfs_trans_handle *trans)
 
 int btrfs_sync_log(struct btrfs_trans_handle *trans,
 		   struct btrfs_root *root, struct btrfs_log_ctx *ctx);
-int btrfs_free_log(struct btrfs_trans_handle *trans, struct btrfs_root *root);
-int btrfs_free_log_root_tree(struct btrfs_trans_handle *trans,
-			     struct btrfs_fs_info *fs_info);
+void btrfs_free_log(struct btrfs_trans_handle *trans, struct btrfs_root *root);
+void btrfs_free_log_root_tree(struct btrfs_trans_handle *trans, struct btrfs_fs_info *fs_info);
 int btrfs_recover_log_trees(struct btrfs_root *tree_root);
 int btrfs_log_dentry_safe(struct btrfs_trans_handle *trans,
 			  struct dentry *dentry,

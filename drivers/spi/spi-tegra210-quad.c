@@ -226,11 +226,13 @@ struct tegra_qspi {
 	struct completion			xfer_completion;
 	struct spi_transfer			*curr_xfer;
 
+	struct device				*rx_dma_dev;
 	struct dma_chan				*rx_dma_chan;
 	u32					*rx_dma_buf;
 	dma_addr_t				rx_dma_phys;
 	struct dma_async_tx_descriptor		*rx_dma_desc;
 
+	struct device				*tx_dma_dev;
 	struct dma_chan				*tx_dma_chan;
 	u32					*tx_dma_buf;
 	dma_addr_t				tx_dma_phys;
@@ -574,15 +576,15 @@ static int tegra_qspi_dma_map_xfer(struct tegra_qspi *tqspi, struct spi_transfer
 	len = DIV_ROUND_UP(tqspi->curr_dma_words * tqspi->bytes_per_word, 4) * 4;
 
 	if (t->tx_buf) {
-		t->tx_dma = dma_map_single(tqspi->dev, (void *)tx_buf, len, DMA_TO_DEVICE);
-		if (dma_mapping_error(tqspi->dev, t->tx_dma))
+		t->tx_dma = dma_map_single(tqspi->tx_dma_dev, (void *)tx_buf, len, DMA_TO_DEVICE);
+		if (dma_mapping_error(tqspi->tx_dma_dev, t->tx_dma))
 			return -ENOMEM;
 	}
 
 	if (t->rx_buf) {
-		t->rx_dma = dma_map_single(tqspi->dev, (void *)rx_buf, len, DMA_FROM_DEVICE);
-		if (dma_mapping_error(tqspi->dev, t->rx_dma)) {
-			dma_unmap_single(tqspi->dev, t->tx_dma, len, DMA_TO_DEVICE);
+		t->rx_dma = dma_map_single(tqspi->rx_dma_dev, (void *)rx_buf, len, DMA_FROM_DEVICE);
+		if (dma_mapping_error(tqspi->rx_dma_dev, t->rx_dma)) {
+			dma_unmap_single(tqspi->tx_dma_dev, t->tx_dma, len, DMA_TO_DEVICE);
 			return -ENOMEM;
 		}
 	}
@@ -597,9 +599,9 @@ static void tegra_qspi_dma_unmap_xfer(struct tegra_qspi *tqspi, struct spi_trans
 	len = DIV_ROUND_UP(tqspi->curr_dma_words * tqspi->bytes_per_word, 4) * 4;
 
 	if (t->tx_buf)
-		dma_unmap_single(tqspi->dev, t->tx_dma, len, DMA_TO_DEVICE);
+		dma_unmap_single(tqspi->tx_dma_dev, t->tx_dma, len, DMA_TO_DEVICE);
 	if (t->rx_buf)
-		dma_unmap_single(tqspi->dev, t->rx_dma, len, DMA_FROM_DEVICE);
+		dma_unmap_single(tqspi->rx_dma_dev, t->rx_dma, len, DMA_FROM_DEVICE);
 }
 
 static int tegra_qspi_start_dma_based_transfer(struct tegra_qspi *tqspi, struct spi_transfer *t)
@@ -745,7 +747,7 @@ static int tegra_qspi_start_cpu_based_transfer(struct tegra_qspi *qspi, struct s
 static void tegra_qspi_deinit_dma(struct tegra_qspi *tqspi)
 {
 	if (tqspi->tx_dma_buf) {
-		dma_free_coherent(tqspi->dev, tqspi->dma_buf_size,
+		dma_free_coherent(tqspi->tx_dma_dev, tqspi->dma_buf_size,
 				  tqspi->tx_dma_buf, tqspi->tx_dma_phys);
 		tqspi->tx_dma_buf = NULL;
 	}
@@ -756,7 +758,7 @@ static void tegra_qspi_deinit_dma(struct tegra_qspi *tqspi)
 	}
 
 	if (tqspi->rx_dma_buf) {
-		dma_free_coherent(tqspi->dev, tqspi->dma_buf_size,
+		dma_free_coherent(tqspi->rx_dma_dev, tqspi->dma_buf_size,
 				  tqspi->rx_dma_buf, tqspi->rx_dma_phys);
 		tqspi->rx_dma_buf = NULL;
 	}
@@ -782,6 +784,7 @@ static int tegra_qspi_init_dma(struct tegra_qspi *tqspi)
 		}
 
 		tqspi->rx_dma_chan = dma_chan;
+		tqspi->rx_dma_dev = dmaengine_get_dma_device(tqspi->rx_dma_chan);
 
 		dma_chan = dma_request_chan(tqspi->dev, "tx");
 		if (IS_ERR(dma_chan)) {
@@ -790,15 +793,19 @@ static int tegra_qspi_init_dma(struct tegra_qspi *tqspi)
 		}
 
 		tqspi->tx_dma_chan = dma_chan;
+		tqspi->tx_dma_dev = dmaengine_get_dma_device(tqspi->tx_dma_chan);
 	} else {
 		if (!device_iommu_mapped(tqspi->dev)) {
 			dev_warn(tqspi->dev,
 				 "IOMMU not enabled in device-tree, falling back to PIO mode\n");
 			return 0;
 		}
+
+		tqspi->rx_dma_dev = tqspi->dev;
+		tqspi->tx_dma_dev = tqspi->dev;
 	}
 
-	dma_buf = dma_alloc_coherent(tqspi->dev, tqspi->dma_buf_size, &dma_phys, GFP_KERNEL);
+	dma_buf = dma_alloc_coherent(tqspi->rx_dma_dev, tqspi->dma_buf_size, &dma_phys, GFP_KERNEL);
 	if (!dma_buf) {
 		err = -ENOMEM;
 		goto err_out;
@@ -807,7 +814,7 @@ static int tegra_qspi_init_dma(struct tegra_qspi *tqspi)
 	tqspi->rx_dma_buf = dma_buf;
 	tqspi->rx_dma_phys = dma_phys;
 
-	dma_buf = dma_alloc_coherent(tqspi->dev, tqspi->dma_buf_size, &dma_phys, GFP_KERNEL);
+	dma_buf = dma_alloc_coherent(tqspi->tx_dma_dev, tqspi->dma_buf_size, &dma_phys, GFP_KERNEL);
 	if (!dma_buf) {
 		err = -ENOMEM;
 		goto err_out;
@@ -1000,7 +1007,7 @@ static int tegra_qspi_setup(struct spi_device *spi)
 
 	spin_unlock_irqrestore(&tqspi->lock, flags);
 
-	pm_runtime_put(tqspi->dev);
+	pm_runtime_put_autosuspend(tqspi->dev);
 
 	return 0;
 }
@@ -1223,7 +1230,7 @@ static int tegra_qspi_combined_seq_xfer(struct tegra_qspi *tqspi,
 					(&tqspi->xfer_completion,
 					QSPI_DMA_TIMEOUT);
 
-			if (WARN_ON_ONCE(ret == 0)) {
+			if (ret == 0) {
 				/*
 				 * Check if hardware completed the transfer
 				 * even though interrupt was lost or delayed.
@@ -1232,6 +1239,7 @@ static int tegra_qspi_combined_seq_xfer(struct tegra_qspi *tqspi,
 				ret = tegra_qspi_handle_timeout(tqspi);
 				if (ret < 0) {
 					/* Real timeout - clean up and fail */
+					WARN_ON_ONCE(1);
 					dev_err(tqspi->dev, "transfer timeout\n");
 
 					/* Abort transfer by resetting pio/dma bit */
@@ -1340,7 +1348,7 @@ static int tegra_qspi_non_combined_seq_xfer(struct tegra_qspi *tqspi,
 
 		ret = wait_for_completion_timeout(&tqspi->xfer_completion,
 						  QSPI_DMA_TIMEOUT);
-		if (WARN_ON(ret == 0)) {
+		if (ret == 0) {
 			/*
 			 * Check if hardware completed the transfer even though
 			 * interrupt was lost or delayed. If so, process the
@@ -1349,6 +1357,7 @@ static int tegra_qspi_non_combined_seq_xfer(struct tegra_qspi *tqspi,
 			ret = tegra_qspi_handle_timeout(tqspi);
 			if (ret < 0) {
 				/* Real timeout - clean up and fail */
+				WARN_ON(1);
 				dev_err(tqspi->dev, "transfer timeout\n");
 
 				if (tqspi->is_curr_dma_xfer)
@@ -1765,6 +1774,14 @@ static int tegra_qspi_probe(struct platform_device *pdev)
 	init_completion(&tqspi->rx_dma_complete);
 	init_completion(&tqspi->xfer_completion);
 
+	/*
+	 * Set autosuspend delay to 500ms. Testing shows this value eliminates
+	 * suspend/resume overhead during burst operations while allowing quick
+	 * suspension during idle. For longer operations, the overhead is negligible.
+	 */
+	pm_runtime_set_autosuspend_delay(&pdev->dev, 500);
+	pm_runtime_use_autosuspend(&pdev->dev);
+
 	pm_runtime_enable(&pdev->dev);
 	ret = pm_runtime_resume_and_get(&pdev->dev);
 	if (ret < 0) {
@@ -1781,7 +1798,7 @@ static int tegra_qspi_probe(struct platform_device *pdev)
 	tqspi->spi_cs_timing2 = tegra_qspi_readl(tqspi, QSPI_CS_TIMING2);
 	tqspi->def_command2_reg = tegra_qspi_readl(tqspi, QSPI_COMMAND2);
 
-	pm_runtime_put(&pdev->dev);
+	pm_runtime_put_autosuspend(&pdev->dev);
 
 	ret = request_threaded_irq(tqspi->irq, NULL,
 				   tegra_qspi_isr_thread, IRQF_ONESHOT,
@@ -1802,6 +1819,7 @@ static int tegra_qspi_probe(struct platform_device *pdev)
 exit_free_irq:
 	free_irq(qspi_irq, tqspi);
 exit_pm_disable:
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 	return ret;
@@ -1814,6 +1832,7 @@ static void tegra_qspi_remove(struct platform_device *pdev)
 
 	spi_unregister_controller(host);
 	free_irq(tqspi->irq, tqspi);
+	pm_runtime_dont_use_autosuspend(&pdev->dev);
 	pm_runtime_force_suspend(&pdev->dev);
 	tegra_qspi_deinit_dma(tqspi);
 }
@@ -1839,7 +1858,7 @@ static int __maybe_unused tegra_qspi_resume(struct device *dev)
 
 	tegra_qspi_writel(tqspi, tqspi->command1_reg, QSPI_COMMAND1);
 	tegra_qspi_writel(tqspi, tqspi->def_command2_reg, QSPI_COMMAND2);
-	pm_runtime_put(dev);
+	pm_runtime_put_autosuspend(dev);
 
 	return spi_controller_resume(host);
 }

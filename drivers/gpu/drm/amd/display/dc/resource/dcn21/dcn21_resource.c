@@ -684,7 +684,7 @@ static void dcn21_resource_destruct(struct dcn21_resource_pool *pool)
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_dsc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_dsc; i++) {
 		if (pool->base.dscs[i] != NULL)
 			dcn20_dsc_destroy(&pool->base.dscs[i]);
 	}
@@ -719,7 +719,7 @@ static void dcn21_resource_destruct(struct dcn21_resource_pool *pool)
 			dal_irq_service_destroy(&pool->base.irqs);
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		if (pool->base.engines[i] != NULL)
 			dce110_engine_destroy(&pool->base.engines[i]);
 		if (pool->base.hw_i2cs[i] != NULL) {
@@ -732,19 +732,19 @@ static void dcn21_resource_destruct(struct dcn21_resource_pool *pool)
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_opp; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_opp; i++) {
 		if (pool->base.opps[i] != NULL)
 			pool->base.opps[i]->funcs->opp_destroy(&pool->base.opps[i]);
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_timing_generator; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_timing_generator; i++) {
 		if (pool->base.timing_generators[i] != NULL)	{
 			kfree(DCN10TG_FROM_TG(pool->base.timing_generators[i]));
 			pool->base.timing_generators[i] = NULL;
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_dwb; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_dwb; i++) {
 		if (pool->base.dwbc[i] != NULL) {
 			kfree(TO_DCN20_DWBC(pool->base.dwbc[i]));
 			pool->base.dwbc[i] = NULL;
@@ -798,12 +798,14 @@ bool dcn21_fast_validate_bw(struct dc *dc,
 			    int *pipe_cnt_out,
 			    int *pipe_split_from,
 			    int *vlevel_out,
-			    enum dc_validate_mode validate_mode)
+			    enum dc_validate_mode validate_mode,
+			    bool allow_self_refresh_only)
 {
 	bool out = false;
 	int split[MAX_PIPES] = { 0 };
 	bool merge[MAX_PIPES] = { false };
-	int pipe_cnt, i, pipe_idx, vlevel;
+	int pipe_cnt, pipe_idx, vlevel;
+	unsigned int i;
 
 	ASSERT(pipes);
 	if (!pipes)
@@ -828,19 +830,24 @@ bool dcn21_fast_validate_bw(struct dc *dc,
 				dm_allow_self_refresh_and_mclk_switch;
 	vlevel = dml_get_voltage_level(&context->bw_ctx.dml, pipes, pipe_cnt);
 
-	if (vlevel > context->bw_ctx.dml.soc.num_states) {
-		/*
-		 * If mode is unsupported or there's still no p-state support then
-		 * fall back to favoring voltage.
-		 *
-		 * We don't actually support prefetch mode 2, so require that we
-		 * at least support prefetch mode 1.
-		 */
-		context->bw_ctx.dml.soc.allow_dram_self_refresh_or_dram_clock_change_in_vblank =
-					dm_allow_self_refresh;
-		vlevel = dml_get_voltage_level(&context->bw_ctx.dml, pipes, pipe_cnt);
-		if (vlevel > context->bw_ctx.dml.soc.num_states)
+	if ((unsigned int)vlevel > context->bw_ctx.dml.soc.num_states) {
+
+		if (allow_self_refresh_only) {
+			/*
+			 * If mode is unsupported or there's still no p-state support then
+			 * fall back to favoring voltage.
+			 *
+			 * We don't actually support prefetch mode 2, so require that we
+			 * at least support prefetch mode 1.
+			 */
+			context->bw_ctx.dml.soc.allow_dram_self_refresh_or_dram_clock_change_in_vblank =
+						dm_allow_self_refresh;
+			vlevel = dml_get_voltage_level(&context->bw_ctx.dml, pipes, pipe_cnt);
+			if ((unsigned int)vlevel > context->bw_ctx.dml.soc.num_states)
+				goto validate_fail;
+		} else {
 			goto validate_fail;
+		}
 	}
 
 	vlevel = dcn20_validate_apply_pipe_split_flags(dc, context, vlevel, split, merge);
@@ -1319,6 +1326,7 @@ static struct link_encoder *dcn21_link_encoder_create(
 	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
+	(void)ctx;
 	struct dcn21_link_encoder *enc21 =
 		kzalloc_obj(struct dcn21_link_encoder);
 	int link_regs_id;
@@ -1387,6 +1395,13 @@ static enum dc_status dcn21_patch_unknown_plane_state(struct dc_plane_state *pla
 	return dcn20_patch_unknown_plane_state(plane_state);
 }
 
+static void dcn21_update_bw_bounding_box(struct dc *dc, struct clk_bw_params *bw_params)
+{
+	DC_FP_START();
+	dcn21_update_bw_bounding_box_fpu(dc, bw_params);
+	DC_FP_END();
+}
+
 static const struct resource_funcs dcn21_res_pool_funcs = {
 	.destroy = dcn21_destroy_resource_pool,
 	.link_enc_create = dcn21_link_encoder_create,
@@ -1404,7 +1419,8 @@ static const struct resource_funcs dcn21_res_pool_funcs = {
 	.find_first_free_match_stream_enc_for_link = dcn10_find_first_free_match_stream_enc_for_link,
 	.update_bw_bounding_box = dcn21_update_bw_bounding_box,
 	.get_panel_config_defaults = dcn21_get_panel_config_defaults,
-	.get_vstartup_for_pipe = dcn10_get_vstartup_for_pipe
+	.get_vstartup_for_pipe = dcn10_get_vstartup_for_pipe,
+	.get_default_tiling_info = dcn10_get_default_tiling_info
 };
 
 static bool dcn21_resource_construct(
@@ -1412,7 +1428,8 @@ static bool dcn21_resource_construct(
 	struct dc *dc,
 	struct dcn21_resource_pool *pool)
 {
-	int i, j;
+	unsigned int i;
+	int j;
 	struct dc_context *ctx = dc->ctx;
 	struct irq_service_init_data init_data;
 	uint32_t pipe_fuses = read_pipe_fuses(ctx);
@@ -1427,7 +1444,7 @@ static bool dcn21_resource_construct(
 	/*************************************************
 	 *  Resource + asic cap harcoding                *
 	 *************************************************/
-	pool->base.underlay_pipe_index = NO_UNDERLAY_PIPE;
+	pool->base.underlay_pipe_index = (unsigned int)NO_UNDERLAY_PIPE;
 
 	/* max pipe num for ASIC before check pipe fuses */
 	pool->base.pipe_count = pool->base.res_cap->num_timing_generator;
@@ -1644,7 +1661,7 @@ static bool dcn21_resource_construct(
 		j++;
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dcn21_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();
@@ -1688,11 +1705,11 @@ static bool dcn21_resource_construct(
 		goto create_fail;
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_dsc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_dsc; i++) {
 		pool->base.dscs[i] = dcn21_dsc_create(ctx, i);
 		if (pool->base.dscs[i] == NULL) {
 			BREAK_TO_DEBUGGER();
-			dm_error("DC: failed to create display stream compressor %d!\n", i);
+			dm_error("DC: failed to create display stream compressor %u!\n", i);
 			goto create_fail;
 		}
 	}
@@ -1742,7 +1759,7 @@ struct resource_pool *dcn21_create_resource_pool(
 	if (!pool)
 		return NULL;
 
-	if (dcn21_resource_construct(init_data->num_virtual_links, dc, pool))
+	if (dcn21_resource_construct((uint8_t)init_data->num_virtual_links, dc, pool))
 		return &pool->base;
 
 	BREAK_TO_DEBUGGER();

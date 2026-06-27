@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
- * Copyright (C) 2024-2025 Intel Corporation
+ * Copyright (C) 2024-2026 Intel Corporation
  */
 
 #include <net/mac80211.h>
@@ -39,8 +39,7 @@ iwl_mld_fill_phy_data_from_mpdu(struct iwl_mld *mld,
 	}
 
 	phy_data->phy_info = le16_to_cpu(desc->phy_info);
-	phy_data->rate_n_flags = iwl_v3_rate_from_v2_v3(desc->v3.rate_n_flags,
-							mld->fw_rates_ver_3);
+	phy_data->rate_n_flags = le32_to_cpu(desc->v3.rate_n_flags);
 	phy_data->gp2_on_air_rise = le32_to_cpu(desc->v3.gp2_on_air_rise);
 	phy_data->energy_a = desc->v3.energy_a;
 	phy_data->energy_b = desc->v3.energy_b;
@@ -158,7 +157,7 @@ static bool iwl_mld_used_average_energy(struct iwl_mld *mld, int link_id,
 	guard(rcu)();
 
 	link_conf = rcu_dereference(mld->fw_id_to_bss_conf[link_id]);
-	if (!link_conf)
+	if (IS_ERR_OR_NULL(link_conf))
 		return false;
 
 	mld_link = iwl_mld_link_from_mac80211(link_conf);
@@ -791,6 +790,9 @@ static void *
 iwl_mld_radiotap_put_tlv(struct sk_buff *skb, u16 type, u16 len)
 {
 	struct ieee80211_radiotap_tlv *tlv;
+	struct ieee80211_rx_status *rx_status = IEEE80211_SKB_RXCB(skb);
+
+	rx_status->flag |= RX_FLAG_RADIOTAP_TLV_AT_END;
 
 	tlv = skb_put(skb, sizeof(*tlv));
 	tlv->type = cpu_to_le16(type);
@@ -1203,6 +1205,13 @@ static void iwl_mld_decode_eht_non_tb(struct iwl_mld_rx_phy_data *phy_data,
 	iwl_mld_eht_set_ru_alloc(rx_status,
 				 le32_get_bits(phy_data->ntfy->sigs.eht.b2,
 					       OFDM_RX_FRAME_EHT_STA_RU));
+
+	if (phy_data->with_data)
+		eht->user_info[0] |=
+			cpu_to_le32(IEEE80211_RADIOTAP_EHT_USER_INFO_STA_ID_KNOWN) |
+			LE32_DEC_ENC(phy_data->ntfy->sigs.eht.user_id,
+				     OFDM_RX_FRAME_EHT_USER_FIELD_ID,
+				     IEEE80211_RADIOTAP_EHT_USER_INFO_STA_ID);
 }
 
 static void iwl_mld_decode_eht_phy_data(struct iwl_mld_rx_phy_data *phy_data,
@@ -1233,8 +1242,6 @@ static void iwl_mld_rx_eht(struct iwl_mld *mld, struct sk_buff *skb,
 		eht_len += sizeof(u32);
 
 	eht = iwl_mld_radiotap_put_tlv(skb, IEEE80211_RADIOTAP_EHT, eht_len);
-
-	rx_status->flag |= RX_FLAG_RADIOTAP_TLV_AT_END;
 
 	switch (u32_get_bits(rate_n_flags, RATE_MCS_HE_GI_LTF_MSK)) {
 	case 0:
@@ -1313,14 +1320,6 @@ static void iwl_mld_rx_eht(struct iwl_mld *mld, struct sk_buff *skb,
 	if (likely(!phy_data->ntfy))
 		return;
 
-	if (phy_data->with_data) {
-		eht->user_info[0] |=
-			cpu_to_le32(IEEE80211_RADIOTAP_EHT_USER_INFO_STA_ID_KNOWN) |
-			LE32_DEC_ENC(phy_data->ntfy->sigs.eht.user_id,
-				     OFDM_RX_FRAME_EHT_USER_FIELD_ID,
-				     IEEE80211_RADIOTAP_EHT_USER_INFO_STA_ID);
-	}
-
 	iwl_mld_decode_eht_usig(phy_data, skb);
 	iwl_mld_decode_eht_phy_data(phy_data, rx_status, eht);
 }
@@ -1329,7 +1328,6 @@ static void iwl_mld_rx_eht(struct iwl_mld *mld, struct sk_buff *skb,
 static void iwl_mld_add_rtap_sniffer_config(struct iwl_mld *mld,
 					    struct sk_buff *skb)
 {
-	struct ieee80211_rx_status *rx_status = IEEE80211_SKB_RXCB(skb);
 	struct ieee80211_radiotap_vendor_content *radiotap;
 	const u16 vendor_data_len = sizeof(mld->monitor.cur_aid);
 
@@ -1353,8 +1351,6 @@ static void iwl_mld_add_rtap_sniffer_config(struct iwl_mld *mld,
 	/* fill the data now */
 	memcpy(radiotap->data, &mld->monitor.cur_aid,
 	       sizeof(mld->monitor.cur_aid));
-
-	rx_status->flag |= RX_FLAG_RADIOTAP_TLV_AT_END;
 }
 #endif
 
@@ -1362,7 +1358,6 @@ static void iwl_mld_add_rtap_sniffer_phy_data(struct iwl_mld *mld,
 					      struct sk_buff *skb,
 					      struct iwl_rx_phy_air_sniffer_ntfy *ntfy)
 {
-	struct ieee80211_rx_status *rx_status = IEEE80211_SKB_RXCB(skb);
 	struct ieee80211_radiotap_vendor_content *radiotap;
 	const u16 vendor_data_len = sizeof(*ntfy);
 
@@ -1382,8 +1377,6 @@ static void iwl_mld_add_rtap_sniffer_phy_data(struct iwl_mld *mld,
 
 	/* fill the data now */
 	memcpy(radiotap->data, ntfy, vendor_data_len);
-
-	rx_status->flag |= RX_FLAG_RADIOTAP_TLV_AT_END;
 }
 
 static void
@@ -1407,6 +1400,7 @@ static void iwl_mld_set_rx_rate(struct iwl_mld *mld,
 	u32 rate_n_flags = phy_data->rate_n_flags;
 	u8 stbc = u32_get_bits(rate_n_flags, RATE_MCS_STBC_MSK);
 	u32 format = rate_n_flags & RATE_MCS_MOD_TYPE_MSK;
+	u32 he_type = u32_get_bits(rate_n_flags, RATE_MCS_HE_TYPE_MSK);
 	bool is_sgi = rate_n_flags & RATE_MCS_SGI_MSK;
 
 	/* bandwidth may be overridden to RU by PHY ntfy */
@@ -1480,6 +1474,12 @@ static void iwl_mld_set_rx_rate(struct iwl_mld *mld,
 	case RATE_MCS_MOD_TYPE_EHT:
 		rx_status->encoding = RX_ENC_EHT;
 		iwl_mld_set_rx_nonlegacy_rate_info(rate_n_flags, rx_status);
+		break;
+	case RATE_MCS_MOD_TYPE_UHR:
+		rx_status->encoding = RX_ENC_UHR;
+		iwl_mld_set_rx_nonlegacy_rate_info(rate_n_flags, rx_status);
+		if (he_type == RATE_MCS_HE_TYPE_UHR_ELR)
+			rx_status->uhr.elr = 1;
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -2204,8 +2204,9 @@ void iwl_mld_sync_rx_queues(struct iwl_mld *mld,
 	ret = wait_event_timeout(mld->rxq_sync.waitq,
 				 READ_ONCE(mld->rxq_sync.state) == 0,
 				 SYNC_RX_QUEUE_TIMEOUT);
-	WARN_ONCE(!ret, "RXQ sync failed: state=0x%lx, cookie=%d\n",
-		  mld->rxq_sync.state, mld->rxq_sync.cookie);
+	IWL_FW_CHECK(mld, !ret,
+		     "RXQ sync failed: state=0x%lx, cookie=%d\n",
+		     mld->rxq_sync.state, mld->rxq_sync.cookie);
 
 out:
 	mld->rxq_sync.state = 0;
@@ -2258,6 +2259,30 @@ void iwl_mld_handle_rx_queues_sync_notif(struct iwl_mld *mld,
 	if (READ_ONCE(mld->rxq_sync.state) == 0)
 		wake_up(&mld->rxq_sync.waitq);
 }
+
+#ifdef CONFIG_PM_SLEEP
+void iwl_mld_handle_rsc_notif(struct iwl_mld *mld,
+			      struct iwl_rx_packet *pkt, int queue)
+{
+	const struct iwl_wowlan_all_rsc_tsc_v5 *notif = (void *)pkt->data;
+	u32 len = iwl_rx_packet_payload_len(pkt);
+	struct ieee80211_vif *bss_vif;
+
+	if (IWL_FW_CHECK(mld, len != sizeof(*notif),
+			 "invalid notification size %u (%zu)\n",
+			 len, sizeof(*notif)))
+		return;
+
+	/* for the bss lookup and updating the keys' pn */
+	guard(rcu)();
+
+	bss_vif = iwl_mld_get_bss_vif(mld);
+	if (WARN_ON(!bss_vif))
+		return;
+
+	iwl_mld_process_rsc_notification(mld, bss_vif, notif, queue);
+}
+#endif /* CONFIG_PM_SLEEP */
 
 static void iwl_mld_no_data_rx(struct iwl_mld *mld,
 			       struct napi_struct *napi,

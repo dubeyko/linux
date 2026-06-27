@@ -505,6 +505,7 @@ static bool is_string_attr(enum hwmon_sensor_types type, u32 attr)
 	       (type == hwmon_curr && attr == hwmon_curr_label) ||
 	       (type == hwmon_power && attr == hwmon_power_label) ||
 	       (type == hwmon_energy && attr == hwmon_energy_label) ||
+	       (type == hwmon_energy64 && attr == hwmon_energy_label) ||
 	       (type == hwmon_humidity && attr == hwmon_humidity_label) ||
 	       (type == hwmon_fan && attr == hwmon_fan_label);
 }
@@ -572,6 +573,7 @@ static const char * const hwmon_chip_attrs[] = {
 	[hwmon_chip_curr_reset_history] = "curr_reset_history",
 	[hwmon_chip_power_reset_history] = "power_reset_history",
 	[hwmon_chip_update_interval] = "update_interval",
+	[hwmon_chip_update_interval_us] = "update_interval_us",
 	[hwmon_chip_alarms] = "alarms",
 	[hwmon_chip_samples] = "samples",
 	[hwmon_chip_curr_samples] = "curr_samples",
@@ -1081,6 +1083,7 @@ EXPORT_SYMBOL_GPL(hwmon_device_register_with_info);
  * @dev: the parent device
  * @name: hwmon name attribute
  * @drvdata: driver data to attach to created device
+ * @extra_groups: pointer to list of additional non-standard attribute groups
  *
  * The use of this function is restricted. It is provided for legacy reasons
  * and must only be called from the thermal subsystem.
@@ -1092,12 +1095,13 @@ EXPORT_SYMBOL_GPL(hwmon_device_register_with_info);
  */
 struct device *
 hwmon_device_register_for_thermal(struct device *dev, const char *name,
-				  void *drvdata)
+				  void *drvdata,
+				  const struct attribute_group **extra_groups)
 {
 	if (!name || !dev)
 		return ERR_PTR(-EINVAL);
 
-	return __hwmon_device_register(dev, name, drvdata, NULL, NULL);
+	return __hwmon_device_register(dev, name, drvdata, NULL, extra_groups);
 }
 EXPORT_SYMBOL_NS_GPL(hwmon_device_register_for_thermal, "HWMON_THERMAL");
 

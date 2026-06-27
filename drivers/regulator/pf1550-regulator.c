@@ -360,7 +360,6 @@ static int pf1550_regulator_probe(struct platform_device *pdev)
 				     "failed to get parent regmap\n");
 
 	config.dev = pf1550->dev;
-	config.regmap = pf1550->regmap;
 	info->dev = &pdev->dev;
 	info->pf1550 = pf1550;
 
@@ -410,7 +409,7 @@ static int pf1550_regulator_probe(struct platform_device *pdev)
 }
 
 static const struct platform_device_id pf1550_regulator_id[] = {
-	{ "pf1550-regulator", },
+	{ .name = "pf1550-regulator" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(platform, pf1550_regulator_id);

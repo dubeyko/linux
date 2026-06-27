@@ -36,9 +36,9 @@
 #endif /* defined(__SSP__) ... */
 
 #if __nolibc_has_attribute(no_stack_protector)
-#  define __no_stack_protector __attribute__((no_stack_protector))
+#  define __nolibc_no_stack_protector __attribute__((no_stack_protector))
 #else
-#  define __no_stack_protector __attribute__((__optimize__("-fno-stack-protector")))
+#  define __nolibc_no_stack_protector __attribute__((__optimize__("-fno-stack-protector")))
 #endif /* __nolibc_has_attribute(no_stack_protector) */
 
 #if __nolibc_has_attribute(__fallthrough__)
@@ -46,6 +46,12 @@
 #else
 #  define __nolibc_fallthrough do { } while (0)
 #endif /* __nolibc_has_attribute(fallthrough) */
+
+#if defined(__STDC_VERSION__)
+#  define __nolibc_stdc_version __STDC_VERSION__
+#else
+#  define __nolibc_stdc_version 0
+#endif
 
 #define __nolibc_version(_major, _minor, _patch) ((_major) * 10000 + (_minor) * 100 + (_patch))
 
@@ -63,12 +69,25 @@
 #  define __nolibc_clang_version 0
 #endif /* __clang__ */
 
-#if __STDC_VERSION__ >= 201112L || \
+#if __nolibc_stdc_version >= 201112L || \
 	__nolibc_gnuc_version >= __nolibc_version(4, 6, 0) || \
 	__nolibc_clang_version >= __nolibc_version(3, 0, 0)
 #  define __nolibc_static_assert(_t) _Static_assert(_t, "")
 #else
 #  define __nolibc_static_assert(_t)
+#endif
+
+/* Make the optimizer believe the variable can be manipulated arbitrarily. */
+#define _NOLIBC_OPTIMIZER_HIDE_VAR(var)	__asm__ ("" : "+r" (var))
+
+#if __nolibc_has_feature(undefined_behavior_sanitizer)
+#  if defined(__clang__)
+#    define __nolibc_no_sanitize_undefined __attribute__((no_sanitize("function")))
+#  else
+#    define __nolibc_no_sanitize_undefined __attribute__((no_sanitize_undefined))
+#  endif
+#else
+#  define __nolibc_no_sanitize_undefined
 #endif
 
 #endif /* _NOLIBC_COMPILER_H */

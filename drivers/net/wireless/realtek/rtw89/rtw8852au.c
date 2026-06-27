@@ -15,6 +15,7 @@ static const struct rtw89_usb_info rtw8852a_usb_info = {
 	.usb3_mac_npi_config_intf_0	= R_AX_USB3_MAC_NPI_CONFIG_INTF_0,
 	.usb_endpoint_0			= R_AX_USB_ENDPOINT_0,
 	.usb_endpoint_2			= R_AX_USB_ENDPOINT_2,
+	.rx_agg_alignment		= 8,
 	.bulkout_id = {
 		[RTW89_DMA_ACH0] = 3,
 		[RTW89_DMA_ACH2] = 5,
@@ -32,6 +33,7 @@ static const struct rtw89_driver_info rtw89_8852au_info = {
 	.chip = &rtw8852a_chip_info,
 	.variant = NULL,
 	.quirks = NULL,
+	.dev_id_quirks = 0,
 	.bus = {
 		.usb = &rtw8852a_usb_info,
 	}

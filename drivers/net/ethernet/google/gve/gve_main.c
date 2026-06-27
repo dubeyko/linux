@@ -11,6 +11,7 @@
 #include <linux/filter.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/sched.h>
@@ -966,6 +967,7 @@ static void gve_tx_get_curr_alloc_cfg(struct gve_priv *priv,
 	cfg->qcfg = &priv->tx_cfg;
 	cfg->raw_addressing = !gve_is_qpl(priv);
 	cfg->ring_size = priv->tx_desc_cnt;
+	cfg->pages_per_qpl = priv->tx_pages_per_qpl;
 	cfg->num_xdp_rings = cfg->qcfg->num_xdp_queues;
 	cfg->tx = priv->tx;
 }
@@ -997,11 +999,47 @@ static void gve_tx_start_rings(struct gve_priv *priv, int num_rings)
 	}
 }
 
+void gve_update_num_qpl_pages(struct gve_priv *priv,
+			      struct gve_rx_alloc_rings_cfg *rx_alloc_cfg,
+			      struct gve_tx_alloc_rings_cfg *tx_alloc_cfg)
+{
+	u64 ideal_tx_pages, ideal_rx_pages;
+	u16 tx_num_queues, rx_num_queues;
+	u64 max_pages, tx_pages;
+
+	if (priv->queue_format == GVE_GQI_QPL_FORMAT) {
+		rx_alloc_cfg->pages_per_qpl = rx_alloc_cfg->ring_size;
+	} else if (priv->queue_format == GVE_DQO_QPL_FORMAT) {
+		/*
+		 * We want 2 pages per RX descriptor and half a page per TX
+		 * descriptor, which means the fraction ideal_tx_pages /
+		 * (ideal_tx_pages + ideal_rx_pages) of the pages we allocate
+		 * should be for TX. Shrink proportionally as necessary to avoid
+		 * allocating more than max_registered_pages total pages.
+		 */
+		tx_num_queues = tx_alloc_cfg->qcfg->num_queues;
+		rx_num_queues = rx_alloc_cfg->qcfg_rx->num_queues;
+
+		ideal_tx_pages = tx_alloc_cfg->ring_size * tx_num_queues / 2;
+		ideal_rx_pages = rx_alloc_cfg->ring_size * rx_num_queues * 2;
+		max_pages = min(priv->max_registered_pages,
+				ideal_tx_pages + ideal_rx_pages);
+
+		tx_pages = div64_u64(max_pages * ideal_tx_pages,
+				     ideal_tx_pages + ideal_rx_pages);
+		tx_alloc_cfg->pages_per_qpl = div_u64(tx_pages, tx_num_queues);
+		rx_alloc_cfg->pages_per_qpl = div_u64(max_pages - tx_pages,
+						      rx_num_queues);
+	}
+}
+
 static int gve_queues_mem_alloc(struct gve_priv *priv,
 				struct gve_tx_alloc_rings_cfg *tx_alloc_cfg,
 				struct gve_rx_alloc_rings_cfg *rx_alloc_cfg)
 {
 	int err;
+
+	gve_update_num_qpl_pages(priv, rx_alloc_cfg, tx_alloc_cfg);
 
 	if (gve_is_gqi(priv))
 		err = gve_tx_alloc_rings_gqi(priv, tx_alloc_cfg);
@@ -1293,6 +1331,7 @@ static void gve_rx_get_curr_alloc_cfg(struct gve_priv *priv,
 	cfg->raw_addressing = !gve_is_qpl(priv);
 	cfg->enable_header_split = priv->header_split_enabled;
 	cfg->ring_size = priv->rx_desc_cnt;
+	cfg->pages_per_qpl = priv->rx_pages_per_qpl;
 	cfg->packet_buffer_size = priv->rx_cfg.packet_buffer_size;
 	cfg->rx = priv->rx;
 	cfg->xdp = !!cfg->qcfg_tx->num_xdp_queues;
@@ -1372,6 +1411,8 @@ static int gve_queues_start(struct gve_priv *priv,
 	priv->rx_cfg = *rx_alloc_cfg->qcfg_rx;
 	priv->tx_desc_cnt = tx_alloc_cfg->ring_size;
 	priv->rx_desc_cnt = rx_alloc_cfg->ring_size;
+	priv->tx_pages_per_qpl = tx_alloc_cfg->pages_per_qpl;
+	priv->rx_pages_per_qpl = rx_alloc_cfg->pages_per_qpl;
 
 	gve_tx_start_rings(priv, gve_num_tx_queues(priv));
 	gve_rx_start_rings(priv, rx_alloc_cfg->qcfg_rx->num_queues);
@@ -1717,9 +1758,9 @@ static int gve_verify_xdp_configuration(struct net_device *dev,
 	struct gve_priv *priv = netdev_priv(dev);
 	u16 max_xdp_mtu;
 
-	if (dev->features & NETIF_F_LRO) {
+	if (dev->features & NETIF_F_GRO_HW) {
 		NL_SET_ERR_MSG_MOD(extack,
-				   "XDP is not supported when LRO is on.");
+				   "XDP is not supported when HW-GRO is on.");
 		return -EOPNOTSUPP;
 	}
 
@@ -2136,12 +2177,13 @@ static int gve_set_features(struct net_device *netdev,
 
 	gve_get_curr_alloc_cfgs(priv, &tx_alloc_cfg, &rx_alloc_cfg);
 
-	if ((netdev->features & NETIF_F_LRO) != (features & NETIF_F_LRO)) {
-		netdev->features ^= NETIF_F_LRO;
-		if (priv->xdp_prog && (netdev->features & NETIF_F_LRO)) {
+	if ((netdev->features & NETIF_F_GRO_HW) !=
+	    (features & NETIF_F_GRO_HW)) {
+		netdev->features ^= NETIF_F_GRO_HW;
+		if (priv->xdp_prog && (netdev->features & NETIF_F_GRO_HW)) {
 			netdev_warn(netdev,
-				    "XDP is not supported when LRO is on.\n");
-			err =  -EOPNOTSUPP;
+				    "HW-GRO is not supported when XDP is on.");
+			err = -EOPNOTSUPP;
 			goto revert_features;
 		}
 		if (netif_running(netdev)) {
@@ -2852,7 +2894,7 @@ static int gve_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		goto abort_with_wq;
 
 	if (!gve_is_gqi(priv) && !gve_is_qpl(priv))
-		dev->netmem_tx = true;
+		dev->netmem_tx = NETMEM_TX_DMA;
 
 	err = register_netdev(dev);
 	if (err)
@@ -2925,9 +2967,9 @@ static void gve_shutdown(struct pci_dev *pdev)
 	rtnl_unlock();
 }
 
-#ifdef CONFIG_PM
-static int gve_suspend(struct pci_dev *pdev, pm_message_t state)
+static int gve_suspend(struct device *dev)
 {
+	struct pci_dev *pdev = to_pci_dev(dev);
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct gve_priv *priv = netdev_priv(netdev);
 	bool was_up = netif_running(priv->dev);
@@ -2948,8 +2990,9 @@ static int gve_suspend(struct pci_dev *pdev, pm_message_t state)
 	return 0;
 }
 
-static int gve_resume(struct pci_dev *pdev)
+static int gve_resume(struct device *dev)
 {
+	struct pci_dev *pdev = to_pci_dev(dev);
 	struct net_device *netdev = pci_get_drvdata(pdev);
 	struct gve_priv *priv = netdev_priv(netdev);
 	int err;
@@ -2962,7 +3005,8 @@ static int gve_resume(struct pci_dev *pdev)
 	rtnl_unlock();
 	return err;
 }
-#endif /* CONFIG_PM */
+
+static DEFINE_SIMPLE_DEV_PM_OPS(gve_pm_ops, gve_suspend, gve_resume);
 
 static const struct pci_device_id gve_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_GOOGLE, PCI_DEV_ID_GVNIC) },
@@ -2975,10 +3019,7 @@ static struct pci_driver gve_driver = {
 	.probe		= gve_probe,
 	.remove		= gve_remove,
 	.shutdown	= gve_shutdown,
-#ifdef CONFIG_PM
-	.suspend        = gve_suspend,
-	.resume         = gve_resume,
-#endif
+	.driver.pm	= pm_sleep_ptr(&gve_pm_ops),
 };
 
 module_pci_driver(gve_driver);

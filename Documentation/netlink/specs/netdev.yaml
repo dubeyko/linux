@@ -127,7 +127,14 @@ attribute-sets:
         enum: xsk-flags
   -
     name: io-uring-provider-info
-    attributes: []
+    attributes:
+      -
+        name: rx-buf-len
+        type: uint
+        doc: |
+          RX buffer length in bytes for this io_uring memory provider.
+          Reflects the rx_buf_len passed at io_uring zerocopy rx
+          registration time.
   -
     name: page-pool
     attributes:
@@ -339,6 +346,15 @@ attribute-sets:
         doc: XSK information for this queue, if any.
         type: nest
         nested-attributes: xsk-info
+      -
+        name: lease
+        doc: |
+          A queue from a virtual device can have a lease which refers to
+          another queue from a physical device. This is useful for memory
+          providers and AF_XDP operations which take an ifindex and queue id
+          to allow applications to bind against virtual devices in containers.
+        type: nest
+        nested-attributes: lease
   -
     name: qstats
     doc: |
@@ -538,6 +554,26 @@ attribute-sets:
       -
         name: type
   -
+    name: lease
+    attributes:
+      -
+        name: ifindex
+        doc: The netdev ifindex to lease the queue from.
+        type: u32
+        checks:
+          min: 1
+      -
+        name: queue
+        doc: The netdev queue to lease from.
+        type: nest
+        nested-attributes: queue-id
+      -
+        name: netns-id
+        doc: The network namespace id of the netdev.
+        type: s32
+        checks:
+          min: 0
+  -
     name: dmabuf
     attributes:
       -
@@ -620,6 +656,9 @@ operations:
             - dmabuf
             - io-uring
       dump:
+        request:
+          attributes:
+            - ifindex
         reply: *pp-reply
       config-cond: page-pool
     -
@@ -663,6 +702,9 @@ operations:
             - recycle-ring-full
             - recycle-released-refcnt
       dump:
+        request:
+          attributes:
+            - info
         reply: *pp-stats-reply
       config-cond: page-pool-stats
     -
@@ -686,6 +728,7 @@ operations:
             - dmabuf
             - io-uring
             - xsk
+            - lease
       dump:
         request:
           attributes:
@@ -762,7 +805,7 @@ operations:
       name: bind-rx
       doc: Bind dmabuf to netdev
       attribute-set: dmabuf
-      flags: [admin-perm]
+      flags: [uns-admin-perm]
       do:
         request:
           attributes:
@@ -795,6 +838,22 @@ operations:
             - ifindex
             - fd
         reply:
+          attributes:
+            - id
+    -
+      name: queue-create
+      doc: |
+        Create a new queue for the given netdevice. Whether this operation
+        is supported depends on the device and the driver.
+      attribute-set: queue
+      flags: [admin-perm]
+      do:
+        request:
+          attributes:
+            - ifindex
+            - type
+            - lease
+        reply: &queue-create-op
           attributes:
             - id
 

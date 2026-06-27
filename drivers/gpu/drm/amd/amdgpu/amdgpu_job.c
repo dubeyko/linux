@@ -92,7 +92,6 @@ static enum drm_gpu_sched_stat amdgpu_job_timedout(struct drm_sched_job *s_job)
 	struct drm_wedge_task_info *info = NULL;
 	struct amdgpu_task_info *ti = NULL;
 	struct amdgpu_device *adev = ring->adev;
-	enum drm_gpu_sched_stat status = DRM_GPU_SCHED_STAT_RESET;
 	int idx, r;
 
 	if (!drm_dev_enter(adev_to_drm(adev), &idx)) {
@@ -147,8 +146,6 @@ static enum drm_gpu_sched_stat amdgpu_job_timedout(struct drm_sched_job *s_job)
 				ring->sched.name);
 			drm_dev_wedged_event(adev_to_drm(adev),
 					     DRM_WEDGE_RECOVERY_NONE, info);
-			/* This is needed to add the job back to the pending list */
-			status = DRM_GPU_SCHED_STAT_NO_HANG;
 			goto exit;
 		}
 		dev_err(adev->dev, "Ring %s reset failed\n", ring->sched.name);
@@ -184,7 +181,8 @@ static enum drm_gpu_sched_stat amdgpu_job_timedout(struct drm_sched_job *s_job)
 exit:
 	amdgpu_vm_put_task_info(ti);
 	drm_dev_exit(idx);
-	return status;
+	/* This is needed to add the job back to the pending list */
+	return DRM_GPU_SCHED_STAT_NO_HANG;
 }
 
 int amdgpu_job_alloc(struct amdgpu_device *adev, struct amdgpu_vm *vm,
@@ -289,9 +287,10 @@ void amdgpu_job_free_resources(struct amdgpu_job *job)
 	unsigned i;
 
 	/* Check if any fences were initialized */
-	if (job->base.s_fence && job->base.s_fence->finished.ops)
+	if (job->base.s_fence &&
+	    dma_fence_was_initialized(&job->base.s_fence->finished))
 		f = &job->base.s_fence->finished;
-	else if (job->hw_fence && job->hw_fence->base.ops)
+	else if (dma_fence_was_initialized(&job->hw_fence->base))
 		f = &job->hw_fence->base;
 	else
 		f = NULL;
@@ -308,11 +307,11 @@ static void amdgpu_job_free_cb(struct drm_sched_job *s_job)
 
 	amdgpu_sync_free(&job->explicit_sync);
 
-	if (job->hw_fence->base.ops)
+	if (dma_fence_was_initialized(&job->hw_fence->base))
 		dma_fence_put(&job->hw_fence->base);
 	else
 		kfree(job->hw_fence);
-	if (job->hw_vm_fence->base.ops)
+	if (dma_fence_was_initialized(&job->hw_vm_fence->base))
 		dma_fence_put(&job->hw_vm_fence->base);
 	else
 		kfree(job->hw_vm_fence);
@@ -346,11 +345,11 @@ void amdgpu_job_free(struct amdgpu_job *job)
 	if (job->gang_submit != &job->base.s_fence->scheduled)
 		dma_fence_put(job->gang_submit);
 
-	if (job->hw_fence->base.ops)
+	if (dma_fence_was_initialized(&job->hw_fence->base))
 		dma_fence_put(&job->hw_fence->base);
 	else
 		kfree(job->hw_fence);
-	if (job->hw_vm_fence->base.ops)
+	if (dma_fence_was_initialized(&job->hw_vm_fence->base))
 		dma_fence_put(&job->hw_vm_fence->base);
 	else
 		kfree(job->hw_vm_fence);
@@ -389,7 +388,9 @@ static struct dma_fence *
 amdgpu_job_prepare_job(struct drm_sched_job *sched_job,
 		      struct drm_sched_entity *s_entity)
 {
-	struct amdgpu_ring *ring = to_amdgpu_ring(s_entity->rq->sched);
+	struct drm_gpu_scheduler *sched =
+		container_of(s_entity->rq, typeof(*sched), rq);
+	struct amdgpu_ring *ring = to_amdgpu_ring(sched);
 	struct amdgpu_job *job = to_amdgpu_job(sched_job);
 	struct dma_fence *fence;
 	int r;
@@ -482,25 +483,22 @@ drm_sched_entity_queue_pop(struct drm_sched_entity *entity)
 
 void amdgpu_job_stop_all_jobs_on_sched(struct drm_gpu_scheduler *sched)
 {
+	struct drm_sched_rq *rq = &sched->rq;
+	struct drm_sched_entity *s_entity;
 	struct drm_sched_job *s_job;
-	struct drm_sched_entity *s_entity = NULL;
-	int i;
 
 	/* Signal all jobs not yet scheduled */
-	for (i = DRM_SCHED_PRIORITY_KERNEL; i < sched->num_rqs; i++) {
-		struct drm_sched_rq *rq = sched->sched_rq[i];
-		spin_lock(&rq->lock);
-		list_for_each_entry(s_entity, &rq->entities, list) {
-			while ((s_job = drm_sched_entity_queue_pop(s_entity))) {
-				struct drm_sched_fence *s_fence = s_job->s_fence;
+	spin_lock(&rq->lock);
+	list_for_each_entry(s_entity, &rq->entities, list) {
+		while ((s_job = drm_sched_entity_queue_pop(s_entity))) {
+			struct drm_sched_fence *s_fence = s_job->s_fence;
 
-				dma_fence_signal(&s_fence->scheduled);
-				dma_fence_set_error(&s_fence->finished, -EHWPOISON);
-				dma_fence_signal(&s_fence->finished);
-			}
+			dma_fence_signal(&s_fence->scheduled);
+			dma_fence_set_error(&s_fence->finished, -EHWPOISON);
+			dma_fence_signal(&s_fence->finished);
 		}
-		spin_unlock(&rq->lock);
 	}
+	spin_unlock(&rq->lock);
 
 	/* Signal all jobs already scheduled to HW */
 	list_for_each_entry(s_job, &sched->pending_list, list) {

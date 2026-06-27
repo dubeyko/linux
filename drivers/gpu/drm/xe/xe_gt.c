@@ -7,9 +7,12 @@
 
 #include <linux/minmax.h>
 
+#include <kunit/visibility.h>
+
 #include <drm/drm_managed.h>
 #include <uapi/drm/xe_drm.h>
 
+#include <generated/xe_device_wa_oob.h>
 #include <generated/xe_wa_oob.h>
 
 #include "instructions/xe_alu_commands.h"
@@ -33,10 +36,12 @@
 #include "xe_gt_printk.h"
 #include "xe_gt_sriov_pf.h"
 #include "xe_gt_sriov_vf.h"
+#include "xe_gt_stats.h"
 #include "xe_gt_sysfs.h"
 #include "xe_gt_topology.h"
 #include "xe_guc_exec_queue_types.h"
 #include "xe_guc_pc.h"
+#include "xe_guc_rc.h"
 #include "xe_guc_submit.h"
 #include "xe_hw_fence.h"
 #include "xe_hw_engine_class_sysfs.h"
@@ -141,15 +146,14 @@ static void xe_gt_disable_host_l2_vram(struct xe_gt *gt)
 static void xe_gt_enable_comp_1wcoh(struct xe_gt *gt)
 {
 	struct xe_device *xe = gt_to_xe(gt);
-	unsigned int fw_ref;
 	u32 reg;
 
 	if (IS_SRIOV_VF(xe))
 		return;
 
 	if (GRAPHICS_VER(xe) >= 30 && xe->info.has_flat_ccs) {
-		fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FW_GT);
-		if (!fw_ref)
+		CLASS(xe_force_wake, fw_ref)(gt_to_fw(gt), XE_FW_GT);
+		if (!fw_ref.domains)
 			return;
 
 		reg = xe_gt_mcr_unicast_read_any(gt, XE2_GAMREQSTRM_CTRL);
@@ -163,15 +167,13 @@ static void xe_gt_enable_comp_1wcoh(struct xe_gt *gt)
 			reg |= EN_CMP_1WCOH_GW;
 			xe_gt_mcr_multicast_write(gt, XE2_GAMWALK_CTRL_3D, reg);
 		}
-
-		xe_force_wake_put(gt_to_fw(gt), fw_ref);
 	}
 }
 
 static void gt_reset_worker(struct work_struct *w);
 
 static int emit_job_sync(struct xe_exec_queue *q, struct xe_bb *bb,
-			 long timeout_jiffies)
+			 long timeout_jiffies, bool force_reset)
 {
 	struct xe_sched_job *job;
 	struct dma_fence *fence;
@@ -180,6 +182,8 @@ static int emit_job_sync(struct xe_exec_queue *q, struct xe_bb *bb,
 	job = xe_bb_create_job(q, bb);
 	if (IS_ERR(job))
 		return PTR_ERR(job);
+
+	job->ring_ops_force_reset = force_reset;
 
 	xe_sched_job_arm(job);
 	fence = dma_fence_get(&job->drm.s_fence->finished);
@@ -204,7 +208,7 @@ static int emit_nop_job(struct xe_gt *gt, struct xe_exec_queue *q)
 	if (IS_ERR(bb))
 		return PTR_ERR(bb);
 
-	ret = emit_job_sync(q, bb, HZ);
+	ret = emit_job_sync(q, bb, HZ, false);
 	xe_bb_free(bb, NULL);
 
 	return ret;
@@ -369,7 +373,8 @@ static int emit_wa_job(struct xe_gt *gt, struct xe_exec_queue *q)
 
 	bb->len = cs - bb->cs;
 
-	ret = emit_job_sync(q, bb, HZ);
+	/* only VFs need to trigger reset to get a clean NULL context */
+	ret = emit_job_sync(q, bb, HZ, IS_SRIOV_VF(gt_to_xe(gt)));
 
 	xe_bb_free(bb, NULL);
 
@@ -390,10 +395,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 		if (gt->default_lrc[hwe->class])
 			continue;
 
-		xe_reg_sr_init(&hwe->reg_lrc, hwe->name, xe);
-		xe_wa_process_lrc(hwe);
-		xe_hw_engine_setup_default_lrc_state(hwe);
-		xe_tuning_process_lrc(hwe);
+		xe_hw_engine_setup_reg_lrc(hwe);
 
 		default_lrc = drmm_kzalloc(&xe->drm,
 					   xe_gt_lrc_size(gt, hwe->class),
@@ -452,6 +454,35 @@ put_exec_queue:
 	return err;
 }
 
+static void wa_14026539277(struct xe_gt *gt)
+{
+	struct xe_device *xe = gt_to_xe(gt);
+	u32 val;
+
+	/*
+	 * FIXME: We currently can't use FUNC(xe_rtp_match_not_sriov_vf) in the
+	 * rules for Wa_14026539277 due to xe_wa_process_device_oob() being
+	 * called before xe_sriov_probe_early(); and we can't move the call to
+	 * the former to happen after the latter because MMIO read functions
+	 * already depend on a device OOB workaround.  This needs to be fixed by
+	 * allowing workaround checks to happen at different stages of driver
+	 * initialization.
+	 */
+	if (IS_SRIOV_VF(xe))
+		return;
+
+	if (!XE_DEVICE_WA(xe, 14026539277))
+		return;
+
+	if (!xe_gt_is_main_type(gt))
+		return;
+
+	val = xe_gt_mcr_unicast_read_any(gt, L2COMPUTESIDECTRL);
+	val &= ~CECTRL;
+	val |= CECTRL_CENODATA_ALWAYS;
+	xe_gt_mcr_multicast_write(gt, L2COMPUTESIDECTRL, val);
+}
+
 int xe_gt_init_early(struct xe_gt *gt)
 {
 	int err;
@@ -497,6 +528,10 @@ int xe_gt_init_early(struct xe_gt *gt)
 	xe_gt_mmio_init(gt);
 
 	err = xe_uc_init_noalloc(&gt->uc);
+	if (err)
+		return err;
+
+	err = xe_gt_stats_init(gt);
 	if (err)
 		return err;
 
@@ -572,6 +607,15 @@ static int gt_init_with_gt_forcewake(struct xe_gt *gt)
 	 * on pre-MTL platforms, reading it there will (correctly) return 0.
 	 */
 	gt->info.gmdid = xe_mmio_read32(&gt->mmio, GMD_ID);
+
+	/*
+	 * Wa_14026539277 can't be implemented as a regular GT workaround (i.e.
+	 * as an entry in gt_was[]) for two reasons: it is actually a device
+	 * workaround that happens to involve programming a GT register; and it
+	 * needs to be applied early to avoid getting the hardware in a bad
+	 * state before we have a chance to do the necessary programming.
+	 */
+	wa_14026539277(gt);
 
 	return 0;
 }
@@ -743,6 +787,7 @@ void xe_gt_mmio_init(struct xe_gt *gt)
 	if (IS_SRIOV_VF(xe))
 		gt->mmio.sriov_vf_gt = gt;
 }
+EXPORT_SYMBOL_IF_KUNIT(xe_gt_mmio_init);
 
 void xe_gt_record_user_engines(struct xe_gt *gt)
 {
@@ -894,7 +939,7 @@ static void gt_reset_worker(struct work_struct *w)
 	if (IS_SRIOV_PF(gt_to_xe(gt)))
 		xe_gt_sriov_pf_stop_prepare(gt);
 
-	xe_uc_gucrc_disable(&gt->uc);
+	xe_guc_rc_disable(&gt->uc.guc);
 	xe_uc_stop_prepare(&gt->uc);
 	xe_pagefault_reset(gt_to_xe(gt), gt);
 
@@ -948,7 +993,6 @@ void xe_gt_reset_async(struct xe_gt *gt)
 
 void xe_gt_suspend_prepare(struct xe_gt *gt)
 {
-	CLASS(xe_force_wake, fw_ref)(gt_to_fw(gt), XE_FORCEWAKE_ALL);
 	xe_uc_suspend_prepare(&gt->uc);
 }
 

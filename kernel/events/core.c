@@ -58,6 +58,7 @@
 #include <linux/percpu-rwsem.h>
 #include <linux/unwind_deferred.h>
 #include <linux/kvm_types.h>
+#include <linux/seq_file.h>
 
 #include "internal.h"
 
@@ -5303,6 +5304,7 @@ static void free_event_rcu(struct rcu_head *head)
 	if (event->ns)
 		put_pid_ns(event->ns);
 	perf_event_free_filter(event);
+	kfree(event->addr_filter_ranges);
 	kmem_cache_free(perf_event_cache, event);
 }
 
@@ -5368,15 +5370,15 @@ static void unaccount_freq_event(void)
 
 
 static struct perf_ctx_data *
-alloc_perf_ctx_data(struct kmem_cache *ctx_cache, bool global)
+alloc_perf_ctx_data(struct kmem_cache *ctx_cache, bool global, gfp_t gfp_flags)
 {
 	struct perf_ctx_data *cd;
 
-	cd = kzalloc_obj(*cd);
+	cd = kzalloc_obj(*cd, gfp_flags);
 	if (!cd)
 		return NULL;
 
-	cd->data = kmem_cache_zalloc(ctx_cache, GFP_KERNEL);
+	cd->data = kmem_cache_zalloc(ctx_cache, gfp_flags);
 	if (!cd->data) {
 		kfree(cd);
 		return NULL;
@@ -5410,11 +5412,11 @@ static inline void perf_free_ctx_data_rcu(struct perf_ctx_data *cd)
 
 static int
 attach_task_ctx_data(struct task_struct *task, struct kmem_cache *ctx_cache,
-		     bool global)
+		     bool global, gfp_t gfp_flags)
 {
 	struct perf_ctx_data *cd, *old = NULL;
 
-	cd = alloc_perf_ctx_data(ctx_cache, global);
+	cd = alloc_perf_ctx_data(ctx_cache, global, gfp_flags);
 	if (!cd)
 		return -ENOMEM;
 
@@ -5487,6 +5489,12 @@ again:
 					cd = NULL;
 			}
 			if (!cd) {
+				/*
+				 * Try to allocate context quickly before
+				 * traversing the whole thread list again.
+				 */
+				if (!attach_task_ctx_data(p, ctx_cache, true, GFP_NOWAIT))
+					continue;
 				get_task_struct(p);
 				goto alloc;
 			}
@@ -5497,7 +5505,7 @@ again:
 
 	return 0;
 alloc:
-	ret = attach_task_ctx_data(p, ctx_cache, true);
+	ret = attach_task_ctx_data(p, ctx_cache, true, GFP_KERNEL);
 	put_task_struct(p);
 	if (ret) {
 		__detach_global_ctx_data();
@@ -5517,7 +5525,7 @@ attach_perf_ctx_data(struct perf_event *event)
 		return -ENOMEM;
 
 	if (task)
-		return attach_task_ctx_data(task, ctx_cache, false);
+		return attach_task_ctx_data(task, ctx_cache, false, GFP_KERNEL);
 
 	ret = attach_global_ctx_data(ctx_cache);
 	if (ret)
@@ -5552,22 +5560,15 @@ static void __detach_global_ctx_data(void)
 	struct task_struct *g, *p;
 	struct perf_ctx_data *cd;
 
-again:
 	scoped_guard (rcu) {
 		for_each_process_thread(g, p) {
 			cd = rcu_dereference(p->perf_ctx_data);
-			if (!cd || !cd->global)
-				continue;
-			cd->global = 0;
-			get_task_struct(p);
-			goto detach;
+			if (cd && cd->global) {
+				cd->global = 0;
+				detach_task_ctx_data(p);
+			}
 		}
 	}
-	return;
-detach:
-	detach_task_ctx_data(p);
-	put_task_struct(p);
-	goto again;
 }
 
 static void detach_global_ctx_data(void)
@@ -5750,8 +5751,6 @@ static void __free_event(struct perf_event *event)
 
 	if (event->attach_state & PERF_ATTACH_CALLCHAIN)
 		put_callchain_buffers();
-
-	kfree(event->addr_filter_ranges);
 
 	if (event->attach_state & PERF_ATTACH_EXCLUSIVE)
 		exclusive_event_destroy(event);
@@ -7007,6 +7006,7 @@ static void perf_mmap_open(struct vm_area_struct *vma)
 }
 
 static void perf_pmu_output_stop(struct perf_event *event);
+static void perf_mmap_unaccount(struct vm_area_struct *vma, struct perf_buffer *rb);
 
 /*
  * A buffer can be mmap()ed multiple times; either directly through the same
@@ -7022,8 +7022,6 @@ static void perf_mmap_close(struct vm_area_struct *vma)
 	mapped_f unmapped = get_mapped(event, event_unmapped);
 	struct perf_buffer *rb = ring_buffer_get(event);
 	struct user_struct *mmap_user = rb->mmap_user;
-	int mmap_locked = rb->mmap_locked;
-	unsigned long size = perf_data_size(rb);
 	bool detach_rest = false;
 
 	/* FIXIES vs perf_pmu_unregister() */
@@ -7118,11 +7116,7 @@ again:
 	 * Aside from that, this buffer is 'fully' detached and unmapped,
 	 * undo the VM accounting.
 	 */
-
-	atomic_long_sub((size >> PAGE_SHIFT) + 1 - mmap_locked,
-			&mmap_user->locked_vm);
-	atomic64_sub(mmap_locked, &vma->vm_mm->pinned_vm);
-	free_uid(mmap_user);
+	perf_mmap_unaccount(vma, rb);
 
 out_put:
 	ring_buffer_put(rb); /* could be last */
@@ -7213,7 +7207,7 @@ static int map_range(struct perf_buffer *rb, struct vm_area_struct *vma)
 #ifdef CONFIG_MMU
 	/* Clear any partial mappings on error. */
 	if (err)
-		zap_page_range_single(vma, vma->vm_start, nr_pages * PAGE_SIZE, NULL);
+		zap_vma_range(vma, vma->vm_start, nr_pages * PAGE_SIZE);
 #endif
 
 	return err;
@@ -7260,6 +7254,15 @@ static void perf_mmap_account(struct vm_area_struct *vma, long user_extra, long 
 
 	atomic_long_add(user_extra, &user->locked_vm);
 	atomic64_add(extra, &vma->vm_mm->pinned_vm);
+}
+
+static void perf_mmap_unaccount(struct vm_area_struct *vma, struct perf_buffer *rb)
+{
+	struct user_struct *user = rb->mmap_user;
+
+	atomic_long_sub((perf_data_size(rb) >> PAGE_SHIFT) + 1 - rb->mmap_locked,
+			&user->locked_vm);
+	atomic64_sub(rb->mmap_locked, &vma->vm_mm->pinned_vm);
 }
 
 static int perf_mmap_rb(struct vm_area_struct *vma, struct perf_event *event,
@@ -7324,8 +7327,6 @@ static int perf_mmap_rb(struct vm_area_struct *vma, struct perf_event *event,
 	if (!rb)
 		return -ENOMEM;
 
-	refcount_set(&rb->mmap_count, 1);
-	rb->mmap_user = get_current_user();
 	rb->mmap_locked = extra;
 
 	ring_buffer_attach(event, rb);
@@ -7475,16 +7476,54 @@ static int perf_mmap(struct file *file, struct vm_area_struct *vma)
 			mapped(event, vma->vm_mm);
 
 		/*
-		 * Try to map it into the page table. On fail, invoke
-		 * perf_mmap_close() to undo the above, as the callsite expects
-		 * full cleanup in this case and therefore does not invoke
-		 * vmops::close().
+		 * Try to map it into the page table. On fail undo the above,
+		 * as the callsite expects full cleanup in this case and
+		 * therefore does not invoke vmops::close().
 		 */
 		ret = map_range(event->rb, vma);
-		if (ret)
-			perf_mmap_close(vma);
+		if (likely(!ret))
+			return 0;
+
+		/* Error path */
+
+		/*
+		 * If this is the first mmap(), then event->mmap_count should
+		 * be stable at 1. It is only modified by:
+		 * perf_mmap_{open,close}() and perf_mmap().
+		 *
+		 * The former are not possible because this mmap() hasn't been
+		 * successful yet, and the latter is serialized by
+		 * event->mmap_mutex which we still hold (note that mmap_lock
+		 * is not strictly sufficient here, because the event fd can
+		 * be passed to another process through trivial means like
+		 * fork(), leading to concurrent mmap() from different mm).
+		 *
+		 * Make sure to remove event->rb before releasing
+		 * event->mmap_mutex, such that any concurrent mmap() will not
+		 * attempt use this failed buffer.
+		 */
+		if (refcount_read(&event->mmap_count) == 1) {
+			/*
+			 * Minimal perf_mmap_close(); there can't be AUX or
+			 * other events on account of this being the first.
+			 */
+			mapped = get_mapped(event, event_unmapped);
+			if (mapped)
+				mapped(event, vma->vm_mm);
+			perf_mmap_unaccount(vma, event->rb);
+			ring_buffer_attach(event, NULL);	/* drops last rb->refcount */
+			refcount_set(&event->mmap_count, 0);
+			return ret;
+		}
+
+		/*
+		 * Otherwise this is an already existing buffer, and there is
+		 * no race vs first exposure, so fall-through and call
+		 * perf_mmap_close().
+		 */
 	}
 
+	perf_mmap_close(vma);
 	return ret;
 }
 
@@ -7507,6 +7546,33 @@ static int perf_fasync(int fd, struct file *filp, int on)
 	return 0;
 }
 
+static void perf_show_fdinfo(struct seq_file *m, struct file *f)
+{
+	struct perf_event *event = f->private_data;
+	struct perf_event_context *ctx;
+	struct mutex *child_mutex;
+
+	ctx = perf_event_ctx_lock(event);
+	child_mutex = event->parent ? &event->parent->child_mutex : &event->child_mutex;
+	mutex_lock(child_mutex);
+
+	seq_printf(m, "perf_event_attr.type:\t%u\n", event->orig_type);
+	if (event->pmu)
+		seq_printf(m, "pmu_type:\t%u\n", event->pmu->type);
+	seq_printf(m, "perf_event_attr.config:\t0x%llx\n", (unsigned long long)event->attr.config);
+	seq_printf(m, "perf_event_attr.config1:\t0x%llx\n",
+		   (unsigned long long)event->attr.config1);
+	seq_printf(m, "perf_event_attr.config2:\t0x%llx\n",
+		   (unsigned long long)event->attr.config2);
+	seq_printf(m, "perf_event_attr.config3:\t0x%llx\n",
+		   (unsigned long long)event->attr.config3);
+	seq_printf(m, "perf_event_attr.config4:\t0x%llx\n",
+		   (unsigned long long)event->attr.config4);
+
+	mutex_unlock(child_mutex);
+	perf_event_ctx_unlock(event, ctx);
+}
+
 static const struct file_operations perf_fops = {
 	.release		= perf_release,
 	.read			= perf_read,
@@ -7515,6 +7581,7 @@ static const struct file_operations perf_fops = {
 	.compat_ioctl		= perf_compat_ioctl,
 	.mmap			= perf_mmap,
 	.fasync			= perf_fasync,
+	.show_fdinfo		= perf_show_fdinfo,
 };
 
 /*
@@ -8420,7 +8487,7 @@ static u64 perf_get_pgtable_size(struct mm_struct *mm, unsigned long addr)
 	pte_t *ptep, pte;
 
 	pgdp = pgd_offset(mm, addr);
-	pgd = READ_ONCE(*pgdp);
+	pgd = pgdp_get(pgdp);
 	if (pgd_none(pgd))
 		return 0;
 
@@ -8428,7 +8495,7 @@ static u64 perf_get_pgtable_size(struct mm_struct *mm, unsigned long addr)
 		return pgd_leaf_size(pgd);
 
 	p4dp = p4d_offset_lockless(pgdp, pgd, addr);
-	p4d = READ_ONCE(*p4dp);
+	p4d = p4dp_get(p4dp);
 	if (!p4d_present(p4d))
 		return 0;
 
@@ -8436,7 +8503,7 @@ static u64 perf_get_pgtable_size(struct mm_struct *mm, unsigned long addr)
 		return p4d_leaf_size(p4d);
 
 	pudp = pud_offset_lockless(p4dp, p4d, addr);
-	pud = READ_ONCE(*pudp);
+	pud = pudp_get(pudp);
 	if (!pud_present(pud))
 		return 0;
 
@@ -9238,7 +9305,7 @@ perf_event_alloc_task_data(struct task_struct *child,
 
 	return;
 attach:
-	attach_task_ctx_data(child, ctx_cache, true);
+	attach_task_ctx_data(child, ctx_cache, true, GFP_KERNEL);
 }
 
 void perf_event_fork(struct task_struct *task)
@@ -11643,6 +11710,15 @@ static int __perf_event_set_bpf_prog(struct perf_event *event,
 	if (prog->type == BPF_PROG_TYPE_KPROBE && prog->sleepable && !is_uprobe)
 		/* only uprobe programs are allowed to be sleepable */
 		return -EINVAL;
+
+	if (prog->type == BPF_PROG_TYPE_TRACEPOINT && prog->sleepable) {
+		/*
+		 * Sleepable tracepoint programs can only attach to faultable
+		 * tracepoints. Currently only syscall tracepoints are faultable.
+		 */
+		if (!is_syscall_tp)
+			return -EINVAL;
+	}
 
 	/* Kprobe override only works for kprobes, not uprobes. */
 	if (prog->kprobe_override && !is_kprobe)

@@ -42,11 +42,19 @@
 #define MAX(x, y) ((x > y) ? x : y)
 #endif
 
+#include "dc_fpu.h"
+
+#if !defined(DC_RUN_WITH_PREEMPTION_ENABLED)
+#define DC_RUN_WITH_PREEMPTION_ENABLED(code) code
+#endif // !DC_RUN_WITH_PREEMPTION_ENABLED
+
+
 /*******************************************************************************
  * Private functions
  ******************************************************************************/
 void update_stream_signal(struct dc_stream_state *stream, struct dc_sink *sink)
 {
+	unsigned int pix_clk;
 	if (sink->sink_signal == SIGNAL_TYPE_NONE)
 		stream->signal = stream->link->connector_signal;
 	else
@@ -59,6 +67,40 @@ void update_stream_signal(struct dc_stream_state *stream, struct dc_sink *sink)
 			stream->signal = SIGNAL_TYPE_DVI_DUAL_LINK;
 		else
 			stream->signal = SIGNAL_TYPE_DVI_SINGLE_LINK;
+	}
+	if (dc_is_hdmi_frl_signal(stream->signal)) {
+		pix_clk = stream->timing.pix_clk_100hz / 10;
+		if (stream->timing.pixel_encoding == PIXEL_ENCODING_YCBCR420)
+			pix_clk /= 2;
+
+		// YCbCr422 to use assume 12-bit interface always, clock stays the same
+		if (stream->timing.pixel_encoding != PIXEL_ENCODING_YCBCR422) {
+			switch (stream->timing.display_color_depth) {
+			case COLOR_DEPTH_666:
+			case COLOR_DEPTH_888:
+				break;
+			case COLOR_DEPTH_101010:
+				pix_clk = pix_clk * 10 / 8;
+				break;
+			case COLOR_DEPTH_121212:
+				pix_clk = pix_clk * 12 / 8;
+				break;
+			default:
+				break;
+			}
+		}
+		if (pix_clk != 0 && pix_clk < HDMI2_TMDS_MAX_PIXEL_CLOCK)
+			stream->signal = SIGNAL_TYPE_HDMI_TYPE_A;
+		if (stream->timing.pixel_encoding == PIXEL_ENCODING_YCBCR420 &&
+				stream->timing.h_addressable > 4096)
+			stream->signal = SIGNAL_TYPE_HDMI_FRL;
+		if (stream->timing.rid != 0)
+			stream->signal = SIGNAL_TYPE_HDMI_FRL;
+
+		if (stream->link->frl_flags.force_frl_always ||
+				stream->link->frl_flags.force_frl_max
+				|| stream->link->frl_flags.force_frl_dsc)
+			stream->signal = SIGNAL_TYPE_HDMI_FRL;
 	}
 }
 
@@ -170,11 +212,15 @@ struct dc_stream_state *dc_create_stream_for_sink(
 	if (sink == NULL)
 		goto fail;
 
-	stream = kzalloc_obj(struct dc_stream_state, GFP_ATOMIC);
+	DC_RUN_WITH_PREEMPTION_ENABLED(stream = kzalloc_obj(struct dc_stream_state, GFP_ATOMIC));
+
 	if (stream == NULL)
 		goto fail;
 
-	stream->update_scratch = kzalloc((int32_t) dc_update_scratch_space_size(), GFP_ATOMIC);
+	DC_RUN_WITH_PREEMPTION_ENABLED(stream->update_scratch =
+					kzalloc((int32_t) dc_update_scratch_space_size(),
+						GFP_ATOMIC));
+
 	if (stream->update_scratch == NULL)
 		goto fail;
 
@@ -245,15 +291,20 @@ const struct dc_stream_status *dc_stream_get_status_const(
 	const struct dc_stream_state *stream)
 {
 	struct dc *dc = stream->ctx->dc;
-
 	return dc_state_get_stream_status(dc->current_state, stream);
+}
+
+struct dc_link *dc_stream_get_link(
+	const struct dc_stream_state *stream)
+{
+	return stream->link;
 }
 
 void program_cursor_attributes(
 	struct dc *dc,
 	struct dc_stream_state *stream)
 {
-	int i;
+	uint8_t i;
 	struct resource_context *res_ctx;
 	struct pipe_ctx *pipe_to_program = NULL;
 	bool enable_cursor_offload = dc_dmub_srv_is_cursor_offload_enabled(dc);
@@ -400,7 +451,7 @@ void program_cursor_position(
 	struct dc *dc,
 	struct dc_stream_state *stream)
 {
-	int i;
+	uint8_t i;
 	struct resource_context *res_ctx;
 	struct pipe_ctx *pipe_to_program = NULL;
 	bool enable_cursor_offload = dc_dmub_srv_is_cursor_offload_enabled(dc);
@@ -498,7 +549,7 @@ bool dc_stream_program_cursor_position(
 		/* apply/update visual confirm */
 		if (dc->debug.visual_confirm == VISUAL_CONFIRM_HW_CURSOR) {
 			/* update software state */
-			int i;
+			unsigned int i;
 
 			for (i = 0; i < dc->res_pool->pipe_count; i++) {
 				struct pipe_ctx *pipe_ctx = &dc->current_state->res_ctx.pipe_ctx[i];
@@ -517,14 +568,16 @@ bool dc_stream_program_cursor_position(
 
 		if (stream->drr_trigger_mode == DRR_TRIGGER_ON_FLIP_AND_CURSOR) {
 			/* apply manual trigger */
-			int i;
+			unsigned int i;
 
 			for (i = 0; i < dc->res_pool->pipe_count; i++) {
 				struct pipe_ctx *pipe_ctx = &dc->current_state->res_ctx.pipe_ctx[i];
 
 				/* trigger event on first pipe with current stream */
-				if (stream == pipe_ctx->stream) {
-					pipe_ctx->stream_res.tg->funcs->program_manual_trigger(pipe_ctx->stream_res.tg);
+				if (stream == pipe_ctx->stream &&
+				pipe_ctx->stream_res.tg->funcs->program_manual_trigger) {
+					pipe_ctx->stream_res.tg->funcs->program_manual_trigger(
+					pipe_ctx->stream_res.tg);
 					break;
 				}
 			}
@@ -541,7 +594,7 @@ bool dc_stream_add_writeback(struct dc *dc,
 		struct dc_writeback_info *wb_info)
 {
 	bool isDrc = false;
-	int i = 0;
+	unsigned int i = 0;
 	struct dwbc *dwb;
 
 	if (stream == NULL) {
@@ -584,7 +637,7 @@ bool dc_stream_add_writeback(struct dc *dc,
 
 	if (dc->hwss.enable_writeback) {
 		struct dc_stream_status *stream_status = dc_stream_get_status(stream);
-		struct dwbc *dwb = dc->res_pool->dwbc[wb_info->dwb_pipe_inst];
+		dwb = dc->res_pool->dwbc[wb_info->dwb_pipe_inst];
 		if (stream_status)
 			dwb->otg_inst = stream_status->primary_otg_inst;
 	}
@@ -596,7 +649,7 @@ bool dc_stream_add_writeback(struct dc *dc,
 
 	/* enable writeback */
 	if (dc->hwss.enable_writeback) {
-		struct dwbc *dwb = dc->res_pool->dwbc[wb_info->dwb_pipe_inst];
+		dwb = dc->res_pool->dwbc[wb_info->dwb_pipe_inst];
 
 		if (dwb->funcs->is_enabled(dwb)) {
 			/* writeback pipe already enabled, only need to update */
@@ -950,7 +1003,7 @@ struct dc_rmcm_3dlut *dc_stream_get_3dlut_for_stream(
 	unsigned int num_rmcm = dc->caps.color.mpc.num_rmcm_3dluts;
 
 	// see if one is allocated for this stream
-	for (int i = 0; i < num_rmcm; i++) {
+	for (unsigned int i = 0; i < num_rmcm; i++) {
 		if (dc->res_pool->rmcm_3dlut[i].isInUse &&
 			dc->res_pool->rmcm_3dlut[i].stream == stream)
 			return &dc->res_pool->rmcm_3dlut[i];
@@ -961,7 +1014,7 @@ struct dc_rmcm_3dlut *dc_stream_get_3dlut_for_stream(
 		return NULL;
 
 	//see if there is an unused 3dlut, allocate
-	for (int i = 0; i < num_rmcm; i++) {
+	for (unsigned int i = 0; i < num_rmcm; i++) {
 		if (!dc->res_pool->rmcm_3dlut[i].isInUse) {
 			dc->res_pool->rmcm_3dlut[i].isInUse = true;
 			dc->res_pool->rmcm_3dlut[i].stream = stream;
@@ -993,7 +1046,7 @@ void dc_stream_init_rmcm_3dlut(struct dc *dc)
 {
 	unsigned int num_rmcm = dc->caps.color.mpc.num_rmcm_3dluts;
 
-	for (int i = 0; i < num_rmcm; i++) {
+	for (unsigned int i = 0; i < num_rmcm; i++) {
 		dc->res_pool->rmcm_3dlut[i].isInUse = false;
 		dc->res_pool->rmcm_3dlut[i].stream = NULL;
 		dc->res_pool->rmcm_3dlut[i].protection_bits = 0;
@@ -1022,14 +1075,18 @@ static int dc_stream_get_brightness_millinits_linear_interpolation (struct dc_st
 								     int refresh_hz)
 {
 	long long slope = 0;
+	long long y_intercept = 0;
+	long long brightness_millinits = 0;
+
 	if (stream->lumin_data.refresh_rate_hz[index2] != stream->lumin_data.refresh_rate_hz[index1]) {
 		slope = (stream->lumin_data.luminance_millinits[index2] - stream->lumin_data.luminance_millinits[index1]) /
 			    (stream->lumin_data.refresh_rate_hz[index2] - stream->lumin_data.refresh_rate_hz[index1]);
 	}
 
-	int y_intercept = stream->lumin_data.luminance_millinits[index2] - slope * stream->lumin_data.refresh_rate_hz[index2];
+	y_intercept = stream->lumin_data.luminance_millinits[index2] - slope * stream->lumin_data.refresh_rate_hz[index2];
+	brightness_millinits = y_intercept + (long long)refresh_hz * slope;
 
-	return (y_intercept + refresh_hz * slope);
+	return (int)brightness_millinits;
 }
 
 /*
@@ -1041,14 +1098,18 @@ static int dc_stream_get_refresh_hz_linear_interpolation (struct dc_stream_state
 							   int brightness_millinits)
 {
 	long long slope = 1;
+	long long y_intercept = 0;
+	long long refresh_hz = 0;
+
 	if (stream->lumin_data.refresh_rate_hz[index2] != stream->lumin_data.refresh_rate_hz[index1]) {
 		slope = (stream->lumin_data.luminance_millinits[index2] - stream->lumin_data.luminance_millinits[index1]) /
 				(stream->lumin_data.refresh_rate_hz[index2] - stream->lumin_data.refresh_rate_hz[index1]);
 	}
 
-	int y_intercept = stream->lumin_data.luminance_millinits[index2] - slope * stream->lumin_data.refresh_rate_hz[index2];
+	y_intercept = stream->lumin_data.luminance_millinits[index2] - slope * stream->lumin_data.refresh_rate_hz[index2];
+	refresh_hz = div64_s64((brightness_millinits - y_intercept), slope);
 
-	return ((int)div64_s64((brightness_millinits - y_intercept), slope));
+	return (int)refresh_hz;
 }
 
 /*

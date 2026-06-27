@@ -9,6 +9,7 @@ Video4Linux (V4L) driver-specific documentation
 .. toctree::
 	:maxdepth: 2
 
+	amdisp4-1
 	bttv
 	c3-isp
 	cafe_ccic
@@ -33,7 +34,6 @@ Video4Linux (V4L) driver-specific documentation
 	si470x
 	si4713
 	si476x
-	starfive_camss
 	vimc
 	visl
 	vivid

@@ -584,7 +584,7 @@ __naked void alu32_mov_u32_const(void)
 {
 	asm volatile ("					\
 	w7 = 0;						\
-	w7 &= 1;					\
+	w7 ^= w7;					\
 	w0 = w7;					\
 	if r0 == 0 goto l0_%=;				\
 	r0 = *(u64*)(r7 + 0);				\
@@ -894,7 +894,9 @@ __naked void unpriv_spectre_v1_and_v4_simple(void)
 {
 	asm volatile ("					\
 	r8 = 0;						\
+	r8 ^= r8;					\
 	r9 = 0;						\
+	r9 ^= r9;					\
 	r0 = r10;					\
 	r1 = 0;						\
 	r2 = r10;					\
@@ -932,7 +934,9 @@ __naked void unpriv_ldimm64_spectre_v1_and_v4_simple(void)
 {
 	asm volatile ("					\
 	r8 = 0;						\
+	r8 ^= r8;					\
 	r9 = 0;						\
+	r9 ^= r9;					\
 	r0 = r10;					\
 	r1 = 0;						\
 	r2 = r10;					\
@@ -970,6 +974,28 @@ l0_%=:	exit;						\
 "	:
 	: __imm(bpf_skb_load_bytes_relative)
 	: __clobber_all);
+}
+
+SEC("socket")
+__description("unpriv: Spectre v4 stack write slot index")
+__success __success_unpriv
+__retval(0)
+#ifdef SPEC_V4
+__xlated_unpriv("r0 = 0")
+__xlated_unpriv("*(u32 *)(r10 -4) = r0")
+__xlated_unpriv("nospec")
+__xlated_unpriv("*(u32 *)(r10 -8) = r0")
+__xlated_unpriv("nospec")
+__xlated_unpriv("exit")
+#endif
+__naked void stack_write_nospec_slot_index(void)
+{
+	asm volatile ("					\
+	r0 = 0;					\
+	*(u32 *)(r10 - 4) = r0;			\
+	*(u32 *)(r10 - 8) = r0;			\
+	exit;					\
+"	::: __clobber_all);
 }
 
 char _license[] SEC("license") = "GPL";

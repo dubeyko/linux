@@ -1,13 +1,10 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (C) 2000-2001 Qualcomm Incorporated
    Copyright 2023-2024 NXP
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
-
-   This program is free software; you can redistribute it and/or modify
-   it under the terms of the GNU General Public License version 2 as
-   published by the Free Software Foundation;
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -1468,8 +1465,12 @@ struct hci_rp_read_data_block_size {
 } __packed;
 
 #define HCI_OP_READ_LOCAL_CODECS	0x100b
-struct hci_std_codecs {
+struct hci_std_codecs_hdr {
 	__u8	num;
+} __packed;
+
+struct hci_std_codecs {
+	struct hci_std_codecs_hdr;
 	__u8	codec[];
 } __packed;
 
@@ -1487,7 +1488,7 @@ struct hci_vnd_codecs {
 
 struct hci_rp_read_local_supported_codecs {
 	__u8	status;
-	struct hci_std_codecs std_codecs;
+	struct hci_std_codecs_hdr std_codecs;
 	struct hci_vnd_codecs vnd_codecs;
 } __packed;
 
@@ -1504,8 +1505,12 @@ struct hci_std_codec_v2 {
 	__u8	transport;
 } __packed;
 
-struct hci_std_codecs_v2 {
+struct hci_std_codecs_v2_hdr {
 	__u8	num;
+} __packed;
+
+struct hci_std_codecs_v2 {
+	struct hci_std_codecs_v2_hdr;
 	struct hci_std_codec_v2 codec[];
 } __packed;
 
@@ -1522,7 +1527,7 @@ struct hci_vnd_codecs_v2 {
 
 struct hci_rp_read_local_supported_codecs_v2 {
 	__u8	status;
-	struct hci_std_codecs_v2 std_codecs;
+	struct hci_std_codecs_v2_hdr std_codecs;
 	struct hci_vnd_codecs_v2 vendor_codecs;
 } __packed;
 
@@ -2477,6 +2482,12 @@ struct hci_rp_le_cs_test {
 } __packed;
 
 #define HCI_OP_LE_CS_TEST_END			0x2096
+
+#define HCI_OP_LE_SET_HOST_FEATURE_V2		0x2097
+struct hci_cp_le_set_host_feature_v2 {
+	__le16	bit_number;
+	__u8	bit_value;
+} __packed;
 
 /* ---- HCI Events ---- */
 struct hci_ev_status {

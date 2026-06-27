@@ -1442,7 +1442,7 @@ static int brcm_pcie_start_link(struct brcm_pcie *pcie)
 	cls = FIELD_GET(PCI_EXP_LNKSTA_CLS, lnksta);
 	nlw = FIELD_GET(PCI_EXP_LNKSTA_NLW, lnksta);
 	dev_info(dev, "link up, %s x%u %s\n",
-		 pci_speed_string(pcie_link_speed[cls]), nlw,
+		 pci_speed_string(pcie_get_link_speed(cls)), nlw,
 		 ssc_good ? "(SSC)" : "(!SSC)");
 
 	return 0;
@@ -1894,8 +1894,10 @@ static void brcm_pcie_remove(struct platform_device *pdev)
 	struct brcm_pcie *pcie = platform_get_drvdata(pdev);
 	struct pci_host_bridge *bridge = pci_host_bridge_from_priv(pcie);
 
+	pci_lock_rescan_remove();
 	pci_stop_root_bus(bridge->bus);
 	pci_remove_root_bus(bridge->bus);
+	pci_unlock_rescan_remove();
 	if (pcie->cfg->has_err_report)
 		brcm_unregister_die_notifiers(pcie);
 
@@ -2072,7 +2074,10 @@ static int brcm_pcie_probe(struct platform_device *pdev)
 		return PTR_ERR(pcie->clk);
 
 	ret = of_pci_get_max_link_speed(np);
-	pcie->gen = (ret < 0) ? 0 : ret;
+	if (ret < 0 || ret > 3)
+		pcie->gen = 0;
+	else
+		pcie->gen = ret;
 
 	pcie->ssc = of_property_read_bool(np, "brcm,enable-ssc");
 

@@ -24,6 +24,7 @@
 #include <asm/time.h>
 #include <asm/pgalloc.h>
 #include <asm/irq.h>
+#include <asm/cpuid/api.h>
 #include <asm/delay.h>
 #include <asm/fixmap.h>
 #include <asm/apic.h>
@@ -94,6 +95,7 @@ struct pv_info pv_info = {
 #ifdef CONFIG_PARAVIRT_XXL
 	.extra_user_64bit_cs = __USER_CS,
 #endif
+	.io_delay = true,
 };
 
 /* 64-bit pagetable entries */
@@ -101,8 +103,6 @@ struct pv_info pv_info = {
 
 struct paravirt_patch_template pv_ops = {
 	/* Cpu ops. */
-	.cpu.io_delay		= native_io_delay,
-
 #ifdef CONFIG_PARAVIRT_XXL
 	.cpu.cpuid		= native_cpuid,
 	.cpu.get_debugreg	= pv_native_get_debugreg,
@@ -205,11 +205,7 @@ struct paravirt_patch_template pv_ops = {
 
 	.mmu.enter_mmap		= paravirt_nop,
 
-	.mmu.lazy_mode = {
-		.enter		= paravirt_nop,
-		.leave		= paravirt_nop,
-		.flush		= paravirt_nop,
-	},
+	.mmu.lazy_mode_flush	= paravirt_nop,
 
 	.mmu.set_fixmap		= native_set_fixmap,
 #endif /* CONFIG_PARAVIRT_XXL */

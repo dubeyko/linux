@@ -108,6 +108,8 @@ struct ras_umc_ip_func {
 			struct umc_bank_addr bank_addr, uint64_t *soc_pa);
 	int (*soc_pa_to_bank)(struct ras_core_context *ras_core,
 			uint64_t soc_pa, struct umc_bank_addr *bank_addr);
+	void (*mca_ipid_parse)(struct ras_core_context *ras_core, uint64_t ipid,
+			uint32_t *did, uint32_t *ch, uint32_t *umc_inst, uint32_t *sid);
 };
 
 struct eeprom_store_record {
@@ -137,7 +139,19 @@ struct ras_umc {
 	struct mutex  pending_ecc_lock;
 	struct ras_umc_err_data umc_err_data;
 	struct list_head pending_ecc_list;
+	/* number of entries currently queued on pending_ecc_list */
+	u32 pending_ecc_count;
+	/* number of entries dropped because pending_ecc_list was full */
+	u32 pending_ecc_dropped;
 };
+
+/*
+ * Upper bound on entries that can be queued on pending_ecc_list while a
+ * GPU reset is in progress. Beyond this, new ECC events are dropped to
+ * prevent unbounded kernel memory growth in case of an ECC storm or
+ * malicious/repeated UMC error injection.
+ */
+#define RAS_UMC_PENDING_ECC_MAX  8192
 
 int ras_umc_sw_init(struct ras_core_context *ras);
 int ras_umc_sw_fini(struct ras_core_context *ras);

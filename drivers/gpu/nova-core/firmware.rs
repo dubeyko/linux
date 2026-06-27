@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 
 //! Contains structures and functions dedicated to the parsing, building and patching of firmwares
 //! to be loaded into a given execution unit.
@@ -15,10 +16,9 @@ use kernel::{
 };
 
 use crate::{
-    dma::DmaObject,
     falcon::{
-        FalconFirmware,
-        FalconLoadTarget, //
+        FalconDmaLoadTarget,
+        FalconFirmware, //
     },
     gpu,
     num::{
@@ -28,6 +28,7 @@ use crate::{
 };
 
 pub(crate) mod booter;
+pub(crate) mod fsp;
 pub(crate) mod fwsec;
 pub(crate) mod gsp;
 pub(crate) mod riscv;
@@ -49,7 +50,7 @@ fn request_firmware(
 
 /// Structure used to describe some firmwares, notably FWSEC-FRTS.
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, FromBytes)]
 pub(crate) struct FalconUCodeDescV2 {
     /// Header defined by 'NV_BIT_FALCON_UCODE_DESC_HEADER_VDESC*' in OpenRM.
     hdr: u32,
@@ -64,7 +65,8 @@ pub(crate) struct FalconUCodeDescV2 {
     pub(crate) interface_offset: u32,
     /// Base address at which to load the code segment into 'IMEM'.
     pub(crate) imem_phys_base: u32,
-    /// Size in bytes of the code to copy into 'IMEM'.
+    /// Size in bytes of the code to copy into 'IMEM' (includes both secure and non-secure
+    /// segments).
     pub(crate) imem_load_size: u32,
     /// Virtual 'IMEM' address (i.e. 'tag') at which the code should start.
     pub(crate) imem_virt_base: u32,
@@ -83,9 +85,6 @@ pub(crate) struct FalconUCodeDescV2 {
     /// "Alternate" Size of data to load into DMEM.
     pub(crate) alt_dmem_load_size: u32,
 }
-
-// SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
-unsafe impl FromBytes for FalconUCodeDescV2 {}
 
 /// Structure used to describe some firmwares, notably FWSEC-FRTS.
 #[repr(C)]
@@ -171,9 +170,9 @@ pub(crate) trait FalconUCodeDescriptor {
         ((hdr & HDR_SIZE_MASK) >> HDR_SIZE_SHIFT).into_safe_cast()
     }
 
-    fn imem_sec_load_params(&self) -> FalconLoadTarget;
-    fn imem_ns_load_params(&self) -> Option<FalconLoadTarget>;
-    fn dmem_load_params(&self) -> FalconLoadTarget;
+    fn imem_sec_load_params(&self) -> FalconDmaLoadTarget;
+    fn imem_ns_load_params(&self) -> Option<FalconDmaLoadTarget>;
+    fn dmem_load_params(&self) -> FalconDmaLoadTarget;
 }
 
 impl FalconUCodeDescriptor for FalconUCodeDescV2 {
@@ -205,24 +204,31 @@ impl FalconUCodeDescriptor for FalconUCodeDescV2 {
         0
     }
 
-    fn imem_sec_load_params(&self) -> FalconLoadTarget {
-        FalconLoadTarget {
-            src_start: 0,
-            dst_start: self.imem_sec_base,
+    fn imem_sec_load_params(&self) -> FalconDmaLoadTarget {
+        // `imem_sec_base` is the *virtual* start address of the secure IMEM segment, so subtract
+        // `imem_virt_base` to get its physical offset.
+        let imem_sec_start = self.imem_sec_base.saturating_sub(self.imem_virt_base);
+
+        FalconDmaLoadTarget {
+            src_start: imem_sec_start,
+            dst_start: self.imem_phys_base.saturating_add(imem_sec_start),
             len: self.imem_sec_size,
         }
     }
 
-    fn imem_ns_load_params(&self) -> Option<FalconLoadTarget> {
-        Some(FalconLoadTarget {
+    fn imem_ns_load_params(&self) -> Option<FalconDmaLoadTarget> {
+        Some(FalconDmaLoadTarget {
+            // Non-secure code always starts at offset 0.
             src_start: 0,
             dst_start: self.imem_phys_base,
-            len: self.imem_load_size.checked_sub(self.imem_sec_size)?,
+            // `imem_load_size` includes the size of the secure segment, so subtract it to
+            // get the correct amount of data to copy.
+            len: self.imem_load_size.saturating_sub(self.imem_sec_size),
         })
     }
 
-    fn dmem_load_params(&self) -> FalconLoadTarget {
-        FalconLoadTarget {
+    fn dmem_load_params(&self) -> FalconDmaLoadTarget {
+        FalconDmaLoadTarget {
             src_start: self.dmem_offset,
             dst_start: self.dmem_phys_base,
             len: self.dmem_load_size,
@@ -259,21 +265,23 @@ impl FalconUCodeDescriptor for FalconUCodeDescV3 {
         self.signature_versions
     }
 
-    fn imem_sec_load_params(&self) -> FalconLoadTarget {
-        FalconLoadTarget {
+    fn imem_sec_load_params(&self) -> FalconDmaLoadTarget {
+        FalconDmaLoadTarget {
+            // IMEM segment always starts at offset 0.
             src_start: 0,
             dst_start: self.imem_phys_base,
             len: self.imem_load_size,
         }
     }
 
-    fn imem_ns_load_params(&self) -> Option<FalconLoadTarget> {
+    fn imem_ns_load_params(&self) -> Option<FalconDmaLoadTarget> {
         // Not used on V3 platforms
         None
     }
 
-    fn dmem_load_params(&self) -> FalconLoadTarget {
-        FalconLoadTarget {
+    fn dmem_load_params(&self) -> FalconDmaLoadTarget {
+        FalconDmaLoadTarget {
+            // DMEM segment starts right after the IMEM one.
             src_start: self.imem_load_size,
             dst_start: self.dmem_phys_base,
             len: self.dmem_load_size,
@@ -292,7 +300,7 @@ impl SignedState for Unsigned {}
 struct Signed;
 impl SignedState for Signed {}
 
-/// A [`DmaObject`] containing a specific microcode ready to be loaded into a falcon.
+/// Microcode to be loaded into a specific falcon.
 ///
 /// This is module-local and meant for sub-modules to use internally.
 ///
@@ -300,34 +308,35 @@ impl SignedState for Signed {}
 /// before it can be loaded (with an exception for development hardware). The
 /// [`Self::patch_signature`] and [`Self::no_patch_signature`] methods are used to transition the
 /// firmware to its [`Signed`] state.
-struct FirmwareDmaObject<F: FalconFirmware, S: SignedState>(DmaObject, PhantomData<(F, S)>);
+// TODO: Consider replacing this with a coherent memory object once `CoherentAllocation` supports
+// temporary CPU-exclusive access to the object without unsafe methods.
+struct FirmwareObject<F: FalconFirmware, S: SignedState>(KVVec<u8>, PhantomData<(F, S)>);
 
 /// Trait for signatures to be patched directly into a given firmware.
 ///
 /// This is module-local and meant for sub-modules to use internally.
 trait FirmwareSignature<F: FalconFirmware>: AsRef<[u8]> {}
 
-impl<F: FalconFirmware> FirmwareDmaObject<F, Unsigned> {
-    /// Patches the firmware at offset `sig_base_img` with `signature`.
+impl<F: FalconFirmware> FirmwareObject<F, Unsigned> {
+    /// Patches the firmware at offset `signature_start` with `signature`.
     fn patch_signature<S: FirmwareSignature<F>>(
         mut self,
         signature: &S,
-        sig_base_img: usize,
-    ) -> Result<FirmwareDmaObject<F, Signed>> {
+        signature_start: usize,
+    ) -> Result<FirmwareObject<F, Signed>> {
         let signature_bytes = signature.as_ref();
-        if sig_base_img + signature_bytes.len() > self.0.size() {
-            return Err(EINVAL);
-        }
+        let signature_end = signature_start
+            .checked_add(signature_bytes.len())
+            .ok_or(EOVERFLOW)?;
+        let dst = self
+            .0
+            .get_mut(signature_start..signature_end)
+            .ok_or(EINVAL)?;
 
-        // SAFETY: We are the only user of this object, so there cannot be any race.
-        let dst = unsafe { self.0.start_ptr_mut().add(sig_base_img) };
+        // PANIC: `dst` and `signature_bytes` have the same length.
+        dst.copy_from_slice(signature_bytes);
 
-        // SAFETY: `signature` and `dst` are valid, properly aligned, and do not overlap.
-        unsafe {
-            core::ptr::copy_nonoverlapping(signature_bytes.as_ptr(), dst, signature_bytes.len())
-        };
-
-        Ok(FirmwareDmaObject(self.0, PhantomData))
+        Ok(FirmwareObject(self.0, PhantomData))
     }
 
     /// Mark the firmware as signed without patching it.
@@ -335,8 +344,8 @@ impl<F: FalconFirmware> FirmwareDmaObject<F, Unsigned> {
     /// This method is used to explicitly confirm that we do not need to sign the firmware, while
     /// allowing us to continue as if it was. This is typically only needed for development
     /// hardware.
-    fn no_patch_signature(self) -> FirmwareDmaObject<F, Signed> {
-        FirmwareDmaObject(self.0, PhantomData)
+    fn no_patch_signature(self) -> FirmwareObject<F, Signed> {
+        FirmwareObject(self.0, PhantomData)
     }
 }
 
@@ -378,13 +387,7 @@ impl<'a> BinFirmware<'a> {
             // Extract header.
             .and_then(BinHdr::from_bytes_copy)
             // Validate header.
-            .and_then(|hdr| {
-                if hdr.bin_magic == BIN_MAGIC {
-                    Some(hdr)
-                } else {
-                    None
-                }
-            })
+            .filter(|hdr| hdr.bin_magic == BIN_MAGIC)
             .map(|hdr| Self { hdr, fw })
             .ok_or(EINVAL)
     }
@@ -394,8 +397,9 @@ impl<'a> BinFirmware<'a> {
     fn data(&self) -> Option<&[u8]> {
         let fw_start = usize::from_safe_cast(self.hdr.data_offset);
         let fw_size = usize::from_safe_cast(self.hdr.data_size);
+        let fw_end = fw_start.checked_add(fw_size)?;
 
-        self.fw.get(fw_start..fw_start + fw_size)
+        self.fw.get(fw_start..fw_end)
     }
 }
 
@@ -416,24 +420,246 @@ impl<const N: usize> ModInfoBuilder<N> {
         )
     }
 
-    const fn make_entry_chipset(self, chipset: &str) -> Self {
-        self.make_entry_file(chipset, "booter_load")
-            .make_entry_file(chipset, "booter_unload")
-            .make_entry_file(chipset, "bootloader")
-            .make_entry_file(chipset, "gsp")
+    const fn make_entry_chipset(self, chipset: gpu::Chipset) -> Self {
+        let name = chipset.name();
+
+        let this = self
+            .make_entry_file(name, "booter_load")
+            .make_entry_file(name, "booter_unload")
+            .make_entry_file(name, "bootloader")
+            .make_entry_file(name, "gsp");
+
+        let this = if chipset.needs_fwsec_bootloader() {
+            this.make_entry_file(name, "gen_bootloader")
+        } else {
+            this
+        };
+
+        if chipset.uses_fsp() {
+            this.make_entry_file(name, "fmc")
+        } else {
+            this
+        }
     }
 
     pub(crate) const fn create(
-        module_name: &'static kernel::str::CStr,
+        module_name: &'static core::ffi::CStr,
     ) -> firmware::ModInfoBuilder<N> {
         let mut this = Self(firmware::ModInfoBuilder::new(module_name));
         let mut i = 0;
 
         while i < gpu::Chipset::ALL.len() {
-            this = this.make_entry_chipset(gpu::Chipset::ALL[i].name());
+            this = this.make_entry_chipset(gpu::Chipset::ALL[i]);
             i += 1;
         }
 
         this.0
+    }
+}
+
+/// Ad-hoc and temporary module to extract sections from ELF images.
+///
+/// Some firmware images are currently packaged as ELF files, where sections names are used as keys
+/// to specific and related bits of data. Future firmware versions are scheduled to move away from
+/// that scheme before nova-core becomes stable, which means this module will eventually be
+/// removed.
+mod elf {
+    use core::mem::size_of;
+
+    use kernel::{
+        bindings,
+        str::CStr,
+        transmute::FromBytes, //
+    };
+
+    /// Trait to abstract over ELF header differences.
+    trait ElfHeader: FromBytes {
+        fn shnum(&self) -> u16;
+        fn shoff(&self) -> u64;
+        fn shstrndx(&self) -> u16;
+    }
+
+    /// Trait to abstract over ELF section-header differences.
+    trait ElfSectionHeader: FromBytes {
+        fn name(&self) -> u32;
+        fn offset(&self) -> u64;
+        fn size(&self) -> u64;
+    }
+
+    /// Trait describing a matching ELF header and section-header format.
+    trait ElfFormat {
+        type Header: ElfHeader;
+        type SectionHeader: ElfSectionHeader;
+    }
+
+    /// Newtype to provide a [`FromBytes`] implementation.
+    #[repr(transparent)]
+    struct Elf64Hdr(bindings::elf64_hdr);
+    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
+    unsafe impl FromBytes for Elf64Hdr {}
+
+    impl ElfHeader for Elf64Hdr {
+        fn shnum(&self) -> u16 {
+            self.0.e_shnum
+        }
+
+        fn shoff(&self) -> u64 {
+            self.0.e_shoff
+        }
+
+        fn shstrndx(&self) -> u16 {
+            self.0.e_shstrndx
+        }
+    }
+
+    #[repr(transparent)]
+    struct Elf64SHdr(bindings::elf64_shdr);
+    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
+    unsafe impl FromBytes for Elf64SHdr {}
+
+    impl ElfSectionHeader for Elf64SHdr {
+        fn name(&self) -> u32 {
+            self.0.sh_name
+        }
+
+        fn offset(&self) -> u64 {
+            self.0.sh_offset
+        }
+
+        fn size(&self) -> u64 {
+            self.0.sh_size
+        }
+    }
+
+    struct Elf64Format;
+
+    impl ElfFormat for Elf64Format {
+        type Header = Elf64Hdr;
+        type SectionHeader = Elf64SHdr;
+    }
+
+    /// Newtype to provide [`FromBytes`] and [`ElfHeader`] implementations for ELF32.
+    #[repr(transparent)]
+    struct Elf32Hdr(bindings::elf32_hdr);
+    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
+    unsafe impl FromBytes for Elf32Hdr {}
+
+    impl ElfHeader for Elf32Hdr {
+        fn shnum(&self) -> u16 {
+            self.0.e_shnum
+        }
+
+        fn shoff(&self) -> u64 {
+            u64::from(self.0.e_shoff)
+        }
+
+        fn shstrndx(&self) -> u16 {
+            self.0.e_shstrndx
+        }
+    }
+
+    /// Newtype to provide [`FromBytes`] and [`ElfSectionHeader`] implementations for ELF32.
+    #[repr(transparent)]
+    struct Elf32SHdr(bindings::elf32_shdr);
+    // SAFETY: all bit patterns are valid for this type, and it doesn't use interior mutability.
+    unsafe impl FromBytes for Elf32SHdr {}
+
+    impl ElfSectionHeader for Elf32SHdr {
+        fn name(&self) -> u32 {
+            self.0.sh_name
+        }
+
+        fn offset(&self) -> u64 {
+            u64::from(self.0.sh_offset)
+        }
+
+        fn size(&self) -> u64 {
+            u64::from(self.0.sh_size)
+        }
+    }
+
+    struct Elf32Format;
+
+    impl ElfFormat for Elf32Format {
+        type Header = Elf32Hdr;
+        type SectionHeader = Elf32SHdr;
+    }
+
+    /// Returns a NULL-terminated string from the ELF image at `offset`.
+    fn elf_str(elf: &[u8], offset: u64) -> Option<&str> {
+        let idx = usize::try_from(offset).ok()?;
+        let bytes = elf.get(idx..)?;
+        CStr::from_bytes_until_nul(bytes).ok()?.to_str().ok()
+    }
+
+    fn elf_section_generic<'a, F>(elf: &'a [u8], name: &str) -> Option<&'a [u8]>
+    where
+        F: ElfFormat,
+    {
+        let hdr = F::Header::from_bytes(elf.get(0..size_of::<F::Header>())?)?;
+
+        let shdr_num = usize::from(hdr.shnum());
+        let shdr_start = usize::try_from(hdr.shoff()).ok()?;
+        let shdr_end = shdr_num
+            .checked_mul(size_of::<F::SectionHeader>())
+            .and_then(|v| v.checked_add(shdr_start))?;
+
+        // Get all the section headers as an iterator over byte chunks.
+        let shdr_bytes = elf.get(shdr_start..shdr_end)?;
+        let mut shdr_iter = shdr_bytes.chunks_exact(size_of::<F::SectionHeader>());
+
+        // Get the strings table.
+        let strhdr = shdr_iter
+            .clone()
+            .nth(usize::from(hdr.shstrndx()))
+            .and_then(F::SectionHeader::from_bytes)?;
+
+        // Find the section which name matches `name` and return it.
+        shdr_iter.find_map(|sh_bytes| {
+            let sh = F::SectionHeader::from_bytes(sh_bytes)?;
+            let name_offset = strhdr.offset().checked_add(u64::from(sh.name()))?;
+            let section_name = elf_str(elf, name_offset)?;
+
+            if section_name != name {
+                return None;
+            }
+
+            let start = usize::try_from(sh.offset()).ok()?;
+            let end = usize::try_from(sh.size())
+                .ok()
+                .and_then(|sz| start.checked_add(sz))?;
+
+            elf.get(start..end)
+        })
+    }
+
+    /// Extract the section with name `name` from the ELF64 image `elf`.
+    fn elf64_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
+        elf_section_generic::<Elf64Format>(elf, name)
+    }
+
+    /// Extract the section with name `name` from the ELF32 image `elf`.
+    fn elf32_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
+        elf_section_generic::<Elf32Format>(elf, name)
+    }
+
+    /// Automatically detects ELF32 vs ELF64 based on the ELF header.
+    pub(super) fn elf_section<'a>(elf: &'a [u8], name: &str) -> Option<&'a [u8]> {
+        // ELF identification: a 4-byte magic followed by a class byte (32- vs 64-bit).
+        const ELFMAG: &[u8] = b"\x7fELF";
+        const SELFMAG: usize = ELFMAG.len();
+        const EI_CLASS: usize = 4;
+        const ELFCLASS32: u8 = 1;
+        const ELFCLASS64: u8 = 2;
+
+        if elf.get(0..SELFMAG) != Some(ELFMAG) {
+            return None;
+        }
+
+        match *elf.get(EI_CLASS)? {
+            ELFCLASS32 => elf32_section(elf, name),
+            ELFCLASS64 => elf64_section(elf, name),
+            _ => None,
+        }
     }
 }

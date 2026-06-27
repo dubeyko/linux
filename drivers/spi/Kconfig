@@ -138,7 +138,7 @@ config SPI_AR934X
 
 config SPI_ATCSPI200
 	tristate "Andes ATCSPI200 SPI controller"
-	depends on ARCH_ANDES
+	depends on ARCH_ANDES || COMPILE_TEST
 	help
 	  SPI driver for Andes ATCSPI200 SPI controller.
 	  ATCSPI200 controller supports DMA and PIO modes. When DMA
@@ -866,7 +866,7 @@ config SPI_PIC32_SQI
 
 config SPI_PL022
 	tristate "ARM AMBA PL022 SSP controller"
-	depends on ARM_AMBA
+	depends on ARM_AMBA || COMPILE_TEST
 	default y if ARCH_REALVIEW
 	default y if INTEGRATOR_IMPD1
 	default y if ARCH_VERSATILE
@@ -1084,6 +1084,15 @@ config SPI_SG2044_NOR
 	  which supports Dual/Quad read and write operations while
 	  also supporting 3Byte address devices and 4Byte address
 	  devices.
+
+config SPI_SPACEMIT_K1
+	tristate "K1 SPI Controller"
+	depends on ARCH_SPACEMIT || COMPILE_TEST
+	depends on OF
+	imply MMP_PDMA if ARCH_SPACEMIT
+	default m if ARCH_SPACEMIT
+	help
+	  Enable support for the SpacemiT K1 SPI controller.
 
 config SPI_SPRD
 	tristate "Spreadtrum SPI controller"

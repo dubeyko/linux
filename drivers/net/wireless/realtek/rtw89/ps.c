@@ -226,13 +226,21 @@ void rtw89_leave_lps(struct rtw89_dev *rtwdev)
 	rtw89_for_each_rtwvif(rtwdev, rtwvif)
 		rtw89_vif_for_each_link(rtwvif, rtwvif_link, link_id)
 			rtw89_leave_lps_vif(rtwdev, rtwvif_link);
+
+	rtw89_fw_h2c_init_trx_protect(rtwdev);
 }
 
 void rtw89_enter_ips(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_vif_link *rtwvif_link;
 	struct rtw89_vif *rtwvif;
+	struct rtw89_hal *hal = &rtwdev->hal;
 	unsigned int link_id;
+
+	if (hal->disabled_dm_bitmap & BIT(RTW89_DM_INACTIVE_PS)) {
+		rtw89_debug(rtwdev, RTW89_DBG_PS, "skip enter IPS due to disabled_dm\n");
+		return;
+	}
 
 	set_bit(RTW89_FLAG_INACTIVE_PS, rtwdev->flags);
 

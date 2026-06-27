@@ -2,7 +2,7 @@
 /*
  * MLO link handling
  *
- * Copyright (C) 2022-2025 Intel Corporation
+ * Copyright (C) 2022-2026 Intel Corporation
  */
 #include <linux/slab.h>
 #include <linux/kernel.h>
@@ -14,26 +14,38 @@
 
 static void ieee80211_update_apvlan_links(struct ieee80211_sub_if_data *sdata)
 {
+	unsigned long rem = ~sdata->vif.valid_links &
+				    GENMASK(IEEE80211_MLD_MAX_NUM_LINKS - 1, 0);
+	struct ieee80211_local *local = sdata->local;
+	unsigned long add = sdata->vif.valid_links;
+	struct wiphy *wiphy = local->hw.wiphy;
 	struct ieee80211_sub_if_data *vlan;
 	struct ieee80211_link_data *link;
-	u16 ap_bss_links = sdata->vif.valid_links;
-	u16 new_links, vlan_links;
-	unsigned long add;
+	struct sta_info *sta;
 
 	list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list) {
 		int link_id;
 
-		/* No support for 4addr with MLO yet */
-		if (vlan->wdev.use_4addr)
-			return;
+		if (vlan->wdev.use_4addr) {
+			sta = wiphy_dereference(wiphy,
+						vlan->u.vlan.sta);
+			if (sta)
+				add = add & sta->sta.valid_links;
+		}
 
-		vlan_links = vlan->vif.valid_links;
-
-		new_links = ap_bss_links;
-
-		add = new_links & ~vlan_links;
-		if (!add)
+		if (add == vlan->vif.valid_links)
 			continue;
+
+		for_each_set_bit(link_id, &add, IEEE80211_MLD_MAX_NUM_LINKS) {
+			vlan->wdev.valid_links |= BIT(link_id);
+			ether_addr_copy(vlan->wdev.links[link_id].addr,
+					sdata->wdev.links[link_id].addr);
+		}
+
+		for_each_set_bit(link_id, &rem, IEEE80211_MLD_MAX_NUM_LINKS) {
+			vlan->wdev.valid_links &= ~BIT(link_id);
+			eth_zero_addr(vlan->wdev.links[link_id].addr);
+		}
 
 		ieee80211_vif_set_links(vlan, add, 0);
 
@@ -96,8 +108,13 @@ void ieee80211_link_init(struct ieee80211_sub_if_data *sdata,
 
 		ap_bss = container_of(sdata->bss,
 				      struct ieee80211_sub_if_data, u.ap);
-		ap_bss_conf = sdata_dereference(ap_bss->vif.link_conf[link_id],
-						ap_bss);
+
+		if (deflink)
+			ap_bss_conf = &ap_bss->vif.bss_conf;
+		else
+			ap_bss_conf = sdata_dereference(ap_bss->vif.link_conf[link_id],
+							ap_bss);
+
 		memcpy(link_conf, ap_bss_conf, sizeof(*link_conf));
 	}
 
@@ -275,6 +292,7 @@ static int ieee80211_vif_update_links(struct ieee80211_sub_if_data *sdata,
 	u16 old_active = sdata->vif.active_links;
 	unsigned long add = new_links & ~old_links;
 	unsigned long rem = old_links & ~new_links;
+	unsigned long sta_rem = rem;
 	unsigned int link_id;
 	int ret;
 	struct link_container *links[IEEE80211_MLD_MAX_NUM_LINKS] = {}, *link;
@@ -282,6 +300,7 @@ static int ieee80211_vif_update_links(struct ieee80211_sub_if_data *sdata,
 	struct ieee80211_link_data *old_data[IEEE80211_MLD_MAX_NUM_LINKS];
 	bool use_deflink = old_links == 0; /* set for error case */
 	bool non_sta = sdata->vif.type != NL80211_IFTYPE_STATION;
+	struct sta_info *sta;
 
 	lockdep_assert_wiphy(sdata->local->hw.wiphy);
 
@@ -289,6 +308,9 @@ static int ieee80211_vif_update_links(struct ieee80211_sub_if_data *sdata,
 
 	if (old_links == new_links && dormant_links == sdata->vif.dormant_links)
 		return 0;
+
+	if (!old_links || !new_links)
+		WARN_ON(sta_info_flush(sdata, -1) > 0);
 
 	/* if there were no old links, need to clear the pointers to deflink */
 	if (!old_links)
@@ -381,6 +403,34 @@ static int ieee80211_vif_update_links(struct ieee80211_sub_if_data *sdata,
 		memset(to_free, 0, sizeof(links));
 		goto free;
 	}
+
+	/* try to remove links that are now invalid from (MLO) stations */
+	list_for_each_entry(sta, &sdata->local->sta_list, list) {
+		unsigned long rem_links = sta->sta.valid_links & sta_rem;
+
+		if (sta->sdata != sdata)
+			continue;
+
+		/*
+		 * skip stations that would have no links left,
+		 * those will be removed completely later
+		 */
+		if (sta->sta.valid_links == rem_links)
+			continue;
+
+		for_each_set_bit(link_id, &rem_links,
+				 IEEE80211_MLD_MAX_NUM_LINKS)
+			ieee80211_sta_remove_link(sta, link_id);
+	}
+
+	/*
+	 * Remove stations using any removed links. Note that due
+	 * to the above station link removal, this only removes
+	 * stations that were skipped above because they'd have no
+	 * links left after link removal.
+	 */
+	for_each_set_bit(link_id, &sta_rem, IEEE80211_MLD_MAX_NUM_LINKS)
+		sta_info_flush(sdata, link_id);
 
 	/* use deflink/bss_conf again if and only if there are no more links */
 	use_deflink = new_links == 0;

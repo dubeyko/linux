@@ -383,11 +383,6 @@ DSA data structures are defined in ``include/net/dsa.h`` as well as
   well as various properties of its ports: names/labels, and finally a routing
   table indication (when cascading switches)
 
-- ``dsa_platform_data``: platform device configuration data which can reference
-  a collection of dsa_chip_data structures if multiple switches are cascaded,
-  the conduit network device this switch tree is attached to needs to be
-  referenced
-
 - ``dsa_switch_tree``: structure assigned to the conduit network device under
   ``dsa_ptr``, this structure references a dsa_platform_data structure as well as
   the tagging protocol supported by the switch tree, and which receive/transmit
@@ -514,7 +509,7 @@ Device Tree
 -----------
 
 DSA features a standardized binding which is documented in
-``Documentation/devicetree/bindings/net/dsa/dsa.txt``. PHY/MDIO library helper
+``Documentation/devicetree/bindings/net/dsa/dsa.yaml``. PHY/MDIO library helper
 functions such as ``of_get_phy_mode()``, ``of_phy_connect()`` are also used to query
 per-port PHY specific details: interface connection, MDIO bus location, etc.
 

@@ -8,6 +8,7 @@ powervr-y := \
 	pvr_device.o \
 	pvr_device_info.o \
 	pvr_drv.o \
+	pvr_dump.o \
 	pvr_free_list.o \
 	pvr_fw.o \
 	pvr_fw_meta.o \
@@ -30,6 +31,9 @@ powervr-y := \
 
 powervr-$(CONFIG_DEBUG_FS) += \
 	pvr_debugfs.o
+
+powervr-$(CONFIG_TRACEPOINTS) += \
+	pvr_trace_points.o
 
 obj-$(CONFIG_DRM_POWERVR) += powervr.o
 

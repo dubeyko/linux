@@ -530,7 +530,7 @@ static int img_spfi_probe(struct platform_device *pdev)
 	int ret;
 	u32 max_speed_hz;
 
-	host = spi_alloc_host(&pdev->dev, sizeof(*spfi));
+	host = devm_spi_alloc_host(&pdev->dev, sizeof(*spfi));
 	if (!host)
 		return -ENOMEM;
 	platform_set_drvdata(pdev, host);
@@ -541,36 +541,32 @@ static int img_spfi_probe(struct platform_device *pdev)
 	spin_lock_init(&spfi->lock);
 
 	spfi->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
-	if (IS_ERR(spfi->regs)) {
-		ret = PTR_ERR(spfi->regs);
-		goto put_spi;
-	}
+	if (IS_ERR(spfi->regs))
+		return PTR_ERR(spfi->regs);
+
 	spfi->phys = res->start;
 
 	spfi->irq = platform_get_irq(pdev, 0);
-	if (spfi->irq < 0) {
-		ret = spfi->irq;
-		goto put_spi;
-	}
+	if (spfi->irq < 0)
+		return spfi->irq;
+
 	ret = devm_request_irq(spfi->dev, spfi->irq, img_spfi_irq,
 			       IRQ_TYPE_LEVEL_HIGH, dev_name(spfi->dev), spfi);
 	if (ret)
-		goto put_spi;
+		return ret;
 
 	spfi->sys_clk = devm_clk_get(spfi->dev, "sys");
-	if (IS_ERR(spfi->sys_clk)) {
-		ret = PTR_ERR(spfi->sys_clk);
-		goto put_spi;
-	}
+	if (IS_ERR(spfi->sys_clk))
+		return PTR_ERR(spfi->sys_clk);
+
 	spfi->spfi_clk = devm_clk_get(spfi->dev, "spfi");
-	if (IS_ERR(spfi->spfi_clk)) {
-		ret = PTR_ERR(spfi->spfi_clk);
-		goto put_spi;
-	}
+	if (IS_ERR(spfi->spfi_clk))
+		return PTR_ERR(spfi->spfi_clk);
 
 	ret = clk_prepare_enable(spfi->sys_clk);
 	if (ret)
-		goto put_spi;
+		return ret;
+
 	ret = clk_prepare_enable(spfi->spfi_clk);
 	if (ret)
 		goto disable_pclk;
@@ -643,7 +639,7 @@ static int img_spfi_probe(struct platform_device *pdev)
 	pm_runtime_set_active(spfi->dev);
 	pm_runtime_enable(spfi->dev);
 
-	ret = devm_spi_register_controller(spfi->dev, host);
+	ret = spi_register_controller(host);
 	if (ret)
 		goto disable_pm;
 
@@ -658,8 +654,6 @@ disable_pm:
 	clk_disable_unprepare(spfi->spfi_clk);
 disable_pclk:
 	clk_disable_unprepare(spfi->sys_clk);
-put_spi:
-	spi_controller_put(host);
 
 	return ret;
 }
@@ -668,6 +662,8 @@ static void img_spfi_remove(struct platform_device *pdev)
 {
 	struct spi_controller *host = platform_get_drvdata(pdev);
 	struct img_spfi *spfi = spi_controller_get_devdata(host);
+
+	spi_unregister_controller(host);
 
 	if (spfi->tx_ch)
 		dma_release_channel(spfi->tx_ch);

@@ -70,6 +70,7 @@
 #include <asm/tdx.h>
 #include <asm/cfi.h>
 #include <asm/msr.h>
+#include <asm/vsyscall.h>
 
 #ifdef CONFIG_X86_64
 #include <asm/x86_init.h>
@@ -921,11 +922,6 @@ DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)
 
 	cond_local_irq_enable(regs);
 
-	if (static_cpu_has(X86_FEATURE_UMIP)) {
-		if (user_mode(regs) && fixup_umip_exception(regs))
-			goto exit;
-	}
-
 	if (v8086_mode(regs)) {
 		local_irq_enable();
 		handle_vm86_fault((struct kernel_vm86_regs *) regs, error_code);
@@ -938,6 +934,12 @@ DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)
 			goto exit;
 
 		if (fixup_vdso_exception(regs, X86_TRAP_GP, error_code, 0))
+			goto exit;
+
+		if (fixup_umip_exception(regs))
+			goto exit;
+
+		if (emulate_vsyscall_gp(regs))
 			goto exit;
 
 		gp_user_force_sig_segv(regs, X86_TRAP_GP, error_code, desc);
@@ -1473,13 +1475,6 @@ DEFINE_IDTENTRY(exc_coprocessor_error)
 
 DEFINE_IDTENTRY(exc_simd_coprocessor_error)
 {
-	if (IS_ENABLED(CONFIG_X86_INVD_BUG)) {
-		/* AMD 486 bug: INVD in CPL 0 raises #XF instead of #GP */
-		if (!static_cpu_has(X86_FEATURE_XMM)) {
-			__exc_general_protection(regs, 0);
-			return;
-		}
-	}
 	math_error(regs, X86_TRAP_XF);
 }
 
@@ -1547,20 +1542,6 @@ DEFINE_IDTENTRY(exc_device_not_available)
 
 	if (handle_xfd_event(regs))
 		return;
-
-#ifdef CONFIG_MATH_EMULATION
-	if (!boot_cpu_has(X86_FEATURE_FPU) && (cr0 & X86_CR0_EM)) {
-		struct math_emu_info info = { };
-
-		cond_local_irq_enable(regs);
-
-		info.regs = regs;
-		math_emulate(&info);
-
-		cond_local_irq_disable(regs);
-		return;
-	}
-#endif
 
 	/* This should not happen. */
 	if (WARN(cr0 & X86_CR0_TS, "CR0.TS was set")) {

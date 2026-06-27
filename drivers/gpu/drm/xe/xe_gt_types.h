@@ -35,7 +35,7 @@ enum xe_gt_eu_type {
 	XE_GT_EU_TYPE_SIMD16,
 };
 
-#define XE_MAX_DSS_FUSE_REGS		3
+#define XE_MAX_DSS_FUSE_REGS		4
 #define XE_MAX_DSS_FUSE_BITS		(32 * XE_MAX_DSS_FUSE_REGS)
 #define XE_MAX_EU_FUSE_REGS		1
 #define XE_MAX_EU_FUSE_BITS		(32 * XE_MAX_EU_FUSE_REGS)
@@ -44,11 +44,6 @@ enum xe_gt_eu_type {
 typedef unsigned long xe_dss_mask_t[BITS_TO_LONGS(XE_MAX_DSS_FUSE_BITS)];
 typedef unsigned long xe_eu_mask_t[BITS_TO_LONGS(XE_MAX_EU_FUSE_BITS)];
 typedef unsigned long xe_l3_bank_mask_t[BITS_TO_LONGS(XE_MAX_L3_BANK_MASK_BITS)];
-
-struct xe_mmio_range {
-	u32 start;
-	u32 end;
-};
 
 /*
  * The hardware has multiple kinds of multicast register ranges that need
@@ -141,7 +136,7 @@ struct xe_gt {
 		/** @info.gmdid: raw GMD_ID value from hardware */
 		u32 gmdid;
 		/**
-		 * @multi_queue_engine_class_mask: Bitmask of engine classes with
+		 * @info.multi_queue_engine_class_mask: Bitmask of engine classes with
 		 * multi queue support enabled.
 		 */
 		u16 multi_queue_engine_class_mask;
@@ -149,14 +144,28 @@ struct xe_gt {
 		u8 id;
 		/** @info.has_indirect_ring_state: GT has indirect ring state support */
 		u8 has_indirect_ring_state:1;
+		/**
+		 * @info.has_xe2_blt_instructions: GT supports Xe2-style MEM_SET
+		 * and MEM_COPY blitter functionality.  Note that despite the
+		 * name, some Xe1 platforms may also support this "Xe2-style"
+		 * feature.
+		 */
+		u8 has_xe2_blt_instructions:1;
+		/**
+		 * @info.num_geometry_xecore_fuse_regs: Number of 32b-bit fuse
+		 * registers the geometry XeCore mask spans.
+		 */
+		u8 num_geometry_xecore_fuse_regs;
+		/**
+		 * @info.num_compute_xecore_fuse_regs: Number of 32b-bit fuse
+		 * registers the compute XeCore mask spans.
+		 */
+		u8 num_compute_xecore_fuse_regs;
 	} info;
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	/** @stats: GT stats */
-	struct {
-		/** @stats.counters: counters for various GT stats */
-		atomic64_t counters[__XE_GT_STATS_NUM_IDS];
-	} stats;
+	struct xe_gt_stats __percpu *stats;
 #endif
 
 	/**
@@ -353,7 +362,7 @@ struct xe_gt {
 	/** @user_engines: engines present in GT and available to userspace */
 	struct {
 		/**
-		 * @user_engines.mask: like @info->engine_mask, but take in
+		 * @user_engines.mask: like @info.engine_mask, but take in
 		 * consideration only engines available to userspace
 		 */
 		u64 mask;

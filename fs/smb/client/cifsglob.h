@@ -23,7 +23,6 @@
 #include <linux/fcntl.h>
 #include "cifs_fs_sb.h"
 #include "cifsacl.h"
-#include <crypto/internal/hash.h>
 #include <uapi/linux/cifs/cifs_mount.h>
 #include "../common/smbglob.h"
 #include "../common/smb2pdu.h"
@@ -221,10 +220,8 @@ struct session_key {
 	char *response;
 };
 
-/* crypto hashing related structure/fields, not specific to a sec mech */
+/* encryption related structure/fields, not specific to a sec mech */
 struct cifs_secmech {
-	struct shash_desc *aes_cmac; /* block-cipher based MAC function, for SMB3 signatures */
-
 	struct crypto_aead *enc; /* smb3 encryption AEAD TFM (AES-CCM and AES-GCM) */
 	struct crypto_aead *dec; /* smb3 decryption AEAD TFM (AES-CCM and AES-GCM) */
 };
@@ -428,7 +425,7 @@ struct smb_version_operations {
 	int (*set_file_info)(struct inode *, const char *, FILE_BASIC_INFO *,
 			     const unsigned int);
 	int (*set_compression)(const unsigned int, struct cifs_tcon *,
-			       struct cifsFileInfo *);
+			       struct cifsFileInfo *, __u16);
 	/* check if we can send an echo or nor */
 	bool (*can_echo)(struct TCP_Server_Info *);
 	/* send echo request */
@@ -792,6 +789,8 @@ struct TCP_Server_Info {
 	struct {
 		bool requested; /* "compress" mount option set*/
 		bool enabled; /* actually negotiated with server */
+		bool chained; /* chained transforms were negotiated */
+		bool pattern; /* Pattern_V1 chained payloads were negotiated */
 		__le16 alg; /* preferred alg negotiated with server */
 	} compression;
 	__u16	signing_algorithm;
@@ -1394,6 +1393,7 @@ struct cifs_search_info {
 	bool emptyDir:1;
 	bool unicode:1;
 	bool smallBuf:1; /* so we know which buf_release function to call */
+	bool is_dynamic_buf:1; /* dynamically allocated buffer - can be variable size */
 };
 
 #define ACL_NO_MODE	((umode_t)(-1))
@@ -1534,9 +1534,16 @@ int cifs_file_set_size(const unsigned int xid, struct dentry *dentry,
 #define CIFS_CACHE_RW_FLG	(CIFS_CACHE_READ_FLG | CIFS_CACHE_WRITE_FLG)
 #define CIFS_CACHE_RHW_FLG	(CIFS_CACHE_RW_FLG | CIFS_CACHE_HANDLE_FLG)
 
-/*
- * One of these for each file inode
- */
+enum cifs_inode_flags {
+	CIFS_INODE_PENDING_OPLOCK_BREAK,	/* oplock break in progress */
+	CIFS_INODE_PENDING_WRITERS,		/* Writes in progress */
+	CIFS_INODE_FLAG_UNUSED,			/* Unused flag */
+	CIFS_INO_DELETE_PENDING,		/* delete pending on server */
+	CIFS_INO_INVALID_MAPPING,		/* pagecache is invalid */
+	CIFS_INO_LOCK,				/* lock bit for synchronization */
+	CIFS_INO_TMPFILE,			/* for O_TMPFILE inodes */
+	CIFS_INO_CLOSE_ON_LOCK,			/* Not to defer the close when lock is set */
+};
 
 struct cifsInodeInfo {
 	struct netfs_inode netfs; /* Netfslib context and vfs inode */
@@ -1554,13 +1561,6 @@ struct cifsInodeInfo {
 	__u32 cifsAttrs; /* e.g. DOS archive bit, sparse, compressed, system */
 	unsigned int oplock;		/* oplock/lease level we have */
 	__u16 epoch;		/* used to track lease state changes */
-#define CIFS_INODE_PENDING_OPLOCK_BREAK   (0) /* oplock break in progress */
-#define CIFS_INODE_PENDING_WRITERS	  (1) /* Writes in progress */
-#define CIFS_INODE_FLAG_UNUSED		  (2) /* Unused flag */
-#define CIFS_INO_DELETE_PENDING		  (3) /* delete pending on server */
-#define CIFS_INO_INVALID_MAPPING	  (4) /* pagecache is invalid */
-#define CIFS_INO_LOCK			  (5) /* lock bit for synchronization */
-#define CIFS_INO_CLOSE_ON_LOCK            (7) /* Not to defer the close when lock is set */
 	unsigned long flags;
 	spinlock_t writers_lock;
 	unsigned int writers;		/* Number of writers on this inode */
@@ -1907,6 +1907,7 @@ enum cifs_find_flags {
 #define   CIFS_NO_BUFFER        0    /* Response buffer not returned */
 #define   CIFS_SMALL_BUFFER     1
 #define   CIFS_LARGE_BUFFER     2
+#define   CIFS_DYNAMIC_BUFFER   3    /* Dynamically allocated buffer */
 #define   CIFS_IOVEC            4    /* array of response buffers */
 
 /* Type of Request to SendReceive2 */
@@ -2259,6 +2260,7 @@ struct smb2_compound_vars {
 	struct kvec qi_iov;
 	struct kvec io_iov[SMB2_IOCTL_IOV_SIZE];
 	struct kvec si_iov[SMB2_SET_INFO_IOV_SIZE];
+	struct kvec hl_iov[SMB2_SET_INFO_IOV_SIZE];
 	struct kvec unlink_iov[SMB2_SET_INFO_IOV_SIZE];
 	struct kvec rename_iov[SMB2_SET_INFO_IOV_SIZE];
 	struct kvec close_iov;
@@ -2323,7 +2325,7 @@ static inline void mid_execute_callback(struct TCP_Server_Info *server,
 struct cifs_calc_sig_ctx {
 	struct md5_ctx *md5;
 	struct hmac_sha256_ctx *hmac;
-	struct shash_desc *shash;
+	struct aes_cmac_ctx *cmac;
 };
 
 #define CIFS_RECONN_DELAY_SECS	30
@@ -2383,13 +2385,18 @@ static inline int cifs_open_create_options(unsigned int oflags, int opts)
 		opts |= CREATE_WRITE_THROUGH;
 	if (oflags & O_DIRECT)
 		opts |= CREATE_NO_BUFFER;
+	if (oflags & O_TMPFILE)
+		opts |= CREATE_DELETE_ON_CLOSE;
 	return opts;
 }
 
 /*
- * The number of blocks is not related to (i_size / i_blksize), but instead
- * 512 byte (2**9) size is required for calculating num blocks.
+ * inode->i_blocks is counted in 512-byte units, independent of
+ * inode->i_blksize.
  */
-#define CIFS_INO_BLOCKS(size) DIV_ROUND_UP_ULL((u64)(size), 512)
+#define CIFS_INO_BLOCK_SIZE 512ULL
+#define CIFS_INO_BLOCKS(size) \
+	DIV_ROUND_UP_ULL((u64)(size), CIFS_INO_BLOCK_SIZE)
+#define CIFS_INO_BYTES(blocks) ((u64)(blocks) * CIFS_INO_BLOCK_SIZE)
 
 #endif	/* _CIFS_GLOB_H */

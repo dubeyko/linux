@@ -9,6 +9,7 @@
 #include <linux/align.h>
 #include <linux/bitfield.h>
 #include <linux/of.h>
+#include <linux/overflow.h>
 #include <linux/platform_device.h>
 
 #include "pcie-designware.h"
@@ -584,9 +585,9 @@ static int dw_pcie_ep_set_bar(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
 
 config_atu:
 	if (!(flags & PCI_BASE_ADDRESS_SPACE))
-		type = PCIE_ATU_TYPE_MEM;
+		type = PCIE_TLP_TYPE_MEM_RDWR;
 	else
-		type = PCIE_ATU_TYPE_IO;
+		type = PCIE_TLP_TYPE_IO_RDWR;
 
 	if (epf_bar->num_submap)
 		ret = dw_pcie_ep_ib_atu_addr(ep, func_no, type, epf_bar);
@@ -659,7 +660,7 @@ static int dw_pcie_ep_map_addr(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
 	struct dw_pcie_ob_atu_cfg atu = { 0 };
 
 	atu.func_no = func_no;
-	atu.type = PCIE_ATU_TYPE_MEM;
+	atu.type = PCIE_TLP_TYPE_MEM_RDWR;
 	atu.parent_bus_addr = addr - pci->parent_bus_offset;
 	atu.pci_addr = pci_addr;
 	atu.size = size;
@@ -707,8 +708,7 @@ static int dw_pcie_ep_set_msi(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
 
 	reg = ep_func->msi_cap + PCI_MSI_FLAGS;
 	val = dw_pcie_ep_readw_dbi(ep, func_no, reg);
-	val &= ~PCI_MSI_FLAGS_QMASK;
-	val |= FIELD_PREP(PCI_MSI_FLAGS_QMASK, mmc);
+	FIELD_MODIFY(PCI_MSI_FLAGS_QMASK, &val, mmc);
 	dw_pcie_dbi_ro_wr_en(pci);
 	dw_pcie_ep_writew_dbi(ep, func_no, reg, val);
 	dw_pcie_dbi_ro_wr_dis(pci);
@@ -754,7 +754,7 @@ static int dw_pcie_ep_set_msix(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
 	val = dw_pcie_ep_readw_dbi(ep, func_no, reg);
 	val &= ~PCI_MSIX_FLAGS_QSIZE;
 	val |= nr_irqs - 1; /* encoded as N-1 */
-	dw_pcie_writew_dbi(pci, reg, val);
+	dw_pcie_ep_writew_dbi(ep, func_no, reg, val);
 
 	reg = ep_func->msix_cap + PCI_MSIX_TABLE;
 	val = offset | bir;
@@ -817,6 +817,122 @@ dw_pcie_ep_get_features(struct pci_epc *epc, u8 func_no, u8 vfunc_no)
 	return ep->ops->get_features(ep);
 }
 
+static const struct pci_epc_bar_rsvd_region *
+dw_pcie_ep_find_bar_rsvd_region(struct dw_pcie_ep *ep,
+				enum pci_epc_bar_rsvd_region_type type,
+				enum pci_barno *bar,
+				resource_size_t *bar_offset)
+{
+	const struct pci_epc_features *features;
+	const struct pci_epc_bar_desc *bar_desc;
+	const struct pci_epc_bar_rsvd_region *r;
+	int i, j;
+
+	if (!ep->ops->get_features)
+		return NULL;
+
+	features = ep->ops->get_features(ep);
+	if (!features)
+		return NULL;
+
+	for (i = BAR_0; i <= BAR_5; i++) {
+		bar_desc = &features->bar[i];
+
+		if (!bar_desc->nr_rsvd_regions || !bar_desc->rsvd_regions)
+			continue;
+
+		for (j = 0; j < bar_desc->nr_rsvd_regions; j++) {
+			r = &bar_desc->rsvd_regions[j];
+
+			if (r->type != type)
+				continue;
+
+			if (bar)
+				*bar = i;
+			if (bar_offset)
+				*bar_offset = r->offset;
+			return r;
+		}
+	}
+
+	return NULL;
+}
+
+static int
+dw_pcie_ep_get_aux_resources_count(struct pci_epc *epc, u8 func_no,
+				   u8 vfunc_no)
+{
+	struct dw_pcie_ep *ep = epc_get_drvdata(epc);
+	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
+	struct dw_edma_chip *edma = &pci->edma;
+
+	if (!pci->edma_reg_size)
+		return 0;
+
+	if (edma->db_offset == ~0)
+		return 0;
+
+	return 1;
+}
+
+static int
+dw_pcie_ep_get_aux_resources(struct pci_epc *epc, u8 func_no, u8 vfunc_no,
+			     struct pci_epc_aux_resource *resources,
+			     int num_resources)
+{
+	struct dw_pcie_ep *ep = epc_get_drvdata(epc);
+	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
+	const struct pci_epc_bar_rsvd_region *rsvd;
+	struct dw_edma_chip *edma = &pci->edma;
+	enum pci_barno dma_ctrl_bar = NO_BAR;
+	resource_size_t db_offset = edma->db_offset;
+	resource_size_t dma_ctrl_bar_offset = 0;
+	resource_size_t dma_reg_size;
+	int count;
+
+	count = dw_pcie_ep_get_aux_resources_count(epc, func_no, vfunc_no);
+	if (count < 0)
+		return count;
+
+	if (num_resources < count)
+		return -ENOSPC;
+
+	if (!count)
+		return 0;
+
+	dma_reg_size = pci->edma_reg_size;
+
+	rsvd = dw_pcie_ep_find_bar_rsvd_region(ep,
+					       PCI_EPC_BAR_RSVD_DMA_CTRL_MMIO,
+					       &dma_ctrl_bar,
+					       &dma_ctrl_bar_offset);
+	if (rsvd && rsvd->size < dma_reg_size)
+		dma_reg_size = rsvd->size;
+
+	/*
+	 * For interrupt-emulation doorbells, report a standalone resource
+	 * instead of bundling it into the DMA controller MMIO resource.
+	 */
+	if (range_end_overflows_t(resource_size_t, db_offset,
+				  sizeof(u32), dma_reg_size))
+		return -EINVAL;
+
+	resources[0] = (struct pci_epc_aux_resource) {
+		.type = PCI_EPC_AUX_DOORBELL_MMIO,
+		.phys_addr = pci->edma_reg_phys + db_offset,
+		.size = sizeof(u32),
+		.bar = dma_ctrl_bar,
+		.bar_offset = dma_ctrl_bar != NO_BAR ?
+				dma_ctrl_bar_offset + db_offset : 0,
+		.u.db_mmio = {
+			.irq = edma->db_irq,
+			.data = 0, /* write 0 to assert */
+		},
+	};
+
+	return 0;
+}
+
 static const struct pci_epc_ops epc_ops = {
 	.write_header		= dw_pcie_ep_write_header,
 	.set_bar		= dw_pcie_ep_set_bar,
@@ -832,6 +948,8 @@ static const struct pci_epc_ops epc_ops = {
 	.start			= dw_pcie_ep_start,
 	.stop			= dw_pcie_ep_stop,
 	.get_features		= dw_pcie_ep_get_features,
+	.get_aux_resources_count	= dw_pcie_ep_get_aux_resources_count,
+	.get_aux_resources	= dw_pcie_ep_get_aux_resources,
 };
 
 /**
@@ -1110,7 +1228,8 @@ static void dw_pcie_ep_init_non_sticky_registers(struct dw_pcie *pci)
 {
 	struct dw_pcie_ep *ep = &pci->ep;
 	u8 funcs = ep->epc->max_functions;
-	u8 func_no;
+	u32 func0_lnkcap, lnkcap;
+	u8 func_no, offset;
 
 	dw_pcie_dbi_ro_wr_en(pci);
 
@@ -1118,7 +1237,55 @@ static void dw_pcie_ep_init_non_sticky_registers(struct dw_pcie *pci)
 		dw_pcie_ep_init_rebar_registers(ep, func_no);
 
 	dw_pcie_setup(pci);
+
+	/*
+	 * PCIe r7.0, section 7.5.3.6 states that for multi-function
+	 * endpoints, max link width and speed fields must report same
+	 * values for all functions. However, dw_pcie_setup() programs
+	 * these fields only for function 0. Hence, mirror these fields
+	 * to all other functions as well.
+	 */
+	if (funcs > 1) {
+		offset = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
+		func0_lnkcap = dw_pcie_readl_dbi(pci, offset + PCI_EXP_LNKCAP);
+		func0_lnkcap = FIELD_GET(PCI_EXP_LNKCAP_MLW |
+					 PCI_EXP_LNKCAP_SLS, func0_lnkcap);
+
+		for (func_no = 1; func_no < funcs; func_no++) {
+			offset = dw_pcie_ep_find_capability(ep, func_no,
+							    PCI_CAP_ID_EXP);
+			lnkcap = dw_pcie_ep_readl_dbi(ep, func_no,
+						      offset + PCI_EXP_LNKCAP);
+			FIELD_MODIFY(PCI_EXP_LNKCAP_MLW | PCI_EXP_LNKCAP_SLS,
+				     &lnkcap, func0_lnkcap);
+			dw_pcie_ep_writel_dbi(ep, func_no,
+					      offset + PCI_EXP_LNKCAP, lnkcap);
+		}
+	}
+
 	dw_pcie_dbi_ro_wr_dis(pci);
+}
+
+static void dw_pcie_ep_disable_bars(struct dw_pcie_ep *ep)
+{
+	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
+	enum pci_epc_bar_type bar_type;
+	enum pci_barno bar;
+
+	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
+		bar_type = dw_pcie_ep_get_bar_type(ep, bar);
+
+		/*
+		 * Reserved BARs should not get disabled by default. All other
+		 * BAR types are disabled by default.
+		 *
+		 * This is in line with the current EPC core design, where all
+		 * BARs are disabled by default, and then the EPF driver enables
+		 * the BARs it wishes to use.
+		 */
+		if (bar_type != BAR_RESERVED)
+			dw_pcie_ep_reset_bar(pci, bar);
+	}
 }
 
 /**
@@ -1202,6 +1369,8 @@ int dw_pcie_ep_init_registers(struct dw_pcie_ep *ep)
 
 	if (ep->ops->init)
 		ep->ops->init(ep);
+
+	dw_pcie_ep_disable_bars(ep);
 
 	/*
 	 * PCIe r6.0, section 7.9.15 states that for endpoints that support

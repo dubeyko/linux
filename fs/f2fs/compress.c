@@ -13,7 +13,8 @@
 #include <linux/lzo.h>
 #include <linux/lz4.h>
 #include <linux/zstd.h>
-#include <linux/pagevec.h>
+#include <linux/folio_batch.h>
+#include <linux/fserror.h>
 
 #include "f2fs.h"
 #include "node.h"
@@ -760,6 +761,7 @@ void f2fs_decompress_cluster(struct decompress_io_ctx *dic, bool in_task)
 
 		/* Avoid f2fs_commit_super in irq context */
 		f2fs_handle_error(sbi, ERROR_FAIL_DECOMPRESSION);
+		fserror_report_file_metadata(dic->inode, ret, GFP_NOFS);
 		goto out_release;
 	}
 
@@ -773,7 +775,7 @@ void f2fs_decompress_cluster(struct decompress_io_ctx *dic, bool in_task)
 			if (!is_inode_flag_set(dic->inode, FI_COMPRESS_CORRUPT)) {
 				set_inode_flag(dic->inode, FI_COMPRESS_CORRUPT);
 				f2fs_info_ratelimited(sbi,
-					"checksum invalid, nid = %lu, %x vs %x",
+					"checksum invalid, nid = %llu, %x vs %x",
 					dic->inode->i_ino,
 					provided, calculated);
 			}
@@ -932,7 +934,7 @@ bool f2fs_sanity_check_cluster(struct dnode_of_data *dn)
 
 	return false;
 out:
-	f2fs_warn(sbi, "access invalid cluster, ino:%lu, nid:%u, ofs_in_node:%u, reason:%s",
+	f2fs_warn(sbi, "access invalid cluster, ino:%llu, nid:%u, ofs_in_node:%u, reason:%s",
 			dn->inode->i_ino, dn->nid, dn->ofs_in_node, reason);
 	set_sbi_flag(sbi, SBI_NEED_FSCK);
 	return true;
@@ -1453,6 +1455,9 @@ unlock_continue:
 out_destroy_crypt:
 	page_array_free(sbi, cic->rpages, cc->cluster_size);
 
+	if (!fio.encrypted)
+		goto out_put_cic;
+
 	for (--i; i >= 0; i--) {
 		if (!cc->cpages[i])
 			continue;
@@ -1482,8 +1487,7 @@ void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
 	struct page *page = &folio->page;
 	struct f2fs_sb_info *sbi = bio->bi_private;
 	struct compress_io_ctx *cic = folio->private;
-	enum count_type type = WB_DATA_TYPE(folio,
-				f2fs_is_compressed_page(folio));
+	enum count_type type = WB_DATA_TYPE(folio, true);
 	int i;
 
 	if (unlikely(bio->bi_status != BLK_STS_OK))
@@ -1491,10 +1495,10 @@ void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
 
 	f2fs_compress_free_page(page);
 
-	dec_page_count(sbi, type);
-
-	if (atomic_dec_return(&cic->pending_pages))
+	if (atomic_dec_return(&cic->pending_pages)) {
+		dec_page_count(sbi, type);
 		return;
+	}
 
 	for (i = 0; i < cic->nr_rpages; i++) {
 		WARN_ON(!cic->rpages[i]);
@@ -1504,6 +1508,14 @@ void f2fs_compress_write_end_io(struct bio *bio, struct folio *folio)
 
 	page_array_free(sbi, cic->rpages, cic->nr_rpages);
 	kmem_cache_free(cic_entry_slab, cic);
+
+	/*
+	 * Make sure dec_page_count() is the last access to sbi.
+	 * Once it drops the F2FS_WB_CP_DATA counter to zero, the
+	 * unmount thread can proceed to destroy sbi and
+	 * sbi->page_array_slab.
+	 */
+	dec_page_count(sbi, type);
 }
 
 static int f2fs_write_raw_pages(struct compress_ctx *cc,
@@ -1799,7 +1811,7 @@ static void f2fs_put_dic(struct decompress_io_ctx *dic, bool in_task)
 			f2fs_free_dic(dic, false);
 		} else {
 			INIT_WORK(&dic->free_work, f2fs_late_free_dic);
-			queue_work(dic->sbi->post_read_wq, &dic->free_work);
+			queue_work(dic->sbi->wq, &dic->free_work);
 		}
 	}
 }

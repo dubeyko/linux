@@ -590,7 +590,8 @@ int pqm_update_queue_properties(struct process_queue_manager *pqm,
 			return err;
 
 		if (kfd_queue_buffer_get(vm, (void *)p->queue_address, &p->ring_bo,
-					 p->queue_size)) {
+					 p->queue_size +
+					 pqn->q->properties.metadata_queue_size)) {
 			pr_debug("ring buf 0x%llx size 0x%llx not mapped on GPU\n",
 				 p->queue_address, p->queue_size);
 			amdgpu_bo_unreserve(vm->root.bo);
@@ -961,8 +962,8 @@ static void set_queue_properties_from_criu(struct queue_properties *qp,
 	qp->priority = q_data->priority;
 	qp->queue_address = q_data->q_address;
 	qp->queue_size = q_data->q_size;
-	qp->read_ptr = (uint32_t *) q_data->read_ptr_addr;
-	qp->write_ptr = (uint32_t *) q_data->write_ptr_addr;
+	qp->read_ptr = (void __user *)q_data->read_ptr_addr;
+	qp->write_ptr = (void __user *)q_data->write_ptr_addr;
 	qp->eop_ring_buffer_address = q_data->eop_ring_buffer_address;
 	qp->eop_ring_buffer_size = q_data->eop_ring_buffer_size;
 	qp->ctx_save_restore_area_address = q_data->ctx_save_restore_area_address;
@@ -1041,10 +1042,18 @@ int kfd_criu_restore_queue(struct kfd_process *p,
 	memset(&qp, 0, sizeof(qp));
 	set_queue_properties_from_criu(&qp, q_data, NUM_XCC(pdd->dev->adev->gfx.xcc_mask));
 
+	ret = kfd_queue_acquire_buffers(pdd, &qp);
+	if (ret) {
+		pr_debug("failed to acquire user queue buffers for CRIU\n");
+		goto exit;
+	}
+
 	print_queue_properties(&qp);
 
 	ret = pqm_create_queue(&p->pqm, pdd->dev, &qp, &queue_id, q_data, mqd, ctl_stack, NULL);
 	if (ret) {
+		kfd_queue_unref_bo_vas(pdd, &qp);
+		kfd_queue_release_buffers(pdd, &qp);
 		pr_err("Failed to create new queue err:%d\n", ret);
 		goto exit;
 	}
@@ -1070,6 +1079,7 @@ int pqm_get_queue_checkpoint_info(struct process_queue_manager *pqm,
 				  uint32_t *ctl_stack_size)
 {
 	struct process_queue_node *pqn;
+	int ret;
 
 	pqn = get_queue_by_qid(pqm, qid);
 	if (!pqn) {
@@ -1082,9 +1092,14 @@ int pqm_get_queue_checkpoint_info(struct process_queue_manager *pqm,
 		return -EOPNOTSUPP;
 	}
 
-	pqn->q->device->dqm->ops.get_queue_checkpoint_info(pqn->q->device->dqm,
+	ret = pqn->q->device->dqm->ops.get_queue_checkpoint_info(pqn->q->device->dqm,
 						       pqn->q, mqd_size,
 						       ctl_stack_size);
+	if (ret) {
+		pr_debug("amdkfd: Overflow while computing stack size for queue %d\n", qid);
+		return ret;
+	}
+
 	return 0;
 }
 

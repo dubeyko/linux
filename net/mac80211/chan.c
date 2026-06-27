@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * mac80211 - channel management
- * Copyright 2020 - 2025 Intel Corporation
+ * Copyright 2020-2026 Intel Corporation
  */
 
 #include <linux/nl80211.h>
@@ -16,6 +16,8 @@ struct ieee80211_chanctx_user_iter {
 	struct ieee80211_chan_req *chanreq;
 	struct ieee80211_sub_if_data *sdata;
 	struct ieee80211_link_data *link;
+	struct ieee80211_nan_channel *nan_channel;
+	int nan_channel_next_idx;
 	enum nl80211_iftype iftype;
 	bool reserved, radar_required, done;
 	enum {
@@ -31,20 +33,38 @@ enum ieee80211_chanctx_iter_type {
 	CHANCTX_ITER_ASSIGNED,
 };
 
-static void ieee80211_chanctx_user_iter_next(struct ieee80211_local *local,
-					     struct ieee80211_chanctx *ctx,
-					     struct ieee80211_chanctx_user_iter *iter,
-					     enum ieee80211_chanctx_iter_type type,
-					     bool start)
+static bool
+ieee80211_chanctx_user_iter_next_nan_channel(struct ieee80211_chanctx *ctx,
+					     struct ieee80211_chanctx_user_iter *iter)
 {
-	lockdep_assert_wiphy(local->hw.wiphy);
+	/* Start from the next index after current position */
+	for (int i = iter->nan_channel_next_idx;
+	     i < ARRAY_SIZE(iter->sdata->vif.cfg.nan_sched.channels); i++) {
+		struct ieee80211_nan_channel *nan_channel =
+			&iter->sdata->vif.cfg.nan_sched.channels[i];
 
-	if (start) {
-		memset(iter, 0, sizeof(*iter));
-		goto next_interface;
+		if (!nan_channel->chanreq.oper.chan)
+			continue;
+
+		if (nan_channel->chanctx_conf != &ctx->conf)
+			continue;
+
+		iter->nan_channel = nan_channel;
+		iter->nan_channel_next_idx = i + 1;
+		iter->chanreq = &nan_channel->chanreq;
+		iter->link = NULL;
+		iter->reserved = false;
+		iter->radar_required = false;
+		return true;
 	}
+	return false;
+}
 
-next_link:
+static bool
+ieee80211_chanctx_user_iter_next_link(struct ieee80211_chanctx *ctx,
+				      struct ieee80211_chanctx_user_iter *iter,
+				      enum ieee80211_chanctx_iter_type type)
+{
 	for (int link_id = iter->link ? iter->link->link_id : 0;
 	     link_id < ARRAY_SIZE(iter->sdata->link);
 	     link_id++) {
@@ -64,7 +84,7 @@ next_link:
 				iter->reserved = false;
 				iter->radar_required = link->radar_required;
 				iter->chanreq = &link->conf->chanreq;
-				return;
+				return true;
 			}
 			fallthrough;
 		case CHANCTX_ITER_POS_RESERVED:
@@ -77,7 +97,7 @@ next_link:
 					link->reserved_radar_required;
 
 				iter->chanreq = &link->reserved;
-				return;
+				return true;
 			}
 			fallthrough;
 		case CHANCTX_ITER_POS_DONE:
@@ -85,6 +105,33 @@ next_link:
 			continue;
 		}
 	}
+	return false;
+}
+
+static void
+ieee80211_chanctx_user_iter_next(struct ieee80211_local *local,
+				 struct ieee80211_chanctx *ctx,
+				 struct ieee80211_chanctx_user_iter *iter,
+				 enum ieee80211_chanctx_iter_type type,
+				 bool start)
+{
+	bool found;
+
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	if (start) {
+		memset(iter, 0, sizeof(*iter));
+		goto next_interface;
+	}
+
+next_user:
+	if (iter->iftype == NL80211_IFTYPE_NAN)
+		found = ieee80211_chanctx_user_iter_next_nan_channel(ctx, iter);
+	else
+		found = ieee80211_chanctx_user_iter_next_link(ctx, iter, type);
+
+	if (found)
+		return;
 
 next_interface:
 	/* next (or first) interface */
@@ -97,10 +144,18 @@ next_interface:
 		if (iter->sdata->vif.type == NL80211_IFTYPE_AP_VLAN)
 			continue;
 
+		/* NAN channels don't reserve channel context */
+		if (iter->sdata->vif.type == NL80211_IFTYPE_NAN &&
+		    type == CHANCTX_ITER_RESERVED)
+			continue;
+
+		iter->nan_channel = NULL;
 		iter->link = NULL;
-		iter->per_link = CHANCTX_ITER_POS_ASSIGNED;
 		iter->iftype = iter->sdata->vif.type;
-		goto next_link;
+		iter->chanreq = NULL;
+		iter->per_link = CHANCTX_ITER_POS_ASSIGNED;
+		iter->nan_channel_next_idx = 0;
+		goto next_user;
 	}
 
 	iter->done = true;
@@ -133,8 +188,8 @@ next_interface:
 					      CHANCTX_ITER_ALL,		\
 					      false))
 
-static int ieee80211_chanctx_num_assigned(struct ieee80211_local *local,
-					  struct ieee80211_chanctx *ctx)
+int ieee80211_chanctx_num_assigned(struct ieee80211_local *local,
+				   struct ieee80211_chanctx *ctx)
 {
 	struct ieee80211_chanctx_user_iter iter;
 	int num = 0;
@@ -164,6 +219,13 @@ int ieee80211_chanctx_refcount(struct ieee80211_local *local,
 	int num = 0;
 
 	for_each_chanctx_user_all(local, ctx, &iter)
+		num++;
+
+	/*
+	 * This ctx is in the process of getting used,
+	 * take it into consideration
+	 */
+	if (ctx->will_be_used)
 		num++;
 
 	return num;
@@ -223,40 +285,83 @@ ieee80211_chanreq_compatible(const struct ieee80211_chan_req *a,
 			     const struct ieee80211_chan_req *b,
 			     struct ieee80211_chan_req *tmp)
 {
+	struct ieee80211_chan_req _a = *a, _b = *b;
 	const struct cfg80211_chan_def *compat;
 
 	if (a->ap.chan && b->ap.chan &&
 	    !cfg80211_chandef_identical(&a->ap, &b->ap))
 		return NULL;
 
-	compat = cfg80211_chandef_compatible(&a->oper, &b->oper);
+	/*
+	 * Remove NPCA if it's not required, so that interfaces
+	 * sharing a channel context will not use NPCA while the
+	 * channel context is shared.
+	 * If both sides are AP interfaces requiring NPC, there's
+	 * an assumption that userspace will set them up with
+	 * identical configurations and the same BSS color
+	 * (if the config is not identical, sharing will fail due
+	 * to cfg80211_chandef_compatible() failing below.)
+	 */
+	if (!_a.require_npca) {
+		_a.oper.npca_chan = NULL;
+		_a.oper.npca_punctured = 0;
+	}
+
+	if (!_b.require_npca) {
+		_b.oper.npca_chan = NULL;
+		_b.oper.npca_punctured = 0;
+	}
+
+	compat = cfg80211_chandef_compatible(&_a.oper, &_b.oper);
 	if (!compat)
 		return NULL;
 
 	/* Note: later code assumes this always fills & returns tmp if compat */
 	tmp->oper = *compat;
 	tmp->ap = a->ap.chan ? a->ap : b->ap;
+	tmp->require_npca = a->require_npca && b->require_npca;
+	return tmp;
+}
+
+/*
+ * When checking for compatible, check against all the links using
+ * the chanctx (except the one passed that might be changing) to
+ * allow changes to the AP's bandwidth for wider bandwidth OFDMA
+ * purposes, which wouldn't be treated as compatible by checking
+ * against the chanctx's oper/ap chandefs.
+ */
+static const struct ieee80211_chan_req *
+_ieee80211_chanctx_compatible(struct ieee80211_local *local,
+			      struct ieee80211_link_data *skip_link,
+			      struct ieee80211_chanctx *ctx,
+			      const struct ieee80211_chan_req *req,
+			      struct ieee80211_chan_req *tmp)
+{
+	const struct ieee80211_chan_req *ret = req;
+	struct ieee80211_chanctx_user_iter iter;
+
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	for_each_chanctx_user_all(local, ctx, &iter) {
+		if (iter.link && iter.link == skip_link)
+			continue;
+
+		ret = ieee80211_chanreq_compatible(ret, iter.chanreq, tmp);
+		if (!ret)
+			return NULL;
+	}
+
+	*tmp = *ret;
 	return tmp;
 }
 
 static const struct ieee80211_chan_req *
-ieee80211_chanctx_compatible(struct ieee80211_chanctx *ctx,
+ieee80211_chanctx_compatible(struct ieee80211_local *local,
+			     struct ieee80211_chanctx *ctx,
 			     const struct ieee80211_chan_req *req,
 			     struct ieee80211_chan_req *tmp)
 {
-	const struct ieee80211_chan_req *ret;
-	struct ieee80211_chan_req tmp2;
-
-	*tmp = (struct ieee80211_chan_req){
-		.oper = ctx->conf.def,
-		.ap = ctx->conf.ap,
-	};
-
-	ret = ieee80211_chanreq_compatible(tmp, req, &tmp2);
-	if (!ret)
-		return NULL;
-	*tmp = *ret;
-	return tmp;
+	return _ieee80211_chanctx_compatible(local, NULL, ctx, req, tmp);
 }
 
 static const struct ieee80211_chan_req *
@@ -293,7 +398,7 @@ ieee80211_chanctx_non_reserved_chandef(struct ieee80211_local *local,
 	lockdep_assert_wiphy(local->hw.wiphy);
 
 	for_each_chanctx_user_assigned(local, ctx, &iter) {
-		if (iter.link->reserved_chanctx)
+		if (iter.link && iter.link->reserved_chanctx)
 			continue;
 
 		comp_def = ieee80211_chanreq_compatible(iter.chanreq,
@@ -355,11 +460,12 @@ ieee80211_find_reservation_chanctx(struct ieee80211_local *local,
 	return NULL;
 }
 
-static enum nl80211_chan_width ieee80211_get_sta_bw(struct sta_info *sta,
-						    unsigned int link_id)
+static enum nl80211_chan_width
+ieee80211_get_sta_bw(struct sta_info *sta, struct ieee80211_link_data *link)
 {
 	enum ieee80211_sta_rx_bandwidth width;
 	struct link_sta_info *link_sta;
+	int link_id = link->link_id;
 
 	link_sta = wiphy_dereference(sta->local->hw.wiphy, sta->link[link_id]);
 
@@ -371,45 +477,28 @@ static enum nl80211_chan_width ieee80211_get_sta_bw(struct sta_info *sta,
 	 * We assume that TX/RX might be asymmetric (so e.g. VHT operating
 	 * mode notification changes what a STA wants to receive, but not
 	 * necessarily what it will transmit to us), and therefore use the
-	 * capabilities here. Calling it RX bandwidth capability is a bit
-	 * wrong though, since capabilities are in fact symmetric.
+	 * "from station" bandwidth here.
 	 */
-	width = ieee80211_sta_cap_rx_bw(link_sta);
+	width = ieee80211_sta_current_bw(link_sta, &link->conf->chanreq.oper,
+					 IEEE80211_STA_BW_RX_FROM_STA);
 
-	switch (width) {
-	case IEEE80211_STA_RX_BW_20:
-		if (link_sta->pub->ht_cap.ht_supported)
-			return NL80211_CHAN_WIDTH_20;
-		else
-			return NL80211_CHAN_WIDTH_20_NOHT;
-	case IEEE80211_STA_RX_BW_40:
-		return NL80211_CHAN_WIDTH_40;
-	case IEEE80211_STA_RX_BW_80:
-		return NL80211_CHAN_WIDTH_80;
-	case IEEE80211_STA_RX_BW_160:
-		/*
-		 * This applied for both 160 and 80+80. since we use
-		 * the returned value to consider degradation of
-		 * ctx->conf.min_def, we have to make sure to take
-		 * the bigger one (NL80211_CHAN_WIDTH_160).
-		 * Otherwise we might try degrading even when not
-		 * needed, as the max required sta_bw returned (80+80)
-		 * might be smaller than the configured bw (160).
-		 */
-		return NL80211_CHAN_WIDTH_160;
-	case IEEE80211_STA_RX_BW_320:
-		return NL80211_CHAN_WIDTH_320;
-	default:
-		WARN_ON(1);
-		return NL80211_CHAN_WIDTH_20;
-	}
+	if (width == IEEE80211_STA_RX_BW_20 &&
+	    !link_sta->pub->ht_cap.ht_supported &&
+	    !link_sta->pub->he_cap.has_he)
+		return NL80211_CHAN_WIDTH_20_NOHT;
+
+	/*
+	 * This returns 160 for both 160 and 80+80. Since we use
+	 * the returned value to consider narrowing for
+	 * ctx->conf.min_def, that's correct and necessary.
+	 */
+	return ieee80211_sta_rx_bw_to_chan_width(width);
 }
 
 static enum nl80211_chan_width
 ieee80211_get_max_required_bw(struct ieee80211_link_data *link)
 {
 	struct ieee80211_sub_if_data *sdata = link->sdata;
-	unsigned int link_id = link->link_id;
 	enum nl80211_chan_width max_bw = NL80211_CHAN_WIDTH_20_NOHT;
 	struct sta_info *sta;
 
@@ -420,10 +509,73 @@ ieee80211_get_max_required_bw(struct ieee80211_link_data *link)
 		    !(sta->sdata->bss && sta->sdata->bss == sdata->bss))
 			continue;
 
-		max_bw = max(max_bw, ieee80211_get_sta_bw(sta, link_id));
+		max_bw = max(max_bw, ieee80211_get_sta_bw(sta, link));
 	}
 
 	return max_bw;
+}
+
+static enum nl80211_chan_width
+ieee80211_get_width_of_link(struct ieee80211_link_data *link)
+{
+	struct ieee80211_local *local = link->sdata->local;
+
+	switch (link->sdata->vif.type) {
+	case NL80211_IFTYPE_STATION:
+		if (!link->sdata->vif.cfg.assoc) {
+			/*
+			 * The AP's sta->bandwidth may not yet be set
+			 * at this point (pre-association), so simply
+			 * take the width from the chandef. We cannot
+			 * have TDLS peers yet (only after association).
+			 */
+			return link->conf->chanreq.oper.width;
+		}
+		/*
+		 * otherwise just use min_def like in AP, depending on what
+		 * we currently think the AP STA (and possibly TDLS peers)
+		 * require(s)
+		 */
+		fallthrough;
+	case NL80211_IFTYPE_AP:
+	case NL80211_IFTYPE_AP_VLAN:
+		return ieee80211_get_max_required_bw(link);
+	case NL80211_IFTYPE_P2P_DEVICE:
+		break;
+	case NL80211_IFTYPE_MONITOR:
+		WARN_ON_ONCE(!ieee80211_hw_check(&local->hw,
+						 NO_VIRTUAL_MONITOR));
+		fallthrough;
+	case NL80211_IFTYPE_ADHOC:
+	case NL80211_IFTYPE_MESH_POINT:
+	case NL80211_IFTYPE_OCB:
+		return link->conf->chanreq.oper.width;
+	case NL80211_IFTYPE_WDS:
+	case NL80211_IFTYPE_UNSPECIFIED:
+	case NUM_NL80211_IFTYPES:
+	case NL80211_IFTYPE_P2P_CLIENT:
+	case NL80211_IFTYPE_P2P_GO:
+	case NL80211_IFTYPE_NAN:
+	case NL80211_IFTYPE_NAN_DATA:
+	case NL80211_IFTYPE_PD:
+		WARN_ON_ONCE(1);
+		break;
+	}
+
+	/* Take the lowest possible, so it won't change the max width */
+	return NL80211_CHAN_WIDTH_20_NOHT;
+}
+
+static enum nl80211_chan_width
+ieee80211_get_width_of_chanctx_user(struct ieee80211_chanctx_user_iter *iter)
+{
+	if (iter->link)
+		return ieee80211_get_width_of_link(iter->link);
+
+	if (WARN_ON_ONCE(!iter->nan_channel || iter->reserved))
+		return NL80211_CHAN_WIDTH_20_NOHT;
+
+	return iter->nan_channel->chanreq.oper.width;
 }
 
 static enum nl80211_chan_width
@@ -432,68 +584,38 @@ ieee80211_get_chanctx_max_required_bw(struct ieee80211_local *local,
 				      struct ieee80211_link_data *rsvd_for,
 				      bool check_reserved)
 {
-	struct ieee80211_sub_if_data *sdata;
-	struct ieee80211_link_data *link;
 	enum nl80211_chan_width max_bw = NL80211_CHAN_WIDTH_20_NOHT;
+	struct ieee80211_chanctx_user_iter iter;
+	struct ieee80211_sub_if_data *sdata;
+	enum nl80211_chan_width width;
 
 	if (WARN_ON(check_reserved && rsvd_for))
 		return ctx->conf.def.width;
 
-	for_each_sdata_link(local, link) {
-		enum nl80211_chan_width width = NL80211_CHAN_WIDTH_20_NOHT;
-
-		if (check_reserved) {
-			if (link->reserved_chanctx != ctx)
-				continue;
-		} else if (link != rsvd_for &&
-			   rcu_access_pointer(link->conf->chanctx_conf) != &ctx->conf)
-			continue;
-
-		switch (link->sdata->vif.type) {
-		case NL80211_IFTYPE_STATION:
-			if (!link->sdata->vif.cfg.assoc) {
-				/*
-				 * The AP's sta->bandwidth may not yet be set
-				 * at this point (pre-association), so simply
-				 * take the width from the chandef. We cannot
-				 * have TDLS peers yet (only after association).
-				 */
-				width = link->conf->chanreq.oper.width;
-				break;
-			}
-			/*
-			 * otherwise just use min_def like in AP, depending on what
-			 * we currently think the AP STA (and possibly TDLS peers)
-			 * require(s)
-			 */
-			fallthrough;
-		case NL80211_IFTYPE_AP:
-		case NL80211_IFTYPE_AP_VLAN:
-			width = ieee80211_get_max_required_bw(link);
-			break;
-		case NL80211_IFTYPE_P2P_DEVICE:
-		case NL80211_IFTYPE_NAN:
-			continue;
-		case NL80211_IFTYPE_MONITOR:
-			WARN_ON_ONCE(!ieee80211_hw_check(&local->hw,
-							 NO_VIRTUAL_MONITOR));
-			fallthrough;
-		case NL80211_IFTYPE_ADHOC:
-		case NL80211_IFTYPE_MESH_POINT:
-		case NL80211_IFTYPE_OCB:
-			width = link->conf->chanreq.oper.width;
-			break;
-		case NL80211_IFTYPE_WDS:
-		case NL80211_IFTYPE_UNSPECIFIED:
-		case NUM_NL80211_IFTYPES:
-		case NL80211_IFTYPE_P2P_CLIENT:
-		case NL80211_IFTYPE_P2P_GO:
-			WARN_ON_ONCE(1);
+	/* When this is true we only care about the reserving links */
+	if (check_reserved) {
+		for_each_chanctx_user_reserved(local, ctx, &iter) {
+			width = ieee80211_get_width_of_chanctx_user(&iter);
+			max_bw = max(max_bw, width);
 		}
+		goto check_monitor;
+	}
 
+	/* Consider all assigned links */
+	for_each_chanctx_user_assigned(local, ctx, &iter) {
+		width = ieee80211_get_width_of_chanctx_user(&iter);
 		max_bw = max(max_bw, width);
 	}
 
+	if (!rsvd_for ||
+	    rsvd_for->sdata == rcu_access_pointer(local->monitor_sdata))
+		goto check_monitor;
+
+	/* Consider the link for which this chanctx is reserved/going to be assigned */
+	width = ieee80211_get_width_of_link(rsvd_for);
+	max_bw = max(max_bw, width);
+
+check_monitor:
 	/* use the configured bandwidth in case of monitor interface */
 	sdata = wiphy_dereference(local->hw.wiphy, local->monitor_sdata);
 	if (sdata &&
@@ -520,9 +642,7 @@ __ieee80211_recalc_chanctx_min_def(struct ieee80211_local *local,
 	lockdep_assert_wiphy(local->hw.wiphy);
 
 	/* don't optimize non-20MHz based and radar_enabled confs */
-	if (ctx->conf.def.width == NL80211_CHAN_WIDTH_5 ||
-	    ctx->conf.def.width == NL80211_CHAN_WIDTH_10 ||
-	    ctx->conf.def.width == NL80211_CHAN_WIDTH_1 ||
+	if (ctx->conf.def.width == NL80211_CHAN_WIDTH_1 ||
 	    ctx->conf.def.width == NL80211_CHAN_WIDTH_2 ||
 	    ctx->conf.def.width == NL80211_CHAN_WIDTH_4 ||
 	    ctx->conf.def.width == NL80211_CHAN_WIDTH_8 ||
@@ -594,8 +714,9 @@ static void ieee80211_chan_bw_change(struct ieee80211_local *local,
 			else
 				new_chandef = &link_conf->chanreq.oper;
 
-			new_sta_bw = _ieee80211_sta_cur_vht_bw(link_sta,
-							       new_chandef);
+			new_sta_bw = ieee80211_sta_current_bw(link_sta,
+							      new_chandef,
+							      IEEE80211_STA_BW_TX_TO_STA);
 
 			/* nothing change */
 			if (new_sta_bw == link_sta->pub->bandwidth)
@@ -618,6 +739,9 @@ static void ieee80211_chan_bw_change(struct ieee80211_local *local,
  * recalc the min required chan width of the channel context, which is
  * the max of min required widths of all the interfaces bound to this
  * channel context.
+ *
+ * Note: ieee80211_update_ap_bandwidth() relies on this iterating all
+ *	 affected stations, even if min_def didn't change.
  */
 static void
 _ieee80211_recalc_chanctx_min_def(struct ieee80211_local *local,
@@ -625,16 +749,20 @@ _ieee80211_recalc_chanctx_min_def(struct ieee80211_local *local,
 				  struct ieee80211_link_data *rsvd_for,
 				  bool check_reserved)
 {
-	u32 changed = __ieee80211_recalc_chanctx_min_def(local, ctx, rsvd_for,
-							 check_reserved);
+	u32 changed;
 
-	if (!changed)
+	/* No recalc for S1G chan ctx's */
+	if (cfg80211_chandef_is_s1g(&ctx->conf.def))
 		return;
+
+	changed = __ieee80211_recalc_chanctx_min_def(local, ctx, rsvd_for,
+						     check_reserved);
 
 	/* check is BW narrowed */
 	ieee80211_chan_bw_change(local, ctx, false, true);
 
-	drv_change_chanctx(local, ctx, changed);
+	if (changed)
+		drv_change_chanctx(local, ctx, changed);
 
 	/* check is BW wider */
 	ieee80211_chan_bw_change(local, ctx, false, false);
@@ -646,13 +774,44 @@ void ieee80211_recalc_chanctx_min_def(struct ieee80211_local *local,
 	_ieee80211_recalc_chanctx_min_def(local, ctx, NULL, false);
 }
 
+static void
+ieee80211_chanctx_update_npca_links(struct ieee80211_local *local,
+				    struct ieee80211_chanctx *ctx,
+				    bool enable)
+{
+	struct ieee80211_chanctx_user_iter iter;
+
+	if (!!ctx->conf.def.npca_chan != enable)
+		return;
+
+	for_each_chanctx_user_assigned(local, ctx, &iter) {
+		if (!iter.link)
+			continue;
+		if (!iter.sdata->vif.cfg.assoc)
+			continue;
+
+		if (enable) {
+			if (!iter.link->conf->chanreq.oper.npca_chan)
+				continue;
+		} else {
+			if (!iter.link->conf->npca.enabled)
+				continue;
+		}
+
+		iter.link->conf->npca.enabled = enable;
+		drv_link_info_changed(local, iter.sdata,
+				      iter.link->conf,
+				      iter.link->link_id,
+				      BSS_CHANGED_NPCA);
+	}
+}
+
 static void _ieee80211_change_chanctx(struct ieee80211_local *local,
 				      struct ieee80211_chanctx *ctx,
 				      struct ieee80211_chanctx *old_ctx,
 				      const struct ieee80211_chan_req *chanreq,
 				      struct ieee80211_link_data *rsvd_for)
 {
-	const struct cfg80211_chan_def *chandef = &chanreq->oper;
 	struct ieee80211_chan_req ctx_req = {
 		.oper = ctx->conf.def,
 		.ap = ctx->conf.ap,
@@ -660,7 +819,7 @@ static void _ieee80211_change_chanctx(struct ieee80211_local *local,
 	u32 changed = 0;
 
 	/* 5/10 MHz not handled here */
-	switch (chandef->width) {
+	switch (chanreq->oper.width) {
 	case NL80211_CHAN_WIDTH_1:
 	case NL80211_CHAN_WIDTH_2:
 	case NL80211_CHAN_WIDTH_4:
@@ -705,10 +864,15 @@ static void _ieee80211_change_chanctx(struct ieee80211_local *local,
 			changed |= IEEE80211_CHANCTX_CHANGE_WIDTH;
 		if (ctx->conf.def.punctured != chanreq->oper.punctured)
 			changed |= IEEE80211_CHANCTX_CHANGE_PUNCTURING;
+		if (ctx->conf.def.npca_chan != chanreq->oper.npca_chan)
+			changed |= IEEE80211_CHANCTX_CHANGE_NPCA;
+		if (chanreq->oper.npca_chan &&
+		    ctx->conf.def.npca_punctured != chanreq->oper.npca_punctured)
+			changed |= IEEE80211_CHANCTX_CHANGE_NPCA_PUNCT;
 	}
 	if (!cfg80211_chandef_identical(&ctx->conf.ap, &chanreq->ap))
 		changed |= IEEE80211_CHANCTX_CHANGE_AP;
-	ctx->conf.def = *chandef;
+	ctx->conf.def = chanreq->oper;
 	ctx->conf.ap = chanreq->ap;
 
 	/* check if min chanctx also changed */
@@ -717,10 +881,16 @@ static void _ieee80211_change_chanctx(struct ieee80211_local *local,
 
 	ieee80211_add_wbrf(local, &ctx->conf.def);
 
+	/* disable NPCA on the link using it */
+	ieee80211_chanctx_update_npca_links(local, ctx, false);
+
 	drv_change_chanctx(local, ctx, changed);
 
 	/* check if BW is wider */
 	ieee80211_chan_bw_change(local, old_ctx, false, false);
+
+	/* enable NPCA on the link that requested it */
+	ieee80211_chanctx_update_npca_links(local, ctx, true);
 }
 
 static void ieee80211_change_chanctx(struct ieee80211_local *local,
@@ -731,10 +901,9 @@ static void ieee80211_change_chanctx(struct ieee80211_local *local,
 	_ieee80211_change_chanctx(local, ctx, old_ctx, chanreq, NULL);
 }
 
-/* Note: if successful, the returned chanctx is reserved for the link */
+/* Note: if successful, the returned chanctx will_be_used flag is set */
 static struct ieee80211_chanctx *
 ieee80211_find_chanctx(struct ieee80211_local *local,
-		       struct ieee80211_link_data *link,
 		       const struct ieee80211_chan_req *chanreq,
 		       enum ieee80211_chanctx_mode mode)
 {
@@ -746,9 +915,6 @@ ieee80211_find_chanctx(struct ieee80211_local *local,
 	if (mode == IEEE80211_CHANCTX_EXCLUSIVE)
 		return NULL;
 
-	if (WARN_ON(link->reserved_chanctx))
-		return NULL;
-
 	list_for_each_entry(ctx, &local->chanctx_list, list) {
 		const struct ieee80211_chan_req *compat;
 
@@ -758,7 +924,8 @@ ieee80211_find_chanctx(struct ieee80211_local *local,
 		if (ctx->mode == IEEE80211_CHANCTX_EXCLUSIVE)
 			continue;
 
-		compat = ieee80211_chanctx_compatible(ctx, chanreq, &tmp);
+		compat = ieee80211_chanctx_compatible(local, ctx, chanreq,
+						      &tmp);
 		if (!compat)
 			continue;
 
@@ -768,12 +935,12 @@ ieee80211_find_chanctx(struct ieee80211_local *local,
 			continue;
 
 		/*
-		 * Reserve the chanctx temporarily, as the driver might change
+		 * Mark the chanctx as will be used, as the driver might change
 		 * active links during callbacks we make into it below and/or
 		 * later during assignment, which could (otherwise) cause the
 		 * context to actually be removed.
 		 */
-		link->reserved_chanctx = ctx;
+		ctx->will_be_used = true;
 
 		ieee80211_change_chanctx(local, ctx, ctx, compat);
 
@@ -898,7 +1065,10 @@ ieee80211_new_chanctx(struct ieee80211_local *local,
 		kfree(ctx);
 		return ERR_PTR(err);
 	}
-	/* We ignored a driver error, see _ieee80211_set_active_links */
+	/*
+	 * We ignored a driver error, see _ieee80211_set_active_links and/or
+	 * ieee80211_nan_set_local_sched
+	 */
 	WARN_ON_ONCE(err && !local->in_reconfig);
 
 	list_add_rcu(&ctx->list, &local->chanctx_list);
@@ -919,9 +1089,9 @@ static void ieee80211_del_chanctx(struct ieee80211_local *local,
 	ieee80211_remove_wbrf(local, &ctx->conf.def);
 }
 
-static void ieee80211_free_chanctx(struct ieee80211_local *local,
-				   struct ieee80211_chanctx *ctx,
-				   bool skip_idle_recalc)
+void ieee80211_free_chanctx(struct ieee80211_local *local,
+			    struct ieee80211_chanctx *ctx,
+			    bool skip_idle_recalc)
 {
 	lockdep_assert_wiphy(local->hw.wiphy);
 
@@ -1116,6 +1286,7 @@ void ieee80211_recalc_smps_chanctx(struct ieee80211_local *local,
 		case NL80211_IFTYPE_ADHOC:
 		case NL80211_IFTYPE_MESH_POINT:
 		case NL80211_IFTYPE_OCB:
+		case NL80211_IFTYPE_NAN:
 			break;
 		default:
 			continue;
@@ -1125,6 +1296,15 @@ void ieee80211_recalc_smps_chanctx(struct ieee80211_local *local,
 			rx_chains_dynamic = rx_chains_static = local->rx_chains;
 			break;
 		}
+
+		if (iter.nan_channel) {
+			rx_chains_dynamic = rx_chains_static =
+				iter.nan_channel->needed_rx_chains;
+			break;
+		}
+
+		if (!iter.link)
+			continue;
 
 		switch (iter.link->smps_mode) {
 		default:
@@ -1195,6 +1375,10 @@ __ieee80211_link_copy_chanctx_to_vlans(struct ieee80211_link_data *link,
 
 	list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list) {
 		struct ieee80211_bss_conf *vlan_conf;
+
+		if (vlan->vif.valid_links &&
+		    !(vlan->vif.valid_links & BIT(link_id)))
+			continue;
 
 		vlan_conf = wiphy_dereference(local->hw.wiphy,
 					      vlan->vif.link_conf[link_id]);
@@ -1416,6 +1600,8 @@ ieee80211_link_chanctx_reservation_complete(struct ieee80211_link_data *link)
 	case NL80211_IFTYPE_P2P_GO:
 	case NL80211_IFTYPE_P2P_DEVICE:
 	case NL80211_IFTYPE_NAN:
+	case NL80211_IFTYPE_NAN_DATA:
+	case NL80211_IFTYPE_PD:
 	case NUM_NL80211_IFTYPES:
 		WARN_ON(1);
 		break;
@@ -1437,6 +1623,10 @@ ieee80211_link_update_chanreq(struct ieee80211_link_data *link,
 
 	list_for_each_entry(vlan, &sdata->u.ap.vlans, u.vlan.list) {
 		struct ieee80211_bss_conf *vlan_conf;
+
+		if (vlan->vif.valid_links &&
+		    !(vlan->vif.valid_links & BIT(link_id)))
+			continue;
 
 		vlan_conf = wiphy_dereference(sdata->local->hw.wiphy,
 					      vlan->vif.link_conf[link_id]);
@@ -1733,7 +1923,7 @@ static int ieee80211_vif_use_reserved_switch(struct ieee80211_local *local)
 
 		for_each_chanctx_user_assigned(local, ctx->replace_ctx, &iter) {
 			n_assigned++;
-			if (iter.link->reserved_chanctx) {
+			if (iter.link && iter.link->reserved_chanctx) {
 				n_reserved++;
 				if (iter.link->reserved_ready)
 					n_ready++;
@@ -1741,16 +1931,21 @@ static int ieee80211_vif_use_reserved_switch(struct ieee80211_local *local)
 		}
 
 		if (n_assigned != n_reserved) {
-			if (n_ready == n_reserved) {
-				wiphy_info(local->hw.wiphy,
-					   "channel context reservation cannot be finalized because some interfaces aren't switching\n");
-				err = -EBUSY;
-				goto err;
-			}
+			if (n_ready != n_reserved)
+				return -EAGAIN;
 
-			return -EAGAIN;
+			if (n_assigned == n_reserved + 1 &&
+			    ieee80211_nan_try_evacuate(&local->hw,
+						       &ctx->replace_ctx->conf))
+				goto use_reserved;
+
+			wiphy_info(local->hw.wiphy,
+				   "channel context reservation cannot be finalized because some interfaces aren't switching\n");
+			err = -EBUSY;
+			goto err;
 		}
 
+use_reserved:
 		ctx->conf.radar_enabled = false;
 		for_each_chanctx_user_reserved(local, ctx, &iter) {
 			if (ieee80211_link_has_in_place_reservation(iter.link) &&
@@ -1989,6 +2184,94 @@ void __ieee80211_link_release_channel(struct ieee80211_link_data *link,
 		ieee80211_vif_use_reserved_switch(local);
 }
 
+struct ieee80211_chanctx *
+ieee80211_find_or_create_chanctx(struct ieee80211_sub_if_data *sdata,
+				 const struct ieee80211_chan_req *chanreq,
+				 enum ieee80211_chanctx_mode mode,
+				 bool assign_on_failure,
+				 bool *reused_ctx)
+{
+	struct ieee80211_local *local = sdata->local;
+	struct ieee80211_chanctx *ctx;
+	int radio_idx;
+
+	lockdep_assert_wiphy(local->hw.wiphy);
+
+	ctx = ieee80211_find_chanctx(local, chanreq, mode);
+	if (ctx) {
+		*reused_ctx = true;
+		return ctx;
+	}
+
+	*reused_ctx = false;
+
+	if (!ieee80211_find_available_radio(local, chanreq,
+					    sdata->wdev.radio_mask,
+					    &radio_idx))
+		return ERR_PTR(-EBUSY);
+
+	return ieee80211_new_chanctx(local, chanreq, mode,
+				     assign_on_failure, radio_idx);
+}
+
+static bool
+ieee80211_nan_evac_chanctx_filter(struct ieee80211_chanctx *ctx,
+				  void *filter_data)
+{
+	return ctx == filter_data;
+}
+
+static int
+ieee80211_try_nan_chan_evacuation(struct ieee80211_local *local,
+				  struct ieee80211_sub_if_data *sdata,
+				  const struct cfg80211_chan_def *chandef,
+				  enum ieee80211_chanctx_mode mode,
+				  u8 radar_detect_width)
+{
+	struct ieee80211_sub_if_data *nan_sdata = ieee80211_find_nan_sdata(local);
+	struct ieee80211_check_combinations_data comb_data = {
+		.chandef = chandef,
+		.chanmode = mode,
+		.radar_detect = radar_detect_width,
+		.radio_idx = -1,
+		.chanctx_filter = ieee80211_nan_evac_chanctx_filter,
+	};
+	struct ieee80211_nan_channel *evac_chan;
+	struct ieee80211_chanctx *evac_ctx;
+	int ret;
+
+	if (!nan_sdata)
+		return -ENOENT;
+
+	/* Find an evacuation candidate... */
+	evac_chan = ieee80211_nan_find_evac_chan(local, nan_sdata, NULL);
+	if (!evac_chan || WARN_ON(!evac_chan->chanctx_conf))
+		return -ENOENT;
+
+	evac_ctx = container_of(evac_chan->chanctx_conf,
+				struct ieee80211_chanctx, conf);
+
+	/*
+	 * ... check combinations assuming to-be-evacuated ctx is already
+	 * released
+	 */
+	comb_data.filter_data = evac_ctx;
+	ret = ieee80211_check_combinations_ext(sdata, &comb_data);
+	if (ret < 0)
+		return ret;
+
+	/* That helped! Let's evacuate the channel */
+	ieee80211_nan_evacuate_channel(nan_sdata, evac_chan);
+
+	/* Re-check, just to be on the safe-side */
+	ret = ieee80211_check_combinations(sdata, chandef, mode,
+					   radar_detect_width, -1);
+
+	/* That shouldn't happen, we checked before! */
+	WARN_ON(ret);
+	return ret;
+}
+
 int _ieee80211_link_use_channel(struct ieee80211_link_data *link,
 				const struct ieee80211_chan_req *chanreq,
 				enum ieee80211_chanctx_mode mode,
@@ -1998,8 +2281,7 @@ int _ieee80211_link_use_channel(struct ieee80211_link_data *link,
 	struct ieee80211_local *local = sdata->local;
 	struct ieee80211_chanctx *ctx;
 	u8 radar_detect_width = 0;
-	bool reserved = false;
-	int radio_idx;
+	bool reused_ctx = false;
 	int ret;
 
 	lockdep_assert_wiphy(local->hw.wiphy);
@@ -2021,23 +2303,21 @@ int _ieee80211_link_use_channel(struct ieee80211_link_data *link,
 
 	ret = ieee80211_check_combinations(sdata, &chanreq->oper, mode,
 					   radar_detect_width, -1);
-	if (ret < 0)
-		goto out;
+	if (ret < 0) {
+		/* Let's check if evacuating a NAN channel will help */
+		ret = ieee80211_try_nan_chan_evacuation(local, sdata,
+							&chanreq->oper,
+							mode,
+							radar_detect_width);
+		if (ret < 0)
+			goto out;
+	}
 
 	if (!local->in_reconfig)
 		__ieee80211_link_release_channel(link, false);
 
-	ctx = ieee80211_find_chanctx(local, link, chanreq, mode);
-	/* Note: context is now reserved */
-	if (ctx)
-		reserved = true;
-	else if (!ieee80211_find_available_radio(local, chanreq,
-						 sdata->wdev.radio_mask,
-						 &radio_idx))
-		ctx = ERR_PTR(-EBUSY);
-	else
-		ctx = ieee80211_new_chanctx(local, chanreq, mode,
-					    assign_on_failure, radio_idx);
+	ctx = ieee80211_find_or_create_chanctx(sdata, chanreq, mode,
+					       assign_on_failure, &reused_ctx);
 	if (IS_ERR(ctx)) {
 		ret = PTR_ERR(ctx);
 		goto out;
@@ -2047,10 +2327,13 @@ int _ieee80211_link_use_channel(struct ieee80211_link_data *link,
 
 	ret = ieee80211_assign_link_chanctx(link, ctx, assign_on_failure);
 
-	if (reserved) {
-		/* remove reservation */
-		WARN_ON(link->reserved_chanctx != ctx);
-		link->reserved_chanctx = NULL;
+	/*
+	 * In case an existing channel context is being used, we marked it as
+	 * will_be_used, now that it is assigned - clear this indication
+	 */
+	if (reused_ctx) {
+		WARN_ON(!ctx->will_be_used);
+		ctx->will_be_used = false;
 	}
 
 	if (ret) {
@@ -2130,40 +2413,6 @@ int ieee80211_link_use_reserved_context(struct ieee80211_link_data *link)
 	return 0;
 }
 
-/*
- * This is similar to ieee80211_chanctx_compatible(), but rechecks
- * against all the links actually using it (except the one that's
- * passed, since that one is changing).
- * This is done in order to allow changes to the AP's bandwidth for
- * wider bandwidth OFDMA purposes, which wouldn't be treated as
- * compatible by ieee80211_chanctx_recheck() but is OK if the link
- * requesting the update is the only one using it.
- */
-static const struct ieee80211_chan_req *
-ieee80211_chanctx_recheck(struct ieee80211_local *local,
-			  struct ieee80211_link_data *skip_link,
-			  struct ieee80211_chanctx *ctx,
-			  const struct ieee80211_chan_req *req,
-			  struct ieee80211_chan_req *tmp)
-{
-	const struct ieee80211_chan_req *ret = req;
-	struct ieee80211_chanctx_user_iter iter;
-
-	lockdep_assert_wiphy(local->hw.wiphy);
-
-	for_each_chanctx_user_all(local, ctx, &iter) {
-		if (iter.link == skip_link)
-			continue;
-
-		ret = ieee80211_chanreq_compatible(ret, iter.chanreq, tmp);
-		if (!ret)
-			return NULL;
-	}
-
-	*tmp = *ret;
-	return tmp;
-}
-
 int ieee80211_link_change_chanreq(struct ieee80211_link_data *link,
 				  const struct ieee80211_chan_req *chanreq,
 				  u64 *changed)
@@ -2200,7 +2449,7 @@ int ieee80211_link_change_chanreq(struct ieee80211_link_data *link,
 
 	ctx = container_of(conf, struct ieee80211_chanctx, conf);
 
-	compat = ieee80211_chanctx_recheck(local, link, ctx, chanreq, &tmp);
+	compat = _ieee80211_chanctx_compatible(local, link, ctx, chanreq, &tmp);
 	if (!compat)
 		return -EINVAL;
 

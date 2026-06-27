@@ -28,8 +28,8 @@
 #include <drm/drm_debugfs.h>
 #include <drm/drm_print.h>
 #include <drm/drm_vblank.h>
+#include <drm/intel/step.h>
 
-#include "i915_reg.h"
 #include "intel_alpm.h"
 #include "intel_atomic.h"
 #include "intel_crtc.h"
@@ -41,16 +41,19 @@
 #include "intel_display_rpm.h"
 #include "intel_display_types.h"
 #include "intel_display_utils.h"
+#include "intel_display_wa.h"
 #include "intel_dmc.h"
 #include "intel_dp.h"
+#include "intel_dpcd.h"
 #include "intel_dp_aux.h"
+#include "intel_dp_tunnel.h"
 #include "intel_dsb.h"
 #include "intel_frontbuffer.h"
 #include "intel_hdmi.h"
 #include "intel_psr.h"
 #include "intel_psr_regs.h"
+#include "intel_quirks.h"
 #include "intel_snps_phy.h"
-#include "intel_step.h"
 #include "intel_vblank.h"
 #include "intel_vdsc.h"
 #include "intel_vrr.h"
@@ -301,8 +304,8 @@ static u32 psr_irq_mask_get(struct intel_dp *intel_dp)
 		EDP_PSR_MASK(intel_dp->psr.transcoder);
 }
 
-static i915_reg_t psr_ctl_reg(struct intel_display *display,
-			      enum transcoder cpu_transcoder)
+static intel_reg_t psr_ctl_reg(struct intel_display *display,
+			       enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 8)
 		return EDP_PSR_CTL(display, cpu_transcoder);
@@ -310,8 +313,8 @@ static i915_reg_t psr_ctl_reg(struct intel_display *display,
 		return HSW_SRD_CTL;
 }
 
-static i915_reg_t psr_debug_reg(struct intel_display *display,
-				enum transcoder cpu_transcoder)
+static intel_reg_t psr_debug_reg(struct intel_display *display,
+				 enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 8)
 		return EDP_PSR_DEBUG(display, cpu_transcoder);
@@ -319,8 +322,8 @@ static i915_reg_t psr_debug_reg(struct intel_display *display,
 		return HSW_SRD_DEBUG;
 }
 
-static i915_reg_t psr_perf_cnt_reg(struct intel_display *display,
-				   enum transcoder cpu_transcoder)
+static intel_reg_t psr_perf_cnt_reg(struct intel_display *display,
+				    enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 8)
 		return EDP_PSR_PERF_CNT(display, cpu_transcoder);
@@ -328,8 +331,8 @@ static i915_reg_t psr_perf_cnt_reg(struct intel_display *display,
 		return HSW_SRD_PERF_CNT;
 }
 
-static i915_reg_t psr_status_reg(struct intel_display *display,
-				 enum transcoder cpu_transcoder)
+static intel_reg_t psr_status_reg(struct intel_display *display,
+				  enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 8)
 		return EDP_PSR_STATUS(display, cpu_transcoder);
@@ -337,8 +340,8 @@ static i915_reg_t psr_status_reg(struct intel_display *display,
 		return HSW_SRD_STATUS;
 }
 
-static i915_reg_t psr_imr_reg(struct intel_display *display,
-			      enum transcoder cpu_transcoder)
+static intel_reg_t psr_imr_reg(struct intel_display *display,
+			       enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 12)
 		return TRANS_PSR_IMR(display, cpu_transcoder);
@@ -346,8 +349,8 @@ static i915_reg_t psr_imr_reg(struct intel_display *display,
 		return EDP_PSR_IMR;
 }
 
-static i915_reg_t psr_iir_reg(struct intel_display *display,
-			      enum transcoder cpu_transcoder)
+static intel_reg_t psr_iir_reg(struct intel_display *display,
+			       enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 12)
 		return TRANS_PSR_IIR(display, cpu_transcoder);
@@ -355,8 +358,8 @@ static i915_reg_t psr_iir_reg(struct intel_display *display,
 		return EDP_PSR_IIR;
 }
 
-static i915_reg_t psr_aux_ctl_reg(struct intel_display *display,
-				  enum transcoder cpu_transcoder)
+static intel_reg_t psr_aux_ctl_reg(struct intel_display *display,
+				   enum transcoder cpu_transcoder)
 {
 	if (DISPLAY_VER(display) >= 8)
 		return EDP_PSR_AUX_CTL(display, cpu_transcoder);
@@ -364,8 +367,8 @@ static i915_reg_t psr_aux_ctl_reg(struct intel_display *display,
 		return HSW_SRD_AUX_CTL;
 }
 
-static i915_reg_t psr_aux_data_reg(struct intel_display *display,
-				   enum transcoder cpu_transcoder, int i)
+static intel_reg_t psr_aux_data_reg(struct intel_display *display,
+				    enum transcoder cpu_transcoder, int i)
 {
 	if (DISPLAY_VER(display) >= 8)
 		return EDP_PSR_AUX_DATA(display, cpu_transcoder, i);
@@ -609,6 +612,13 @@ static void _panel_replay_init_dpcd(struct intel_dp *intel_dp, struct intel_conn
 	if (intel_dp->mst_detect == DRM_DP_MST)
 		return;
 
+	if (intel_dp_is_edp(intel_dp) &&
+	    intel_has_dpcd_quirk(intel_dp, QUIRK_DISABLE_EDP_PANEL_REPLAY)) {
+		drm_dbg_kms(display->drm,
+			    "Panel Replay support not currently available for this setup\n");
+		return;
+	}
+
 	ret = drm_dp_dpcd_read_data(&intel_dp->aux, DP_PANEL_REPLAY_CAP_SUPPORT,
 				    &connector->dp.panel_replay_caps.dpcd,
 				    sizeof(connector->dp.panel_replay_caps.dpcd));
@@ -686,6 +696,9 @@ static void _psr_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *co
 
 	connector->dp.psr_caps.sync_latency = intel_dp_get_sink_sync_latency(intel_dp);
 
+	if (intel_has_quirk(display, QUIRK_DISABLE_PSR2))
+		return;
+
 	if (DISPLAY_VER(display) >= 9 &&
 	    connector->dp.psr_caps.dpcd[0] >= DP_PSR2_WITH_Y_COORD_IS_SUPPORTED) {
 		bool y_req = connector->dp.psr_caps.dpcd[1] &
@@ -708,8 +721,14 @@ static void _psr_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *co
 			    connector->dp.psr_caps.su_support ? "" : "not ");
 	}
 
-	if (connector->dp.psr_caps.su_support)
+	if (connector->dp.psr_caps.su_support) {
+		ret = drm_dp_dpcd_read_byte(&intel_dp->aux,
+					    INTEL_DPCD_INTEL_WA_REGISTER_CAPS,
+					    &connector->dp.psr_caps.intel_wa_dpcd);
+		if (ret < 0)
+			return;
 		_psr_compute_su_granularity(intel_dp, connector);
+	}
 }
 
 void intel_psr_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *connector)
@@ -774,27 +793,30 @@ static bool psr2_su_region_et_valid(struct intel_connector *connector, bool pane
 static void _panel_replay_enable_sink(struct intel_dp *intel_dp,
 				      const struct intel_crtc_state *crtc_state)
 {
-	u8 val = DP_PANEL_REPLAY_ENABLE |
-		DP_PANEL_REPLAY_VSC_SDP_CRC_EN |
-		DP_PANEL_REPLAY_UNRECOVERABLE_ERROR_EN |
-		DP_PANEL_REPLAY_RFB_STORAGE_ERROR_EN |
-		DP_PANEL_REPLAY_ACTIVE_FRAME_CRC_ERROR_EN;
-	u8 panel_replay_config2 = DP_PANEL_REPLAY_CRC_VERIFICATION;
+	u8 panel_replay_config[2];
+	u8 panel_replay_config_3;
 
+	panel_replay_config[0] = DP_PANEL_REPLAY_ENABLE |
+				 DP_PANEL_REPLAY_VSC_SDP_CRC_EN |
+				 DP_PANEL_REPLAY_UNRECOVERABLE_ERROR_EN |
+				 DP_PANEL_REPLAY_RFB_STORAGE_ERROR_EN |
+				 DP_PANEL_REPLAY_ACTIVE_FRAME_CRC_ERROR_EN;
+	panel_replay_config[1] = DP_PANEL_REPLAY_CRC_VERIFICATION;
 	if (crtc_state->has_sel_update)
-		val |= DP_PANEL_REPLAY_SU_ENABLE;
+		panel_replay_config[0] |= DP_PANEL_REPLAY_SU_ENABLE;
 
 	if (crtc_state->enable_psr2_su_region_et)
-		val |= DP_PANEL_REPLAY_ENABLE_SU_REGION_ET;
+		panel_replay_config[0] |= DP_PANEL_REPLAY_ENABLE_SU_REGION_ET;
 
 	if (crtc_state->req_psr2_sdp_prior_scanline)
-		panel_replay_config2 |=
+		panel_replay_config[1] |=
 			DP_PANEL_REPLAY_SU_REGION_SCANLINE_CAPTURE;
 
-	drm_dp_dpcd_writeb(&intel_dp->aux, PANEL_REPLAY_CONFIG, val);
+	drm_dp_dpcd_write(&intel_dp->aux, PANEL_REPLAY_CONFIG,
+			  panel_replay_config, sizeof(panel_replay_config));
 
-	drm_dp_dpcd_writeb(&intel_dp->aux, PANEL_REPLAY_CONFIG2,
-			   panel_replay_config2);
+	panel_replay_config_3 = intel_dp_as_sdp_transmission_time();
+	drm_dp_dpcd_writeb(&intel_dp->aux, PANEL_REPLAY_CONFIG3, panel_replay_config_3);
 }
 
 static void _psr_enable_sink(struct intel_dp *intel_dp,
@@ -1023,11 +1045,27 @@ static u8 frames_before_su_entry(struct intel_dp *intel_dp)
 	return frames_before_su_entry;
 }
 
+static bool intel_psr_allow_pr_bw_optimization(struct intel_dp *intel_dp)
+{
+	if (intel_dp_is_edp(intel_dp))
+		return false;
+
+	if (!intel_dp_tunnel_bw_alloc_is_enabled(intel_dp))
+		return false;
+
+	if (!intel_dp_tunnel_pr_optimization_supported(intel_dp))
+		return false;
+
+	return true;
+}
+
 static void dg2_activate_panel_replay(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	struct intel_psr *psr = &intel_dp->psr;
 	enum transcoder cpu_transcoder = intel_dp->psr.transcoder;
+	u32 dp2_ctl_set = TRANS_DP2_PANEL_REPLAY_ENABLE;
+	u32 dp2_ctl_clear = 0;
 
 	if (intel_dp_is_edp(intel_dp) && psr->sel_update_enabled) {
 		u32 val = psr->su_region_et_enabled ?
@@ -1040,12 +1078,16 @@ static void dg2_activate_panel_replay(struct intel_dp *intel_dp)
 			       val);
 	}
 
+	if (intel_psr_allow_pr_bw_optimization(intel_dp))
+		dp2_ctl_set |= TRANS_DP2_PR_TUNNELING_ENABLE;
+	else
+		dp2_ctl_clear = TRANS_DP2_PR_TUNNELING_ENABLE;
+
 	intel_de_rmw(display,
 		     PSR2_MAN_TRK_CTL(display, intel_dp->psr.transcoder),
 		     0, ADLP_PSR2_MAN_TRK_CTL_SF_CONTINUOS_FULL_FRAME);
 
-	intel_de_rmw(display, TRANS_DP2_CTL(intel_dp->psr.transcoder), 0,
-		     TRANS_DP2_PANEL_REPLAY_ENABLE);
+	intel_de_rmw(display, TRANS_DP2_CTL(intel_dp->psr.transcoder), dp2_ctl_clear, dp2_ctl_set);
 }
 
 static void hsw_activate_psr2(struct intel_dp *intel_dp)
@@ -1083,7 +1125,7 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 	}
 
 	/* Wa_22012278275:adl-p */
-	if (display->platform.alderlake_p && IS_DISPLAY_STEP(display, STEP_A0, STEP_E0)) {
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_22012278275)) {
 		static const u8 map[] = {
 			2, /* 5 lines */
 			1, /* 6 lines */
@@ -1264,7 +1306,7 @@ tgl_dc3co_exitline_compute_config(struct intel_dp *intel_dp,
 		return;
 
 	/* Wa_16011303918:adl-p */
-	if (display->platform.alderlake_p && IS_DISPLAY_STEP(display, STEP_A0, STEP_B0))
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_16011303918))
 		return;
 
 	/*
@@ -1350,9 +1392,35 @@ static bool psr2_granularity_check(struct intel_crtc_state *crtc_state,
 	return true;
 }
 
-static bool _compute_psr2_sdp_prior_scanline_indication(struct intel_dp *intel_dp,
-							struct intel_crtc_state *crtc_state)
+static bool apply_scanline_indication_wa(struct intel_crtc_state *crtc_state,
+					 struct intel_connector *connector)
 {
+	struct intel_dp *intel_dp = intel_attached_dp(connector);
+	u8 early_scanline_support = connector->dp.psr_caps.intel_wa_dpcd &
+		INTEL_DPCD_INTEL_WA_REGISTER_CAPS_PSR2_EARLYSCANLINE_SDP_SUPPORT_MASK;
+
+	if (intel_dp->edp_dpcd[0] >= DP_EDP_15)
+		return true;
+
+	switch (early_scanline_support)	{
+	case INTEL_DPCD_INTEL_WA_REGISTER_CAPS_FALL_BACK_TO_PSR1:
+		crtc_state->req_psr2_sdp_prior_scanline = false;
+		return false;
+	case INTEL_DPCD_INTEL_WA_REGISTER_CAPS_PSR2_WITH_EARLY_SCANLINE:
+		return true;
+	case INTEL_DPCD_INTEL_WA_REGISTER_CAPS_PSR2_WITHOUT_EARLY_SCANLINE:
+		crtc_state->req_psr2_sdp_prior_scanline = false;
+		return true;
+	default:
+		MISSING_CASE(early_scanline_support);
+		return false;
+	}
+}
+
+static bool _compute_psr2_sdp_prior_scanline_indication(struct intel_crtc_state *crtc_state,
+							struct intel_connector *connector)
+{
+	struct intel_dp *intel_dp = intel_attached_dp(connector);
 	struct intel_display *display = to_intel_display(intel_dp);
 	const struct drm_display_mode *adjusted_mode = &crtc_state->uapi.adjusted_mode;
 	u32 hblank_total, hblank_ns, req_ns;
@@ -1371,7 +1439,8 @@ static bool _compute_psr2_sdp_prior_scanline_indication(struct intel_dp *intel_d
 		return false;
 
 	crtc_state->req_psr2_sdp_prior_scanline = true;
-	return true;
+
+	return apply_scanline_indication_wa(crtc_state, connector);
 }
 
 static int intel_psr_entry_setup_frames(struct intel_dp *intel_dp,
@@ -1442,15 +1511,21 @@ int _intel_psr_min_set_context_latency(const struct intel_crtc_state *crtc_state
 	 * SRD_STATUS is used by PSR1 and Panel Replay DP on LunarLake.
 	 */
 
-	if (DISPLAY_VER(display) >= 30 && (needs_panel_replay ||
-					   needs_sel_update))
+	if (needs_sel_update)
 		return 0;
-	else if (DISPLAY_VER(display) < 30 && (needs_sel_update ||
-					       intel_crtc_has_type(crtc_state,
-								   INTEL_OUTPUT_EDP)))
+
+	if (DISPLAY_VER(display) < 30 &&
+	    intel_crtc_has_type(crtc_state, INTEL_OUTPUT_EDP))
 		return 0;
-	else
-		return 1;
+
+	if (DISPLAY_VER(display) >= 30 &&
+	    needs_panel_replay)
+		return 0;
+
+	if (intel_vrr_always_use_vrr_tg(display))
+		return 0;
+
+	return 1;
 }
 
 static bool _wake_lines_fit_into_vblank(const struct intel_crtc_state *crtc_state,
@@ -1546,8 +1621,7 @@ static bool intel_psr2_config_valid(struct intel_dp *intel_dp,
 	}
 
 	/* Wa_16011181250 */
-	if (display->platform.rocketlake || display->platform.alderlake_s ||
-	    display->platform.dg2) {
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_16011181250)) {
 		drm_dbg_kms(display->drm,
 			    "PSR2 is defeatured for this platform\n");
 		return false;
@@ -1653,7 +1727,7 @@ static bool intel_sel_update_config_valid(struct intel_crtc_state *crtc_state,
 								      conn_state))
 		goto unsupported;
 
-	if (!_compute_psr2_sdp_prior_scanline_indication(intel_dp, crtc_state)) {
+	if (!_compute_psr2_sdp_prior_scanline_indication(crtc_state, connector)) {
 		drm_dbg_kms(display->drm,
 			    "Selective update not enabled, SDP indication do not fit in hblank\n");
 		goto unsupported;
@@ -1829,8 +1903,7 @@ void intel_psr_set_non_psr_pipes(struct intel_dp *intel_dp,
 	u8 active_pipes = 0;
 
 	/* Wa_16025596647 */
-	if (DISPLAY_VER(display) != 20 &&
-	    !IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
+	if (!intel_display_wa(display, INTEL_DISPLAY_WA_16025596647))
 		return;
 
 	/* Not needed by Panel Replay  */
@@ -1838,7 +1911,7 @@ void intel_psr_set_non_psr_pipes(struct intel_dp *intel_dp,
 		return;
 
 	/* We ignore possible secondary PSR/Panel Replay capable eDP */
-	for_each_intel_crtc(display->drm, crtc)
+	for_each_intel_crtc(display, crtc)
 		active_pipes |= crtc->active ? BIT(crtc->pipe) : 0;
 
 	active_pipes = intel_calc_active_pipes(state, active_pipes);
@@ -2130,6 +2203,9 @@ static void intel_psr_enable_source(struct intel_dp *intel_dp,
 		intel_dmc_block_pkgc(display, intel_dp->psr.pipe, true);
 
 	intel_alpm_configure(intel_dp, crtc_state);
+
+	if (HAS_PSR_TRANS_PUSH_FRAME_CHANGE(display))
+		intel_vrr_psr_frame_change_enable(crtc_state);
 }
 
 static bool psr_interrupt_error_check(struct intel_dp *intel_dp)
@@ -2286,7 +2362,7 @@ static void intel_psr_wait_exit_locked(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	enum transcoder cpu_transcoder = intel_dp->psr.transcoder;
-	i915_reg_t psr_status;
+	intel_reg_t psr_status;
 	u32 psr_status_mask;
 
 	if (intel_dp_is_edp(intel_dp) && (intel_dp->psr.sel_update_enabled ||
@@ -2522,9 +2598,11 @@ void intel_psr_trigger_frame_change_event(struct intel_dsb *dsb,
 		intel_pre_commit_crtc_state(state, crtc);
 	struct intel_display *display = to_intel_display(crtc);
 
-	if (crtc_state->has_psr)
-		intel_de_write_dsb(display, dsb,
-				   CURSURFLIVE(display, crtc->pipe), 0);
+	if (!crtc_state->has_psr || intel_psr_use_trans_push(crtc_state))
+		return;
+
+	intel_de_write_dsb(display, dsb,
+			   CURSURFLIVE(display, crtc->pipe), 0);
 }
 
 /**
@@ -2844,6 +2922,11 @@ intel_psr_apply_su_area_workarounds(struct intel_crtc_state *crtc_state)
 	    crtc_state->splitter.enable)
 		crtc_state->psr2_su_area.y1 = 0;
 
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_16029024088) &&
+	    crtc_state->req_psr2_sdp_prior_scanline &&
+	    !crtc_state->enable_psr2_su_region_et)
+		crtc_state->psr2_su_area.y1 = 0;
+
 	/* Wa 14019834836 */
 	if (DISPLAY_VER(display) == 30)
 		intel_psr_apply_pr_link_on_su_wa(crtc_state);
@@ -2970,7 +3053,7 @@ int intel_psr2_sel_fetch_update(struct intel_atomic_state *state,
 		return ret;
 
 	do {
-		bool cursor_in_su_area;
+		bool cursor_in_su_area = false;
 
 		/*
 		 * Adjust su area to cover cursor fully as necessary
@@ -3315,7 +3398,7 @@ static bool __psr_wait_for_idle_locked(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 	enum transcoder cpu_transcoder = intel_dp->psr.transcoder;
-	i915_reg_t reg;
+	intel_reg_t reg;
 	u32 mask;
 	int err;
 
@@ -3347,11 +3430,11 @@ static int intel_psr_fastset_force(struct intel_display *display)
 {
 	struct drm_connector_list_iter conn_iter;
 	struct drm_modeset_acquire_ctx ctx;
-	struct drm_atomic_state *state;
+	struct drm_atomic_commit *state;
 	struct drm_connector *conn;
 	int err = 0;
 
-	state = drm_atomic_state_alloc(display->drm);
+	state = drm_atomic_commit_alloc(display->drm);
 	if (!state)
 		return -ENOMEM;
 
@@ -3393,7 +3476,7 @@ retry:
 		err = drm_atomic_commit(state);
 
 	if (err == -EDEADLK) {
-		drm_atomic_state_clear(state);
+		drm_atomic_commit_clear(state);
 		err = drm_modeset_backoff(&ctx);
 		if (!err)
 			goto retry;
@@ -3401,7 +3484,7 @@ retry:
 
 	drm_modeset_drop_locks(&ctx);
 	drm_modeset_acquire_fini(&ctx);
-	drm_atomic_state_put(state);
+	drm_atomic_commit_put(state);
 
 	return err;
 }
@@ -3609,7 +3692,14 @@ static void _psr_flush_handle(struct intel_dp *intel_dp)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
 
-	if (DISPLAY_VER(display) < 20 && intel_dp->psr.psr2_sel_fetch_enabled) {
+	if (DISPLAY_VER(display) >= 20) {
+		/*
+		 * We can use PSR exit on LunarLake onwards. Also
+		 * using trans push mechanism to trigger Frame Change
+		 * event requires using PSR exit.
+		 */
+		intel_psr_exit(intel_dp);
+	} else if (intel_dp->psr.psr2_sel_fetch_enabled) {
 		/* Selective fetch prior LNL */
 		if (intel_dp->psr.psr2_sel_fetch_cff_enabled) {
 			/* can we turn CFF off? */
@@ -3629,16 +3719,11 @@ static void _psr_flush_handle(struct intel_dp *intel_dp)
 		intel_psr_configure_full_frame_update(intel_dp);
 
 		intel_psr_force_update(intel_dp);
-	} else if (!intel_dp->psr.psr2_sel_fetch_enabled) {
+	} else {
 		/*
-		 * PSR1 on all platforms
-		 * PSR2 HW tracking
-		 * Panel Replay Full frame update
+		 * On older platforms using PSR exit was seen causing problems
 		 */
 		intel_psr_force_update(intel_dp);
-	} else {
-		/* Selective update LNL onwards */
-		intel_psr_exit(intel_dp);
 	}
 
 	if (!intel_dp->psr.active && !intel_dp->psr.busy_frontbuffer_bits)
@@ -4019,8 +4104,7 @@ static void psr_dc5_dc6_wa_work(struct work_struct *work)
  */
 void intel_psr_notify_dc5_dc6(struct intel_display *display)
 {
-	if (DISPLAY_VER(display) != 20 &&
-	    !IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
+	if (!intel_display_wa(display, INTEL_DISPLAY_WA_16025596647))
 		return;
 
 	schedule_work(&display->psr_dc5_dc6_wa_work);
@@ -4035,8 +4119,7 @@ void intel_psr_notify_dc5_dc6(struct intel_display *display)
  */
 void intel_psr_dc5_dc6_wa_init(struct intel_display *display)
 {
-	if (DISPLAY_VER(display) != 20 &&
-	    !IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
+	if (!intel_display_wa(display, INTEL_DISPLAY_WA_16025596647))
 		return;
 
 	INIT_WORK(&display->psr_dc5_dc6_wa_work, psr_dc5_dc6_wa_work);
@@ -4057,8 +4140,7 @@ void intel_psr_notify_pipe_change(struct intel_atomic_state *state,
 	struct intel_display *display = to_intel_display(state);
 	struct intel_encoder *encoder;
 
-	if (DISPLAY_VER(display) != 20 &&
-	    !IS_DISPLAY_VERx100_STEP(display, 3000, STEP_A0, STEP_B0))
+	if (!intel_display_wa(display, INTEL_DISPLAY_WA_16025596647))
 		return;
 
 	for_each_intel_encoder_with_psr(display->drm, encoder) {
@@ -4112,27 +4194,22 @@ void intel_psr_notify_vblank_enable_disable(struct intel_display *display,
 		struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 
 		mutex_lock(&intel_dp->psr.lock);
-		if (intel_dp->psr.panel_replay_enabled) {
-			mutex_unlock(&intel_dp->psr.lock);
-			break;
+		if (CAN_PANEL_REPLAY(intel_dp)) {
+			if (enable)
+				intel_dp->psr.vblank_wakeref =
+					intel_display_power_get(display,
+								POWER_DOMAIN_DC_OFF);
+			else
+				intel_display_power_put(display, POWER_DOMAIN_DC_OFF,
+							intel_dp->psr.vblank_wakeref);
 		}
 
-		if (intel_dp->psr.enabled && intel_dp->psr.pkg_c_latency_used)
+		if (intel_dp->psr.enabled && !intel_dp->psr.panel_replay_enabled &&
+		    intel_dp->psr.pkg_c_latency_used)
 			intel_psr_apply_underrun_on_idle_wa_locked(intel_dp);
 
 		mutex_unlock(&intel_dp->psr.lock);
-		return;
 	}
-
-	/*
-	 * NOTE: intel_display_power_set_target_dc_state is used
-	 * only by PSR * code for DC3CO handling. DC3CO target
-	 * state is currently disabled in * PSR code. If DC3CO
-	 * is taken into use we need take that into account here
-	 * as well.
-	 */
-	intel_display_power_set_target_dc_state(display, enable ? DC_STATE_DISABLE :
-						DC_STATE_EN_UPTO_DC6);
 }
 
 static void
@@ -4613,4 +4690,22 @@ int intel_psr_min_guardband(struct intel_crtc_state *crtc_state)
 		psr_min_guardband++;
 
 	return psr_min_guardband;
+}
+
+bool intel_psr_use_trans_push(const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+
+	return HAS_PSR_TRANS_PUSH_FRAME_CHANGE(display) && crtc_state->has_psr;
+}
+
+bool intel_psr_pr_async_video_timing_supported(struct intel_dp *intel_dp)
+{
+	struct intel_connector *connector = intel_dp->attached_connector;
+	u8 *dpcd = connector->dp.panel_replay_caps.dpcd;
+	u8 pr_support = dpcd[INTEL_PR_DPCD_INDEX(DP_PANEL_REPLAY_CAP_SUPPORT)];
+	u8 pr_cap = dpcd[INTEL_PR_DPCD_INDEX(DP_PANEL_REPLAY_CAP_CAPABILITY)];
+
+	return (pr_support & DP_PANEL_REPLAY_SUPPORT) &&
+		!(pr_cap & DP_PANEL_REPLAY_ASYNC_VIDEO_TIMING_NOT_SUPPORTED_IN_PR);
 }

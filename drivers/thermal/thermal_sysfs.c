@@ -18,6 +18,7 @@
 #include <linux/err.h>
 #include <linux/slab.h>
 #include <linux/string.h>
+#include <linux/string_choices.h>
 #include <linux/jiffies.h>
 
 #include "thermal_core.h"
@@ -56,10 +57,8 @@ mode_show(struct device *dev, struct device_attribute *attr, char *buf)
 
 	guard(thermal_zone)(tz);
 
-	if (tz->mode == THERMAL_DEVICE_ENABLED)
-		return sysfs_emit(buf, "enabled\n");
-
-	return sysfs_emit(buf, "disabled\n");
+	return sysfs_emit(buf, "%s\n",
+		str_enabled_disabled(tz->mode == THERMAL_DEVICE_ENABLED));
 }
 
 static ssize_t
@@ -83,7 +82,7 @@ mode_store(struct device *dev, struct device_attribute *attr,
 }
 
 #define thermal_trip_of_attr(_ptr_, _attr_)				\
-	({ 								\
+	({								\
 		struct thermal_trip_desc *td;				\
 									\
 		td = container_of(_ptr_, struct thermal_trip_desc,	\
@@ -537,11 +536,9 @@ cur_state_store(struct device *dev, struct device_attribute *attr,
 	unsigned long state;
 	int result;
 
-	if (sscanf(buf, "%ld\n", &state) != 1)
-		return -EINVAL;
-
-	if ((long)state < 0)
-		return -EINVAL;
+	result = kstrtoul(buf, 10, &state);
+	if (result < 0)
+		return result;
 
 	/* Requested state should be less than max_state + 1 */
 	if (state > cdev->max_state)

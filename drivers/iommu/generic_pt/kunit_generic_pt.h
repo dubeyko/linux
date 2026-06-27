@@ -312,6 +312,17 @@ static void test_best_pgsize(struct kunit *test)
 	}
 }
 
+static void test_pgsz_count(struct kunit *test)
+{
+	KUNIT_EXPECT_EQ(test,
+			pt_pgsz_count(SZ_4K, 0, SZ_1G - 1, 0, ilog2(SZ_4K)),
+			SZ_1G / SZ_4K);
+	KUNIT_EXPECT_EQ(test,
+			pt_pgsz_count(SZ_2M | SZ_4K, SZ_4K, SZ_1G - 1, SZ_4K,
+				      ilog2(SZ_4K)),
+			(SZ_2M - SZ_4K) / SZ_4K);
+}
+
 /*
  * Check that pt_install_table() and pt_table_pa() match
  */
@@ -427,6 +438,9 @@ static void test_lvl_possible_sizes(struct kunit *test, struct pt_state *pts,
 {
 	unsigned int num_items_lg2 = safe_pt_num_items_lg2(pts);
 	pt_vaddr_t pgsize_bitmap = pt_possible_sizes(pts);
+	/* Matches get_info() */
+	pt_vaddr_t limited_pgsize_bitmap =
+		log2_mod(pgsize_bitmap, pts->range->common->max_vasz_lg2 - 1);
 	unsigned int isz_lg2 = pt_table_item_lg2sz(pts);
 
 	if (!pt_can_have_leaf(pts)) {
@@ -437,7 +451,8 @@ static void test_lvl_possible_sizes(struct kunit *test, struct pt_state *pts,
 	/* No bits for sizes that would be outside this table */
 	KUNIT_ASSERT_EQ(test, log2_mod(pgsize_bitmap, isz_lg2), 0);
 	KUNIT_ASSERT_EQ(
-		test, fvalog2_div(pgsize_bitmap, num_items_lg2 + isz_lg2), 0);
+		test,
+		fvalog2_div(limited_pgsize_bitmap, num_items_lg2 + isz_lg2), 0);
 
 	/*
 	 * Non contiguous must be supported. AMDv1 has a HW bug where it does
@@ -452,8 +467,8 @@ static void test_lvl_possible_sizes(struct kunit *test, struct pt_state *pts,
 	/* A contiguous entry should not span the whole table */
 	if (num_items_lg2 + isz_lg2 != PT_VADDR_MAX_LG2)
 		KUNIT_ASSERT_FALSE(
-			test,
-			pgsize_bitmap & log2_to_int(num_items_lg2 + isz_lg2));
+			test, limited_pgsize_bitmap &
+					log2_to_int(num_items_lg2 + isz_lg2));
 }
 
 static void test_entry_possible_sizes(struct kunit *test)
@@ -770,6 +785,7 @@ static struct kunit_case generic_pt_test_cases[] = {
 	KUNIT_CASE_FMT(test_init),
 	KUNIT_CASE_FMT(test_bitops),
 	KUNIT_CASE_FMT(test_best_pgsize),
+	KUNIT_CASE_FMT(test_pgsz_count),
 	KUNIT_CASE_FMT(test_table_ptr),
 	KUNIT_CASE_FMT(test_max_va),
 	KUNIT_CASE_FMT(test_table_radix),

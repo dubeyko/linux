@@ -41,7 +41,7 @@ again:
 	if (!pvmw->pte)
 		return false;
 
-	ptent = ptep_get(pvmw->pte);
+	ptent = ptep_get_lockless(pvmw->pte);
 
 	if (pte_none(ptent)) {
 		return false;
@@ -183,6 +183,7 @@ bool page_vma_mapped_walk(struct page_vma_mapped_walk *pvmw)
 	struct mm_struct *mm = vma->vm_mm;
 	unsigned long end;
 	spinlock_t *ptl;
+	pte_t pteval;
 	pgd_t *pgd;
 	p4d_t *p4d;
 	pud_t *pud;
@@ -269,11 +270,6 @@ restart:
 			spin_unlock(pvmw->ptl);
 			pvmw->ptl = NULL;
 		} else if (!pmd_present(pmde)) {
-			/*
-			 * If PVMW_SYNC, take and drop THP pmd lock so that we
-			 * cannot return prematurely, while zap_huge_pmd() has
-			 * cleared *pmd but not decremented compound_mapcount().
-			 */
 			const softleaf_t entry = softleaf_from_pmd(pmde);
 
 			if (softleaf_is_device_private(entry)) {
@@ -284,11 +280,9 @@ restart:
 			if ((pvmw->flags & PVMW_SYNC) &&
 			    thp_vma_suitable_order(vma, pvmw->address,
 						   PMD_ORDER) &&
-			    (pvmw->nr_pages >= HPAGE_PMD_NR)) {
-				spinlock_t *ptl = pmd_lock(mm, pvmw->pmd);
+			    (pvmw->nr_pages >= HPAGE_PMD_NR))
+				sync_with_folio_pmd_zap(mm, pvmw->pmd);
 
-				spin_unlock(ptl);
-			}
 			step_forward(pvmw, PMD_SIZE);
 			continue;
 		}
@@ -317,7 +311,11 @@ next_pte:
 				goto restart;
 			}
 			pvmw->pte++;
-		} while (pte_none(ptep_get(pvmw->pte)));
+			if (!pvmw->ptl)
+				pteval = ptep_get_lockless(pvmw->pte);
+			else
+				pteval = ptep_get(pvmw->pte);
+		} while (pte_none(pteval));
 
 		if (!pvmw->ptl) {
 			spin_lock(ptl);

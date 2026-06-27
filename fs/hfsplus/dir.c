@@ -49,7 +49,7 @@ static struct dentry *hfsplus_lookup(struct inode *dir, struct dentry *dentry,
 	if (unlikely(err < 0))
 		goto fail;
 again:
-	err = hfs_brec_read(&fd, &entry, sizeof(entry));
+	err = hfsplus_brec_read_cat(&fd, &entry);
 	if (err) {
 		if (err == -ENOENT) {
 			hfs_find_exit(&fd);
@@ -185,7 +185,15 @@ static int hfsplus_readdir(struct file *file, struct dir_context *ctx)
 	}
 	if (ctx->pos >= inode->i_size)
 		goto out;
-	err = hfs_brec_goto(&fd, ctx->pos - 1);
+	rd = file->private_data;
+	if (rd && rd->pos == ctx->pos) {
+		memcpy(fd.search_key, &rd->key, sizeof(struct hfsplus_cat_key));
+		err = hfs_brec_find(&fd, hfs_find_rec_by_key);
+		if (err == -ENOENT)
+			err = hfs_brec_goto(&fd, 1);
+	} else {
+		err = hfs_brec_goto(&fd, ctx->pos - 1);
+	}
 	if (err)
 		goto out;
 	for (;;) {
@@ -261,7 +269,6 @@ next:
 		if (err)
 			goto out;
 	}
-	rd = file->private_data;
 	if (!rd) {
 		rd = kmalloc_obj(struct hfsplus_readdir_data);
 		if (!rd) {
@@ -269,15 +276,8 @@ next:
 			goto out;
 		}
 		file->private_data = rd;
-		rd->file = file;
-		spin_lock(&HFSPLUS_I(inode)->open_dir_lock);
-		list_add(&rd->list, &HFSPLUS_I(inode)->open_dir_list);
-		spin_unlock(&HFSPLUS_I(inode)->open_dir_lock);
 	}
-	/*
-	 * Can be done after the list insertion; exclusion with
-	 * hfsplus_delete_cat() is provided by directory lock.
-	 */
+	rd->pos = ctx->pos;
 	memcpy(&rd->key, fd.key, sizeof(struct hfsplus_cat_key));
 out:
 	kfree(strbuf);
@@ -287,13 +287,7 @@ out:
 
 static int hfsplus_dir_release(struct inode *inode, struct file *file)
 {
-	struct hfsplus_readdir_data *rd = file->private_data;
-	if (rd) {
-		spin_lock(&HFSPLUS_I(inode)->open_dir_lock);
-		list_del(&rd->list);
-		spin_unlock(&HFSPLUS_I(inode)->open_dir_lock);
-		kfree(rd);
-	}
+	kfree(file->private_data);
 	return 0;
 }
 
@@ -313,7 +307,7 @@ static int hfsplus_link(struct dentry *src_dentry, struct inode *dst_dir,
 	if (!S_ISREG(inode->i_mode))
 		return -EPERM;
 
-	hfs_dbg("src_dir->i_ino %lu, dst_dir->i_ino %lu, inode->i_ino %lu\n",
+	hfs_dbg("src_dir->i_ino %llu, dst_dir->i_ino %llu, inode->i_ino %llu\n",
 		src_dir->i_ino, dst_dir->i_ino, inode->i_ino);
 
 	mutex_lock(&sbi->vh_mutex);
@@ -385,7 +379,7 @@ static int hfsplus_unlink(struct inode *dir, struct dentry *dentry)
 	if (HFSPLUS_IS_RSRC(inode))
 		return -EPERM;
 
-	hfs_dbg("dir->i_ino %lu, inode->i_ino %lu\n",
+	hfs_dbg("dir->i_ino %llu, inode->i_ino %llu\n",
 		dir->i_ino, inode->i_ino);
 
 	mutex_lock(&sbi->vh_mutex);
@@ -393,7 +387,7 @@ static int hfsplus_unlink(struct inode *dir, struct dentry *dentry)
 	if (inode->i_ino == cnid &&
 	    atomic_read(&HFSPLUS_I(inode)->opencnt)) {
 		str.name = name;
-		str.len = sprintf(name, "temp%lu", inode->i_ino);
+		str.len = sprintf(name, "temp%llu", inode->i_ino);
 		res = hfsplus_rename_cat(inode->i_ino,
 					 dir, &dentry->d_name,
 					 sbi->hidden_dir, &str);
@@ -478,6 +472,9 @@ static int hfsplus_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	if (!inode)
 		goto out;
 
+	hfs_dbg("dir->i_ino %llu, inode->i_ino %llu\n",
+		dir->i_ino, inode->i_ino);
+
 	res = page_symlink(inode, symname, strlen(symname) + 1);
 	if (res)
 		goto out_err;
@@ -525,6 +522,9 @@ static int hfsplus_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	inode = hfsplus_new_inode(dir->i_sb, dir, mode);
 	if (!inode)
 		goto out;
+
+	hfs_dbg("dir->i_ino %llu, inode->i_ino %llu\n",
+		dir->i_ino, inode->i_ino);
 
 	if (S_ISBLK(mode) || S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode))
 		init_special_inode(inode, mode, rdev);
@@ -597,11 +597,22 @@ static int hfsplus_rename(struct mnt_idmap *idmap,
 				 old_dir, &old_dentry->d_name,
 				 new_dir, &new_dentry->d_name);
 	if (!res) {
+		struct inode *inode = d_inode(old_dentry);
+
 		new_dentry->d_fsdata = old_dentry->d_fsdata;
 
+		inode_set_ctime_current(inode);
+		mark_inode_dirty(inode);
+
 		res = hfsplus_cat_write_inode(old_dir);
-		if (!res)
-			res = hfsplus_cat_write_inode(new_dir);
+		if (res)
+			return res;
+
+		res = hfsplus_cat_write_inode(new_dir);
+		if (res)
+			return res;
+
+		res = hfsplus_cat_write_inode(inode);
 	}
 	return res;
 }

@@ -3,42 +3,23 @@
  * Copyright © 2021 Intel Corporation
  */
 
-/* for ioread64 */
-#include <linux/io-64-nonatomic-lo-hi.h>
-
 #include <drm/intel/display_parent_interface.h>
 
 #include "regs/xe_gtt_defs.h"
+
+/* FIXME move intel_remapped_info_size() & co. */
+#include "intel_fb.h"
+
+/* FIXME move intel_initial_plane_config */
+#include "intel_display_types.h"
+
+#include "xe_bo.h"
+#include "xe_display_bo.h"
+#include "xe_display_vma.h"
+#include "xe_fb_pin.h"
 #include "xe_ggtt.h"
 #include "xe_mmio.h"
-
-#include "i915_vma.h"
-#include "intel_crtc.h"
-#include "intel_display_regs.h"
-#include "intel_display_types.h"
-#include "intel_fb.h"
-#include "intel_fb_pin.h"
-#include "xe_bo.h"
 #include "xe_vram_types.h"
-#include "xe_wa.h"
-
-#include <generated/xe_device_wa_oob.h>
-
-/* Early xe has no irq */
-static void xe_initial_plane_vblank_wait(struct drm_crtc *_crtc)
-{
-	struct intel_crtc *crtc = to_intel_crtc(_crtc);
-	struct xe_device *xe = to_xe_device(crtc->base.dev);
-	struct xe_reg pipe_frmtmstmp = XE_REG(i915_mmio_reg_offset(PIPE_FRMTMSTMP(crtc->pipe)));
-	u32 timestamp;
-	int ret;
-
-	timestamp = xe_mmio_read32(xe_root_tile_mmio(xe), pipe_frmtmstmp);
-
-	ret = xe_mmio_wait32_not(xe_root_tile_mmio(xe), pipe_frmtmstmp, ~0U, timestamp, 40000U, &timestamp, false);
-	if (ret < 0)
-		drm_warn(&xe->drm, "waiting for early vblank failed with %i\n", ret);
-}
 
 static struct xe_bo *
 initial_plane_bo(struct xe_device *xe,
@@ -53,7 +34,7 @@ initial_plane_bo(struct xe_device *xe,
 	if (plane_config->size == 0)
 		return NULL;
 
-	flags = XE_BO_FLAG_SCANOUT | XE_BO_FLAG_GGTT;
+	flags = XE_BO_FLAG_FORCE_WC | XE_BO_FLAG_GGTT;
 
 	base = round_down(plane_config->base, page_size);
 	if (IS_DGFX(xe)) {
@@ -90,17 +71,12 @@ initial_plane_bo(struct xe_device *xe,
 		phys_base = base;
 		flags |= XE_BO_FLAG_STOLEN;
 
-		if (XE_DEVICE_WA(xe, 22019338487_display))
-			return NULL;
-
-		/*
-		 * If the FB is too big, just don't use it since fbdev is not very
-		 * important and we should probably use that space with FBC or other
-		 * features.
-		 */
 		if (IS_ENABLED(CONFIG_FRAMEBUFFER_CONSOLE) &&
-		    plane_config->size * 2 >> PAGE_SHIFT >= stolen->size)
+		    IS_ENABLED(CONFIG_DRM_FBDEV_EMULATION) &&
+		    !xe_display_bo_fbdev_prefer_stolen(xe, plane_config->size)) {
+			drm_info(&xe->drm, "Initial FB size exceeds half of stolen, discarding\n");
 			return NULL;
+		}
 	}
 
 	size = round_up(plane_config->base + plane_config->size,
@@ -125,7 +101,7 @@ xe_alloc_initial_plane_obj(struct drm_device *drm,
 {
 	struct xe_device *xe = to_xe_device(drm);
 	struct drm_mode_fb_cmd2 mode_cmd = { 0 };
-	struct drm_framebuffer *fb = &plane_config->fb->base;
+	struct drm_framebuffer *fb = plane_config->fb;
 	struct xe_bo *bo;
 
 	mode_cmd.pixel_format = fb->format->format;
@@ -162,15 +138,19 @@ xe_initial_plane_setup(struct drm_plane_state *_plane_state,
 {
 	struct intel_plane_state *plane_state = to_intel_plane_state(_plane_state);
 	struct i915_vma *vma;
+	struct intel_fb_pin_params pin_params = {
+		.view = &plane_state->view.gtt,
+	};
+	u32 offset;
+	int ret;
 
-	vma = intel_fb_pin_to_ggtt(fb, &plane_state->view.gtt,
-				   0, 0, 0, false, &plane_state->flags);
-	if (IS_ERR(vma))
-		return PTR_ERR(vma);
+	ret = xe_fb_pin_ggtt_pin(intel_fb_bo(fb), &pin_params, &vma, &offset, NULL);
+	if (ret)
+		return ret;
 
 	plane_state->ggtt_vma = vma;
 
-	plane_state->surf = i915_ggtt_offset(plane_state->ggtt_vma);
+	plane_state->surf = offset;
 
 	plane_config->vma = vma;
 
@@ -182,7 +162,6 @@ static void xe_plane_config_fini(struct intel_initial_plane_config *plane_config
 }
 
 const struct intel_display_initial_plane_interface xe_display_initial_plane_interface = {
-	.vblank_wait = xe_initial_plane_vblank_wait,
 	.alloc_obj = xe_alloc_initial_plane_obj,
 	.setup = xe_initial_plane_setup,
 	.config_fini = xe_plane_config_fini,

@@ -75,7 +75,7 @@ struct resource *platform_get_mem_or_io(struct platform_device *dev,
 	for (i = 0; i < dev->num_resources; i++) {
 		struct resource *r = &dev->resource[i];
 
-		if ((resource_type(r) & (IORESOURCE_MEM|IORESOURCE_IO)) && num-- == 0)
+		if ((resource_type(r) & (IORESOURCE_MEM | IORESOURCE_IO)) && num-- == 0)
 			return r;
 	}
 	return NULL;
@@ -97,7 +97,7 @@ EXPORT_SYMBOL_GPL(platform_get_mem_or_io);
  */
 void __iomem *
 devm_platform_get_and_ioremap_resource(struct platform_device *pdev,
-				unsigned int index, struct resource **res)
+				       unsigned int index, struct resource **res)
 {
 	struct resource *r;
 
@@ -172,7 +172,7 @@ static const struct cpumask *get_irq_affinity(struct platform_device *dev,
  * @num:	interrupt number index
  * @affinity:	optional cpumask pointer to get the affinity of a per-cpu interrupt
  *
- * Gets an interupt for a platform device. Device drivers should check the
+ * Gets an interrupt for a platform device. Device drivers should check the
  * return value for errors so as to not pass a negative integer value to
  * the request_irq() APIs. Optional affinity information is provided in the
  * affinity pointer if available, and NULL otherwise.
@@ -606,6 +606,12 @@ static void platform_device_release(struct device *dev)
 	kfree(pa);
 }
 
+static void platform_device_release_full(struct device *dev)
+{
+	device_remove_software_node(dev);
+	platform_device_release(dev);
+}
+
 /**
  * platform_device_alloc - create a platform device
  * @name: base name of the device we're adding
@@ -843,11 +849,19 @@ EXPORT_SYMBOL_GPL(platform_device_unregister);
  *
  * Returns &struct platform_device pointer on success, or ERR_PTR() on error.
  */
-struct platform_device *platform_device_register_full(
-		const struct platform_device_info *pdevinfo)
+struct platform_device *platform_device_register_full(const struct platform_device_info *pdevinfo)
 {
 	int ret;
 	struct platform_device *pdev;
+
+	/*
+	 * Only one software node per device is allowed. Make sure we don't
+	 * accept or create two.
+	 */
+	if ((pdevinfo->swnode && pdevinfo->properties) ||
+	    (pdevinfo->swnode && is_software_node(pdevinfo->fwnode)) ||
+	    (pdevinfo->properties && is_software_node(pdevinfo->fwnode)))
+		return ERR_PTR(-EINVAL);
 
 	pdev = platform_device_alloc(pdevinfo->name, pdevinfo->id);
 	if (!pdev)
@@ -856,7 +870,7 @@ struct platform_device *platform_device_register_full(
 	pdev->dev.parent = pdevinfo->parent;
 	pdev->dev.fwnode = pdevinfo->fwnode;
 	pdev->dev.of_node = of_node_get(to_of_node(pdev->dev.fwnode));
-	pdev->dev.of_node_reused = pdevinfo->of_node_reused;
+	dev_assign_of_node_reused(&pdev->dev, pdevinfo->of_node_reused);
 
 	if (pdevinfo->dma_mask) {
 		pdev->platform_dma_mask = pdevinfo->dma_mask;
@@ -864,17 +878,21 @@ struct platform_device *platform_device_register_full(
 		pdev->dev.coherent_dma_mask = pdevinfo->dma_mask;
 	}
 
-	ret = platform_device_add_resources(pdev,
-			pdevinfo->res, pdevinfo->num_res);
+	ret = platform_device_add_resources(pdev, pdevinfo->res, pdevinfo->num_res);
 	if (ret)
 		goto err;
 
-	ret = platform_device_add_data(pdev,
-			pdevinfo->data, pdevinfo->size_data);
+	ret = platform_device_add_data(pdev, pdevinfo->data, pdevinfo->size_data);
 	if (ret)
 		goto err;
 
-	if (pdevinfo->properties) {
+	if (pdevinfo->swnode) {
+		ret = device_add_software_node(&pdev->dev, pdevinfo->swnode);
+		if (ret)
+			goto err;
+
+		pdev->dev.release = platform_device_release_full;
+	} else if (pdevinfo->properties) {
 		ret = device_create_managed_software_node(&pdev->dev,
 							  pdevinfo->properties, NULL);
 		if (ret)
@@ -897,12 +915,14 @@ EXPORT_SYMBOL_GPL(platform_device_register_full);
  * __platform_driver_register - register a driver for platform-level devices
  * @drv: platform driver structure
  * @owner: owning module/driver
+ * @mod_name: module name string
  */
-int __platform_driver_register(struct platform_driver *drv,
-				struct module *owner)
+int __platform_driver_register(struct platform_driver *drv, struct module *owner,
+			       const char *mod_name)
 {
 	drv->driver.owner = owner;
 	drv->driver.bus = &platform_bus_type;
+	drv->driver.mod_name = mod_name;
 
 	return driver_register(&drv->driver);
 }
@@ -935,6 +955,7 @@ static int is_bound_to_driver(struct device *dev, void *driver)
  * @drv: platform driver structure
  * @probe: the driver probe routine, probably from an __init section
  * @module: module which will be the owner of the driver
+ * @mod_name: module name string
  *
  * Use this instead of platform_driver_register() when you know the device
  * is not hotpluggable and has already been registered, and you want to
@@ -951,13 +972,15 @@ static int is_bound_to_driver(struct device *dev, void *driver)
  * a negative error code and with the driver not registered.
  */
 int __init_or_module __platform_driver_probe(struct platform_driver *drv,
-		int (*probe)(struct platform_device *), struct module *module)
+					     int (*probe)(struct platform_device *),
+					     struct module *module,
+					     const char *mod_name)
 {
 	int retval;
 
 	if (drv->driver.probe_type == PROBE_PREFER_ASYNCHRONOUS) {
 		pr_err("%s: drivers registered with %s can not be probed asynchronously\n",
-			 drv->driver.name, __func__);
+		       drv->driver.name, __func__);
 		return -EINVAL;
 	}
 
@@ -979,7 +1002,7 @@ int __init_or_module __platform_driver_probe(struct platform_driver *drv,
 
 	/* temporary section violation during probe() */
 	drv->probe = probe;
-	retval = __platform_driver_register(drv, module);
+	retval = __platform_driver_register(drv, module, mod_name);
 	if (retval)
 		return retval;
 
@@ -1007,17 +1030,18 @@ EXPORT_SYMBOL_GPL(__platform_driver_probe);
  * @data: platform specific data for this platform device
  * @size: size of platform specific data
  * @module: module which will be the owner of the driver
+ * @mod_name: module name string
  *
  * Use this in legacy-style modules that probe hardware directly and
  * register a single platform device and corresponding platform driver.
  *
  * Returns &struct platform_device pointer on success, or ERR_PTR() on error.
  */
-struct platform_device * __init_or_module __platform_create_bundle(
-			struct platform_driver *driver,
-			int (*probe)(struct platform_device *),
-			struct resource *res, unsigned int n_res,
-			const void *data, size_t size, struct module *module)
+struct platform_device * __init_or_module
+__platform_create_bundle(struct platform_driver *driver,
+			 int (*probe)(struct platform_device *),
+			 struct resource *res, unsigned int n_res,
+			 const void *data, size_t size, struct module *module, const char *mod_name)
 {
 	struct platform_device *pdev;
 	int error;
@@ -1040,7 +1064,7 @@ struct platform_device * __init_or_module __platform_create_bundle(
 	if (error)
 		goto err_pdev_put;
 
-	error = __platform_driver_probe(driver, probe, module);
+	error = __platform_driver_probe(driver, probe, module, mod_name);
 	if (error)
 		goto err_pdev_del;
 
@@ -1060,6 +1084,7 @@ EXPORT_SYMBOL_GPL(__platform_create_bundle);
  * @drivers: an array of drivers to register
  * @count: the number of drivers to register
  * @owner: module owning the drivers
+ * @mod_name: module name string
  *
  * Registers platform drivers specified by an array. On failure to register a
  * driver, all previously registered drivers will be unregistered. Callers of
@@ -1069,7 +1094,7 @@ EXPORT_SYMBOL_GPL(__platform_create_bundle);
  * Returns: 0 on success or a negative error code on failure.
  */
 int __platform_register_drivers(struct platform_driver * const *drivers,
-				unsigned int count, struct module *owner)
+				unsigned int count, struct module *owner, const char *mod_name)
 {
 	unsigned int i;
 	int err;
@@ -1077,7 +1102,7 @@ int __platform_register_drivers(struct platform_driver * const *drivers,
 	for (i = 0; i < count; i++) {
 		pr_debug("registering platform driver %ps\n", drivers[i]);
 
-		err = __platform_driver_register(drivers[i], owner);
+		err = __platform_driver_register(drivers[i], owner, mod_name);
 		if (err < 0) {
 			pr_err("failed to register platform driver %ps: %d\n",
 			       drivers[i], err);
@@ -1116,9 +1141,8 @@ void platform_unregister_drivers(struct platform_driver * const *drivers,
 }
 EXPORT_SYMBOL_GPL(platform_unregister_drivers);
 
-static const struct platform_device_id *platform_match_id(
-			const struct platform_device_id *id,
-			struct platform_device *pdev)
+static const struct platform_device_id *
+platform_match_id(const struct platform_device_id *id, struct platform_device *pdev)
 {
 	while (id->name[0]) {
 		if (strcmp(pdev->name, id->name) == 0) {
@@ -1311,13 +1335,12 @@ static struct attribute *platform_dev_attrs[] = {
 	NULL,
 };
 
-static umode_t platform_dev_attrs_visible(struct kobject *kobj, struct attribute *a,
-		int n)
+static umode_t platform_dev_attrs_visible(struct kobject *kobj,
+					  struct attribute *a, int n)
 {
 	struct device *dev = container_of(kobj, typeof(*dev), kobj);
 
-	if (a == &dev_attr_numa_node.attr &&
-			dev_to_node(dev) == NUMA_NO_NODE)
+	if (a == &dev_attr_numa_node.attr && dev_to_node(dev) == NUMA_NO_NODE)
 		return 0;
 
 	return a->mode;
@@ -1328,7 +1351,6 @@ static const struct attribute_group platform_dev_group = {
 	.is_visible = platform_dev_attrs_visible,
 };
 __ATTRIBUTE_GROUPS(platform_dev);
-
 
 /**
  * platform_match - bind platform device to platform driver.
@@ -1384,8 +1406,7 @@ static int platform_uevent(const struct device *dev, struct kobj_uevent_env *env
 	if (rc != -ENODEV)
 		return rc;
 
-	add_uevent_var(env, "MODALIAS=%s%s", PLATFORM_MODULE_PREFIX,
-			pdev->name);
+	add_uevent_var(env, "MODALIAS=%s%s", PLATFORM_MODULE_PREFIX, pdev->name);
 	return 0;
 }
 

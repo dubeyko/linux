@@ -454,6 +454,16 @@ static const struct dpu_dsc_sub_blks dsc_sblk_1 = {
 	.ctl = {.name = "ctl", .base = 0xF80, .len = 0x10},
 };
 
+static const struct dpu_dsc_sub_blks milos_dsc_sblk_0 = {
+	.enc = {.name = "enc", .base = 0x100, .len = 0x100},
+	.ctl = {.name = "ctl", .base = 0xF00, .len = 0x80},
+};
+
+static const struct dpu_dsc_sub_blks milos_dsc_sblk_1 = {
+	.enc = {.name = "enc", .base = 0x200, .len = 0x100},
+	.ctl = {.name = "ctl", .base = 0xF80, .len = 0x80},
+};
+
 static const struct dpu_dsc_sub_blks sm8750_dsc_sblk_0 = {
 	.enc = {.name = "enc", .base = 0x100, .len = 0x100},
 	.ctl = {.name = "ctl", .base = 0xF00, .len = 0x24},
@@ -513,10 +523,25 @@ static const struct dpu_vbif_dynamic_ot_cfg msm8998_ot_rdwr_cfg[] = {
 	},
 };
 
-static const struct dpu_vbif_cfg msm8996_vbif[] = {
-	{
-	.name = "vbif_rt", .id = VBIF_RT,
-	.base = 0, .len = 0x1040,
+static const struct dpu_vbif_cfg milos_vbif = {
+	.len = 0x1074,
+	.features = BIT(DPU_VBIF_QOS_REMAP),
+	.xin_halt_timeout = 0x4000,
+	.qos_rp_remap_size = 0x40,
+	.qos_rt_tbl = {
+		.npriority_lvl = ARRAY_SIZE(sdm845_rt_pri_lvl),
+		.priority_lvl = sdm845_rt_pri_lvl,
+		},
+	.qos_nrt_tbl = {
+		.npriority_lvl = ARRAY_SIZE(sdm845_nrt_pri_lvl),
+		.priority_lvl = sdm845_nrt_pri_lvl,
+		},
+	.memtype_count = 16,
+	.memtype = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
+};
+
+static const struct dpu_vbif_cfg msm8996_vbif = {
+	.len = 0x1040,
 	.default_ot_rd_limit = 32,
 	.default_ot_wr_limit = 16,
 	.features = BIT(DPU_VBIF_QOS_REMAP) | BIT(DPU_VBIF_QOS_OTLIM),
@@ -538,13 +563,10 @@ static const struct dpu_vbif_cfg msm8996_vbif[] = {
 		.npriority_lvl = ARRAY_SIZE(msm8998_nrt_pri_lvl),
 		.priority_lvl = msm8998_nrt_pri_lvl,
 		},
-	},
 };
 
-static const struct dpu_vbif_cfg msm8998_vbif[] = {
-	{
-	.name = "vbif_rt", .id = VBIF_RT,
-	.base = 0, .len = 0x1040,
+static const struct dpu_vbif_cfg msm8998_vbif = {
+	.len = 0x1040,
 	.default_ot_rd_limit = 32,
 	.default_ot_wr_limit = 32,
 	.features = BIT(DPU_VBIF_QOS_REMAP) | BIT(DPU_VBIF_QOS_OTLIM),
@@ -568,13 +590,10 @@ static const struct dpu_vbif_cfg msm8998_vbif[] = {
 		},
 	.memtype_count = 14,
 	.memtype = {2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2},
-	},
 };
 
-static const struct dpu_vbif_cfg sdm845_vbif[] = {
-	{
-	.name = "vbif_rt", .id = VBIF_RT,
-	.base = 0, .len = 0x1040,
+static const struct dpu_vbif_cfg sdm845_vbif = {
+	.len = 0x1040,
 	.features = BIT(DPU_VBIF_QOS_REMAP),
 	.xin_halt_timeout = 0x4000,
 	.qos_rp_remap_size = 0x40,
@@ -588,13 +607,10 @@ static const struct dpu_vbif_cfg sdm845_vbif[] = {
 		},
 	.memtype_count = 14,
 	.memtype = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
-	},
 };
 
-static const struct dpu_vbif_cfg sm8550_vbif[] = {
-	{
-	.name = "vbif_rt", .id = VBIF_RT,
-	.base = 0, .len = 0x1040,
+static const struct dpu_vbif_cfg sm8550_vbif = {
+	.len = 0x1040,
 	.features = BIT(DPU_VBIF_QOS_REMAP),
 	.xin_halt_timeout = 0x4000,
 	.qos_rp_remap_size = 0x40,
@@ -608,13 +624,10 @@ static const struct dpu_vbif_cfg sm8550_vbif[] = {
 		},
 	.memtype_count = 16,
 	.memtype = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
-	},
 };
 
-static const struct dpu_vbif_cfg sm8650_vbif[] = {
-	{
-	.name = "vbif_rt", .id = VBIF_RT,
-	.base = 0, .len = 0x1074,
+static const struct dpu_vbif_cfg sm8650_vbif = {
+	.len = 0x1074,
 	.features = BIT(DPU_VBIF_QOS_REMAP),
 	.xin_halt_timeout = 0x4000,
 	.qos_rp_remap_size = 0x40,
@@ -628,7 +641,6 @@ static const struct dpu_vbif_cfg sm8650_vbif[] = {
 		},
 	.memtype_count = 16,
 	.memtype = {3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3},
-	},
 };
 
 /*************************************************************
@@ -769,6 +781,9 @@ static const struct dpu_qos_lut_entry sc7180_qos_nrt[] = {
 #include "catalog/dpu_9_2_x1e80100.h"
 
 #include "catalog/dpu_10_0_sm8650.h"
+#include "catalog/dpu_10_2_milos.h"
+
 #include "catalog/dpu_12_0_sm8750.h"
 #include "catalog/dpu_12_2_glymur.h"
+#include "catalog/dpu_12_4_eliza.h"
 #include "catalog/dpu_13_0_kaanapali.h"

@@ -215,6 +215,14 @@ related to allocation:
 			# cat /sys/fs/resctrl/info/L3/io_alloc_cbm
 			0=00ff;1=000f
 
+		An ID of "*" configures all domains with the provided CBM.
+
+		Example on a system that does not require a minimum number of consecutive bits in the mask::
+
+			# echo "*=0" > /sys/fs/resctrl/info/L3/io_alloc_cbm
+			# cat /sys/fs/resctrl/info/L3/io_alloc_cbm
+			0=0;1=0
+
 		When CDP is enabled "io_alloc_cbm" associated with the CDP_DATA and CDP_CODE
 		resources may reflect the same values. For example, values read from and
 		written to /sys/fs/resctrl/info/L3DATA/io_alloc_cbm may be reflected by
@@ -419,9 +427,9 @@ with the following files:
 
 	Two MBM events are supported by default: mbm_local_bytes and mbm_total_bytes.
 	Each MBM event's sub-directory contains a file named "event_filter" that is
-	used to view and modify which memory transactions the MBM event is configured
-	with. The file is accessible only when "mbm_event" counter assignment mode is
-	enabled.
+	used to view and (if writable) modify which memory transactions the MBM event
+	is configured with. The file is accessible only when "mbm_event" counter
+	assignment mode is enabled.
 
 	List of memory transaction types supported:
 
@@ -446,9 +454,8 @@ with the following files:
 	  # cat /sys/fs/resctrl/info/L3_MON/event_configs/mbm_local_bytes/event_filter
 	  local_reads,local_non_temporal_writes,local_reads_slow_memory
 
-	Modify the event configuration by writing to the "event_filter" file within
-	the "event_configs" directory. The read/write "event_filter" file contains the
-	configuration of the event that reflects which memory transactions are counted by it.
+	The memory transactions the MBM event is configured with can be changed
+	if "event_filter" is writable.
 
 	For example::
 
@@ -471,6 +478,12 @@ with the following files:
 		Auto assignment is disabled.
 	"1":
 		Auto assignment is enabled.
+
+	Automatic counter assignment is done with best effort. If auto
+	assignment is enabled but there are not enough available counters then
+	monitor group creation could succeed while one or more events belonging
+	to the group may not have a counter assigned in all domains. Consult
+	mbm_L3_assignments for counter assignment states of the new groups.
 
 	Example::
 
@@ -562,6 +575,11 @@ All groups contain the following files:
 	then the task must already belong to the CTRL_MON parent of this
 	group. The task is removed from any previous MON group.
 
+	When writing to this file, a task id of 0 is interpreted as the
+	task id of the currently running task. On reading the file, a task
+	id of 0 will never be shown and there is no representation of the
+	idle tasks. Instead, a CPU's idle task is always considered as a
+	member of the group owning the CPU.
 
 "cpus":
 	Reading this file shows a bitmask of the logical CPUs owned by

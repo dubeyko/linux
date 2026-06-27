@@ -558,7 +558,8 @@ __description("arsh32 imm sign negative extend check")
 __success __retval(0)
 __log_level(2)
 __msg("3: (17) r6 -= 4095                    ; R6=scalar(smin=smin32=-4095,smax=smax32=0)")
-__msg("4: (67) r6 <<= 32                     ; R6=scalar(smin=0xfffff00100000000,smax=smax32=umax32=0,umax=0xffffffff00000000,smin32=0,var_off=(0x0; 0xffffffff00000000))")
+__msg("4: (67) r6 <<= 32                     ; R6=scalar(smin=0xfffff00100000000,smax=smax32=umax32=0,smin32=0,var_off=(0x0; 0xffffffff00000000))")
+/* represents shorter of signed / unsigned 64-bit ranges */
 __msg("5: (c7) r6 s>>= 32                    ; R6=scalar(smin=smin32=-4095,smax=smax32=0)")
 __naked void arsh32_imm_sign_extend_negative_check(void)
 {
@@ -581,7 +582,8 @@ __description("arsh32 imm sign extend check")
 __success __retval(0)
 __log_level(2)
 __msg("3: (17) r6 -= 2047                    ; R6=scalar(smin=smin32=-2047,smax=smax32=2048)")
-__msg("4: (67) r6 <<= 32                     ; R6=scalar(smin=0xfffff80100000000,smax=0x80000000000,umax=0xffffffff00000000,smin32=0,smax32=umax32=0,var_off=(0x0; 0xffffffff00000000))")
+__msg("4: (67) r6 <<= 32                     ; R6=scalar(smin=0xfffff80100000000,smax=0x80000000000,smin32=0,smax32=umax32=0,var_off=(0x0; 0xffffffff00000000))")
+/* represents shorter of signed / unsigned 64-bit ranges */
 __msg("5: (c7) r6 s>>= 32                    ; R6=scalar(smin=smin32=-2047,smax=smax32=2048)")
 __naked void arsh32_imm_sign_extend_check(void)
 {
@@ -817,6 +819,171 @@ __naked void arsh_63_or(void)
 	if r2 == -1 goto +1;				\
 	r0 /= 0;					\
 	r0 = 0;						\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(42)
+__naked void arsh32_imm1_value(void)
+{
+	asm volatile ("					\
+	r0 = 42;					\
+	r1 = -2147483648;				\
+	w1 s>>= 1;		/* r1 = 0xC0000000 */	\
+	r2 = 0xC0000000 ll;				\
+	if r1 == r2 goto l0_%=;			\
+	r0 /= 0;		/* unreachable */	\
+l0_%=:	exit;						\
+"	:
+	:
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(1)
+__naked void lsh32_reg0_zero_extend_check(void)
+{
+	asm volatile ("					\
+	r6 = 1;						\
+	call %[bpf_get_prandom_u32];			\
+	r1 = 0x1000000000 ll;				\
+	r0 |= r1;					\
+	w1 = 0;						\
+	w0 <<= w1;		/* reg shift by 0 */	\
+	r0 >>= 32;		/* must be 0 */		\
+	if r0 == 0 goto l0_%=;				\
+	r6 /= 0;		/* unreachable */	\
+l0_%=:	r0 = r6;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(1)
+__naked void rsh32_reg0_zero_extend_check(void)
+{
+	asm volatile ("					\
+	r6 = 1;						\
+	call %[bpf_get_prandom_u32];			\
+	r1 = 0x1000000000 ll;				\
+	r0 |= r1;					\
+	w1 = 0;						\
+	w0 >>= w1;		/* reg rsh by 0 */	\
+	r0 >>= 32;		/* must be 0 */		\
+	if r0 == 0 goto l0_%=;				\
+	r6 /= 0;		/* unreachable */	\
+l0_%=:	r0 = r6;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(1)
+__naked void arsh32_reg0_zero_extend_check(void)
+{
+	asm volatile ("					\
+	r6 = 1;						\
+	call %[bpf_get_prandom_u32];			\
+	r1 = 0x1000000000 ll;				\
+	r0 |= r1;					\
+	w1 = 0;						\
+	w0 s>>= w1;		/* reg arsh by 0 */	\
+	r0 >>= 32;		/* must be 0 */		\
+	if r0 == 0 goto l0_%=;				\
+	r6 /= 0;		/* unreachable */	\
+l0_%=:	r0 = r6;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(42)
+__naked void lsh32_imm31_value(void)
+{
+	asm volatile ("					\
+	r0 = 42;					\
+	r1 = 1;						\
+	w1 <<= 31;		/* r1 = 0x80000000 */	\
+	r2 = 0x80000000 ll;				\
+	if r1 == r2 goto l0_%=;			\
+	r0 /= 0;		/* unreachable */	\
+l0_%=:	exit;						\
+"	:
+	:
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(42)
+__naked void rsh32_imm31_value(void)
+{
+	asm volatile ("					\
+	r0 = 42;					\
+	r1 = -2147483648;	/* 0x80000000 */	\
+	w1 >>= 31;		/* r1 = 1 */		\
+	if r1 == 1 goto l0_%=;				\
+	r0 /= 0;		/* unreachable */	\
+l0_%=:	exit;						\
+"	:
+	:
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(42)
+__naked void arsh32_imm31_value(void)
+{
+	asm volatile ("					\
+	r0 = 42;					\
+	r1 = -2147483648;	/* 0x80000000 */	\
+	w1 s>>= 31;		/* r1 = 0xFFFFFFFF */	\
+	r2 = 0xFFFFFFFF ll;				\
+	if r1 == r2 goto l0_%=;			\
+	r0 /= 0;		/* unreachable */	\
+l0_%=:	exit;						\
+"	:
+	:
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(1)
+__naked void lsh32_unknown_precise_bounds(void)
+{
+	asm volatile ("					\
+	r6 = 1;						\
+	call %[bpf_get_prandom_u32];			\
+	w0 &= 3;		/* u32: [0, 3] */	\
+	w0 <<= 1;		/* u32: [0, 6] */	\
+	if w0 < 7 goto l0_%=;				\
+	r6 /= 0;		/* unreachable */	\
+l0_%=:	r0 = r6;					\
+	exit;						\
+"	:
+	: __imm(bpf_get_prandom_u32)
+	: __clobber_all);
+}
+
+SEC("socket")
+__success __retval(1)
+__naked void rsh32_unknown_bounds(void)
+{
+	asm volatile ("					\
+	r6 = 1;						\
+	call %[bpf_get_prandom_u32];			\
+	w0 >>= 28;		/* u32: [0, 15] */	\
+	if w0 < 16 goto l0_%=;				\
+	r6 /= 0;		/* unreachable */	\
+l0_%=:	r0 = r6;					\
 	exit;						\
 "	:
 	: __imm(bpf_get_prandom_u32)

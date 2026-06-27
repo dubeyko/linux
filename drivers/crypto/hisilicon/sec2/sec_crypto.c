@@ -20,7 +20,7 @@
 #include "sec.h"
 #include "sec_crypto.h"
 
-#define SEC_PRIORITY		4001
+#define SEC_PRIORITY		80
 #define SEC_XTS_MIN_KEY_SIZE	(2 * AES_MIN_KEY_SIZE)
 #define SEC_XTS_MID_KEY_SIZE	(3 * AES_MIN_KEY_SIZE)
 #define SEC_XTS_MAX_KEY_SIZE	(2 * AES_MAX_KEY_SIZE)
@@ -230,7 +230,7 @@ static int qp_send_message(struct sec_req *req)
 
 	spin_unlock_bh(&qp_ctx->req_lock);
 
-	atomic64_inc(&req->ctx->sec->debug.dfx.send_cnt);
+	atomic64_inc(&qp_ctx->ctx->sec->debug.dfx.send_cnt);
 	return -EINPROGRESS;
 }
 

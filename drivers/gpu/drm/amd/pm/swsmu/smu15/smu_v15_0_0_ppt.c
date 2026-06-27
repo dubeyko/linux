@@ -227,8 +227,13 @@ static int smu_v15_0_0_system_features_control(struct smu_context *smu, bool en)
 	struct amdgpu_device *adev = smu->adev;
 	int ret = 0;
 
-	if (!en && !adev->in_s0ix)
+	if (!en && !adev->in_s0ix) {
 		ret = smu_cmn_send_smc_msg(smu, SMU_MSG_PrepareMp1ForUnload, NULL);
+
+		/* SMU resets BIF_FB_EN to zero, re-enable MC access on APUs with SMU V15 */
+		if (!ret && adev->nbio.funcs && adev->nbio.funcs->mc_access_enable)
+			adev->nbio.funcs->mc_access_enable(adev, true);
+	}
 
 	return ret;
 }
@@ -248,7 +253,7 @@ static int smu_v15_0_0_update_table(struct smu_context *smu,
 	uint64_t address;
 	uint32_t table_size;
 	int ret;
-	struct smu_msg_ctl *ctl = &smu->msg_ctl;
+	uint32_t params[3];
 
 	if (!table_data || table_index >= SMU_TABLE_COUNT || table_id < 0)
 		return -EINVAL;
@@ -265,20 +270,15 @@ static int smu_v15_0_0_update_table(struct smu_context *smu,
 	}
 
 	address = table->mc_address;
+	params[0] = table_id;
+	params[1] = (uint32_t)lower_32_bits(address);
+	params[2] = (uint32_t)upper_32_bits(address);
 
-	struct smu_msg_args args = {
-		.msg = drv2smu ?
-				SMU_MSG_TransferTableDram2Smu :
-				SMU_MSG_TransferTableSmu2Dram,
-		.num_args = 3,
-		.num_out_args = 0,
-	};
-
-	args.args[0] = table_id;
-	args.args[1] = (uint32_t)lower_32_bits(address);
-	args.args[2] = (uint32_t)upper_32_bits(address);
-
-	ret = ctl->ops->send_msg(ctl, &args);
+	ret = smu_cmn_send_smc_msg_with_params(smu,
+					       drv2smu ? SMU_MSG_TransferTableDram2Smu :
+					       SMU_MSG_TransferTableSmu2Dram,
+					       params, ARRAY_SIZE(params),
+					       NULL, 0);
 
 	if (ret)
 		return ret;
@@ -535,22 +535,19 @@ static int smu_v15_0_0_read_sensor(struct smu_context *smu,
 static int smu_v15_0_0_get_enabled_mask(struct smu_context *smu,
 					struct smu_feature_bits *feature_mask)
 {
+	uint32_t out[2];
 	int ret;
-	struct smu_msg_ctl *ctl = &smu->msg_ctl;
 
 	if (!feature_mask)
 		return -EINVAL;
 
-	struct smu_msg_args args = {
-		.msg = SMU_MSG_GetEnabledSmuFeatures,
-		.num_args = 0,
-		.num_out_args = 2,
-	};
-
-	ret = ctl->ops->send_msg(ctl, &args);
+	ret = smu_cmn_send_smc_msg_with_params(smu,
+					       SMU_MSG_GetEnabledSmuFeatures,
+					       NULL, 0, out,
+					       ARRAY_SIZE(out));
 
 	if (!ret)
-		smu_feature_bits_from_arr32(feature_mask, args.out_args,
+		smu_feature_bits_from_arr32(feature_mask, out,
 					    SMU_FEATURE_NUM_DEFAULT);
 
 	return ret;
@@ -1416,7 +1413,7 @@ static int smu_v15_0_common_get_dpm_table(struct smu_context *smu, struct dpm_cl
 
 static const struct pptable_funcs smu_v15_0_0_ppt_funcs = {
 	.check_fw_status = smu_v15_0_check_fw_status,
-	.check_fw_version = smu_v15_0_check_fw_version,
+	.check_fw_version = smu_cmn_check_fw_version,
 	.init_smc_tables = smu_v15_0_0_init_smc_tables,
 	.fini_smc_tables = smu_v15_0_0_fini_smc_tables,
 	.get_vbios_bootup_values = smu_v15_0_get_vbios_bootup_values,
@@ -1468,6 +1465,7 @@ void smu_v15_0_0_set_ppt_funcs(struct smu_context *smu)
 	smu->feature_map = smu_v15_0_0_feature_mask_map;
 	smu->table_map = smu_v15_0_0_table_map;
 	smu->is_apu = true;
+	smu->smc_driver_if_version = SMU15_DRIVER_IF_VERSION_SMU_V15_0;
 
 	smu_v15_0_0_init_msg_ctl(smu);
 }

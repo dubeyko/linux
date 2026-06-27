@@ -517,17 +517,26 @@ bool dpp3_get_optimal_number_of_taps(
 	else if (max_taps_c < min_taps_c)
 		return false;
 
-	if (scl_data->taps.v_taps > max_taps_y)
-		scl_data->taps.v_taps = max_taps_y;
+	{
+		uint32_t max_supported_taps_y = (uint32_t)max_taps_y;
+		uint32_t max_supported_taps_c = (uint32_t)max_taps_c;
 
-	if (scl_data->taps.v_taps_c > max_taps_c)
-		scl_data->taps.v_taps_c = max_taps_c;
+		if (scl_data->taps.v_taps > max_supported_taps_y)
+			scl_data->taps.v_taps = max_supported_taps_y;
+
+		if (scl_data->taps.v_taps_c > max_supported_taps_c)
+			scl_data->taps.v_taps_c = max_supported_taps_c;
+	}
 
 	if (!dpp->ctx->dc->debug.always_scale) {
-		if (IDENTITY_RATIO(scl_data->ratios.horz))
+		if (IDENTITY_RATIO(scl_data->ratios.horz)) {
 			scl_data->taps.h_taps = 1;
-		if (IDENTITY_RATIO(scl_data->ratios.vert))
+			scl_data->taps.h_taps_c = 1;
+		}
+		if (IDENTITY_RATIO(scl_data->ratios.vert)) {
 			scl_data->taps.v_taps = 1;
+			scl_data->taps.v_taps_c = 1;
+		}
 		if (IDENTITY_RATIO(scl_data->ratios.horz_c))
 			scl_data->taps.h_taps_c = 1;
 		if (IDENTITY_RATIO(scl_data->ratios.vert_c))
@@ -539,7 +548,7 @@ bool dpp3_get_optimal_number_of_taps(
 
 static void dpp3_deferred_update(struct dpp *dpp_base)
 {
-	int bypass_state;
+	uint32_t bypass_state;
 	struct dcn3_dpp *dpp = TO_DCN30_DPP(dpp_base);
 
 	if (dpp_base->deferred_reg_writes.bits.disable_dscl) {
@@ -594,6 +603,7 @@ static void dpp3_power_on_blnd_lut(
 		if (power_on) {
 			REG_UPDATE(CM_MEM_PWR_CTRL, BLNDGAM_MEM_PWR_FORCE, 0);
 			REG_WAIT(CM_MEM_PWR_STATUS, BLNDGAM_MEM_PWR_STATE, 0, 1, 5);
+			dpp_base->deferred_reg_writes.bits.disable_blnd_lut = false;
 		} else {
 			dpp_base->ctx->dc->optimized_required = true;
 			dpp_base->deferred_reg_writes.bits.disable_blnd_lut = true;
@@ -611,6 +621,7 @@ static void dpp3_power_on_hdr3dlut(
 		if (power_on) {
 			REG_UPDATE(CM_MEM_PWR_CTRL2, HDR3DLUT_MEM_PWR_FORCE, 0);
 			REG_WAIT(CM_MEM_PWR_STATUS2, HDR3DLUT_MEM_PWR_STATE, 0, 1, 5);
+			dpp_base->deferred_reg_writes.bits.disable_3dlut = false;
 		} else {
 			dpp_base->ctx->dc->optimized_required = true;
 			dpp_base->deferred_reg_writes.bits.disable_3dlut = true;
@@ -628,6 +639,7 @@ static void dpp3_power_on_shaper(
 		if (power_on) {
 			REG_UPDATE(CM_MEM_PWR_CTRL2, SHAPER_MEM_PWR_FORCE, 0);
 			REG_WAIT(CM_MEM_PWR_STATUS2, SHAPER_MEM_PWR_STATE, 0, 1, 5);
+			dpp_base->deferred_reg_writes.bits.disable_shaper = false;
 		} else {
 			dpp_base->ctx->dc->optimized_required = true;
 			dpp_base->deferred_reg_writes.bits.disable_shaper = true;
@@ -1303,6 +1315,7 @@ static void dpp3_set_3dlut_mode(
 		bool is_color_channel_12bits,
 		bool is_lut_size17x17x17)
 {
+	(void)is_color_channel_12bits;
 	uint32_t lut_mode;
 	struct dcn3_dpp *dpp = TO_DCN30_DPP(dpp_base);
 

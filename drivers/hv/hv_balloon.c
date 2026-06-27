@@ -1663,7 +1663,7 @@ static void enable_page_reporting(void)
 	 * We let the page_reporting_order parameter decide the order
 	 * in the page_reporting code
 	 */
-	dm_device.pr_dev_info.order = 0;
+	dm_device.pr_dev_info.order = PAGE_REPORTING_ORDER_UNSPECIFIED;
 	ret = page_reporting_register(&dm_device.pr_dev_info);
 	if (ret < 0) {
 		dm_device.pr_dev_info.report = NULL;
@@ -1862,9 +1862,7 @@ static int hv_balloon_debug_show(struct seq_file *f, void *offset)
 	if (hot_add_enabled())
 		seq_puts(f, " hot_add");
 
-	seq_puts(f, "\n");
-
-	seq_printf(f, "%-22s: %u", "state", dm->state);
+	seq_printf(f, "\n%-22s: %u", "state", dm->state);
 	switch (dm->state) {
 	case DM_INITIALIZING:
 			sname = "Initializing";

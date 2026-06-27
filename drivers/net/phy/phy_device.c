@@ -927,8 +927,8 @@ static int get_phy_c45_ids(struct mii_bus *bus, int addr,
 				/* returning -ENODEV doesn't stop bus
 				 * scanning
 				 */
-				return (phy_reg == -EIO ||
-					phy_reg == -ENODEV) ? -ENODEV : -EIO;
+				return (ret == -EIO ||
+					ret == -ENODEV) ? -ENODEV : -EIO;
 
 			if (!ret)
 				continue;
@@ -1375,6 +1375,14 @@ int phy_init_hw(struct phy_device *phydev)
 			return ret;
 	}
 
+	/* Re-apply autonomous EEE disable after soft reset */
+	if (phydev->autonomous_eee_disabled &&
+	    phydev->drv->disable_autonomous_eee) {
+		ret = phydev->drv->disable_autonomous_eee(phydev);
+		if (ret)
+			return ret;
+	}
+
 	return 0;
 }
 EXPORT_SYMBOL(phy_init_hw);
@@ -1710,6 +1718,9 @@ static int phy_sfp_probe(struct phy_device *phydev)
 
 		ret = sfp_bus_add_upstream(bus, phydev, &sfp_phydev_ops);
 		sfp_bus_put(bus);
+
+		if (ret)
+			phydev->sfp_bus = NULL;
 	}
 
 	if (!ret && phydev->sfp_bus)
@@ -1896,44 +1907,6 @@ error_put_device:
 EXPORT_SYMBOL(phy_attach_direct);
 
 /**
- * phy_attach - attach a network device to a particular PHY device
- * @dev: network device to attach
- * @bus_id: Bus ID of PHY device to attach
- * @interface: PHY device's interface
- *
- * Description: Same as phy_attach_direct() except that a PHY bus_id
- *     string is passed instead of a pointer to a struct phy_device.
- */
-struct phy_device *phy_attach(struct net_device *dev, const char *bus_id,
-			      phy_interface_t interface)
-{
-	struct phy_device *phydev;
-	struct device *d;
-	int rc;
-
-	if (!dev)
-		return ERR_PTR(-EINVAL);
-
-	/* Search the list of PHY devices on the mdio bus for the
-	 * PHY with the requested name
-	 */
-	d = bus_find_device_by_name(&mdio_bus_type, NULL, bus_id);
-	if (!d) {
-		pr_err("PHY %s not found\n", bus_id);
-		return ERR_PTR(-ENODEV);
-	}
-	phydev = to_phy_device(d);
-
-	rc = phy_attach_direct(dev, phydev, phydev->dev_flags, interface);
-	put_device(d);
-	if (rc)
-		return ERR_PTR(rc);
-
-	return phydev;
-}
-EXPORT_SYMBOL(phy_attach);
-
-/**
  * phy_detach - detach a PHY device from its network device
  * @phydev: target phy_device struct
  *
@@ -1965,6 +1938,9 @@ void phy_detach(struct phy_device *phydev)
 	if (dev) {
 		struct hwtstamp_provider *hwprov;
 
+		/* hwprov may technically be protected by ops lock but
+		 * not for devices with a phydev, see phy_link_topo_add_phy()
+		 */
 		hwprov = rtnl_dereference(dev->hwprov);
 		/* Disable timestamp if it is the one selected */
 		if (hwprov && hwprov->phydev == phydev) {
@@ -2907,7 +2883,8 @@ EXPORT_SYMBOL(phy_advertise_supported);
  */
 void phy_advertise_eee_all(struct phy_device *phydev)
 {
-	linkmode_copy(phydev->advertising_eee, phydev->supported_eee);
+	linkmode_andnot(phydev->advertising_eee, phydev->supported_eee,
+			phydev->eee_disabled_modes);
 }
 EXPORT_SYMBOL_GPL(phy_advertise_eee_all);
 
@@ -2933,9 +2910,24 @@ EXPORT_SYMBOL_GPL(phy_advertise_eee_all);
  */
 void phy_support_eee(struct phy_device *phydev)
 {
-	linkmode_copy(phydev->advertising_eee, phydev->supported_eee);
+	linkmode_andnot(phydev->advertising_eee, phydev->supported_eee,
+			phydev->eee_disabled_modes);
 	phydev->eee_cfg.tx_lpi_enabled = true;
 	phydev->eee_cfg.eee_enabled = true;
+
+	/* If the PHY supports autonomous EEE, disable it so the MAC can
+	 * manage LPI signaling instead. The flag is stored so it can be
+	 * re-applied after a PHY soft reset (e.g. suspend/resume).
+	 */
+	if (phydev->drv && phydev->drv->disable_autonomous_eee) {
+		int ret = phydev->drv->disable_autonomous_eee(phydev);
+
+		if (ret)
+			phydev_warn(phydev, "Failed to disable autonomous EEE: %pe\n",
+				    ERR_PTR(ret));
+		else
+			phydev->autonomous_eee_disabled = true;
+	}
 }
 EXPORT_SYMBOL(phy_support_eee);
 
@@ -3523,9 +3515,15 @@ static int phy_setup_ports(struct phy_device *phydev)
 	if (ret)
 		return ret;
 
-	ret = phy_sfp_probe(phydev);
-	if (ret)
-		goto out;
+	/* We don't support SFP with genphy drivers. Also, genphy driver
+	 * binding occurs with RTNL help, which will deadlock the call to
+	 * sfp_bus_add_upstream().
+	 */
+	if (!phydev->is_genphy_driven) {
+		ret = phy_sfp_probe(phydev);
+		if (ret)
+			goto out;
+	}
 
 	if (phydev->n_ports < phydev->max_n_ports) {
 		ret = phy_default_setup_single_port(phydev);
@@ -3789,6 +3787,11 @@ static int phy_probe(struct device *dev)
 	return 0;
 
 out:
+	sfp_bus_del_upstream(phydev->sfp_bus);
+	phydev->sfp_bus = NULL;
+
+	phy_cleanup_ports(phydev);
+
 	if (!phydev->is_on_sfp_module)
 		phy_led_triggers_unregister(phydev);
 
@@ -3812,10 +3815,10 @@ static int phy_remove(struct device *dev)
 
 	phydev->state = PHY_DOWN;
 
-	phy_cleanup_ports(phydev);
-
 	sfp_bus_del_upstream(phydev->sfp_bus);
 	phydev->sfp_bus = NULL;
+
+	phy_cleanup_ports(phydev);
 
 	if (phydev->drv && phydev->drv->remove)
 		phydev->drv->remove(phydev);
@@ -3951,6 +3954,14 @@ static int __init phy_init(void)
 {
 	int rc;
 
+	rc = class_register(&mdio_bus_class);
+	if (rc)
+		return rc;
+
+	rc = bus_register(&mdio_bus_type);
+	if (rc)
+		goto err_class;
+
 	rtnl_lock();
 	ethtool_set_ethtool_phy_ops(&phy_ethtool_phy_ops);
 	phylib_register_stubs();
@@ -3979,6 +3990,9 @@ err_ethtool_phy_ops:
 	phylib_unregister_stubs();
 	ethtool_set_ethtool_phy_ops(NULL);
 	rtnl_unlock();
+	bus_unregister(&mdio_bus_type);
+err_class:
+	class_unregister(&mdio_bus_class);
 
 	return rc;
 }
@@ -3991,6 +4005,8 @@ static void __exit phy_exit(void)
 	phylib_unregister_stubs();
 	ethtool_set_ethtool_phy_ops(NULL);
 	rtnl_unlock();
+	bus_unregister(&mdio_bus_type);
+	class_unregister(&mdio_bus_class);
 }
 
 subsys_initcall(phy_init);

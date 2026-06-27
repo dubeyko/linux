@@ -2374,7 +2374,7 @@ static void mtk_dp_bridge_detach(struct drm_bridge *bridge)
 }
 
 static void mtk_dp_bridge_atomic_enable(struct drm_bridge *bridge,
-					struct drm_atomic_state *state)
+					struct drm_atomic_commit *state)
 {
 	struct mtk_dp *mtk_dp = mtk_dp_from_bridge(bridge);
 	int ret;
@@ -2428,7 +2428,7 @@ power_off_aux:
 }
 
 static void mtk_dp_bridge_atomic_disable(struct drm_bridge *bridge,
-					 struct drm_atomic_state *state)
+					 struct drm_atomic_commit *state)
 {
 	struct mtk_dp *mtk_dp = mtk_dp_from_bridge(bridge);
 
@@ -2454,7 +2454,7 @@ mtk_dp_bridge_mode_valid(struct drm_bridge *bridge,
 			 const struct drm_display_mode *mode)
 {
 	struct mtk_dp *mtk_dp = mtk_dp_from_bridge(bridge);
-	u32 bpp = info->color_formats & DRM_COLOR_FORMAT_YCBCR422 ? 16 : 24;
+	u32 bpp = info->color_formats & BIT(DRM_OUTPUT_COLOR_FORMAT_YCBCR422) ? 16 : 24;
 	u32 lane_count_min = mtk_dp->train_info.lane_count;
 	u32 rate = drm_dp_bw_code_to_link_rate(mtk_dp->train_info.link_rate) *
 		   lane_count_min;
@@ -2521,7 +2521,7 @@ static u32 *mtk_dp_bridge_atomic_get_input_bus_fmts(struct drm_bridge *bridge,
 	 */
 	if (((rate * 97 / 100) < (mode->clock * 24 / 8)) &&
 	    ((rate * 97 / 100) > (mode->clock * 16 / 8)) &&
-	    (display_info->color_formats & DRM_COLOR_FORMAT_YCBCR422)) {
+	    (display_info->color_formats & BIT(DRM_OUTPUT_COLOR_FORMAT_YCBCR422))) {
 		input_fmts = kcalloc(1, sizeof(*input_fmts), GFP_KERNEL);
 		if (!input_fmts)
 			return NULL;

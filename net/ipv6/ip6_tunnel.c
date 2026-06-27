@@ -62,6 +62,8 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS_RTNL_LINK("ip6tnl");
 MODULE_ALIAS_NETDEV("ip6tnl0");
 
+#define IP6_TUNNEL_MAX_DEST_TLVS    8
+
 #define IP6_TUNNEL_HASH_SIZE_SHIFT  5
 #define IP6_TUNNEL_HASH_SIZE (1 << IP6_TUNNEL_HASH_SIZE_SHIFT)
 
@@ -96,9 +98,6 @@ static inline int ip6_tnl_mpls_supported(void)
 	return IS_ENABLED(CONFIG_MPLS);
 }
 
-#define for_each_ip6_tunnel_rcu(start) \
-	for (t = rcu_dereference(start); t; t = rcu_dereference(t->next))
-
 /**
  * ip6_tnl_lookup - fetch tunnel matching the end-point addresses
  *   @net: network namespace
@@ -121,7 +120,7 @@ ip6_tnl_lookup(struct net *net, int link,
 	struct ip6_tnl_net *ip6n = net_generic(net, ip6_tnl_net_id);
 	struct in6_addr any;
 
-	for_each_ip6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
+	for_each_ip_tunnel_rcu(t, ip6n->tnls_r_l[hash]) {
 		if (!ipv6_addr_equal(local, &t->parms.laddr) ||
 		    !ipv6_addr_equal(remote, &t->parms.raddr) ||
 		    !(t->dev->flags & IFF_UP))
@@ -135,7 +134,7 @@ ip6_tnl_lookup(struct net *net, int link,
 
 	memset(&any, 0, sizeof(any));
 	hash = HASH(&any, local);
-	for_each_ip6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
+	for_each_ip_tunnel_rcu(t, ip6n->tnls_r_l[hash]) {
 		if (!ipv6_addr_equal(local, &t->parms.laddr) ||
 		    !ipv6_addr_any(&t->parms.raddr) ||
 		    !(t->dev->flags & IFF_UP))
@@ -148,7 +147,7 @@ ip6_tnl_lookup(struct net *net, int link,
 	}
 
 	hash = HASH(remote, &any);
-	for_each_ip6_tunnel_rcu(ip6n->tnls_r_l[hash]) {
+	for_each_ip_tunnel_rcu(t, ip6n->tnls_r_l[hash]) {
 		if (!ipv6_addr_equal(remote, &t->parms.raddr) ||
 		    !ipv6_addr_any(&t->parms.laddr) ||
 		    !(t->dev->flags & IFF_UP))
@@ -400,10 +399,14 @@ __u16 ip6_tnl_parse_tlv_enc_lim(struct sk_buff *skb, __u8 *raw)
 	unsigned int nhoff = raw - skb->data;
 	unsigned int off = nhoff + sizeof(*ipv6h);
 	u8 nexthdr = ipv6h->nexthdr;
+	int exthdr_cnt = 0;
 
 	while (ipv6_ext_hdr(nexthdr) && nexthdr != NEXTHDR_NONE) {
 		struct ipv6_opt_hdr *hdr;
 		u16 optlen;
+
+		if (unlikely(exthdr_cnt++ >= IP6_MAX_EXT_HDRS_CNT))
+			break;
 
 		if (!pskb_may_pull(skb, off + sizeof(*hdr)))
 			break;
@@ -428,10 +431,14 @@ __u16 ip6_tnl_parse_tlv_enc_lim(struct sk_buff *skb, __u8 *raw)
 				break;
 		}
 		if (nexthdr == NEXTHDR_DEST) {
+			int tlv_cnt = 0;
 			u16 i = 2;
 
 			while (1) {
 				struct ipv6_tlv_tnl_enc_lim *tel;
+
+				if (unlikely(tlv_cnt++ >= IP6_TUNNEL_MAX_DEST_TLVS))
+					break;
 
 				/* No more room for encapsulation limit */
 				if (i + sizeof(*tel) > optlen)
@@ -643,7 +650,7 @@ ip4ip6_err(struct sk_buff *skb, struct inet6_skb_parm *opt,
 
 	/* change mtu on this route */
 	if (rel_type == ICMP_DEST_UNREACH && rel_code == ICMP_FRAG_NEEDED) {
-		if (rel_info > dst6_mtu(skb_dst(skb2)))
+		if (rel_info > dst4_mtu(skb_dst(skb2)))
 			goto out;
 
 		skb_dst_update_pmtu_no_confirm(skb2, rel_info);
@@ -1097,7 +1104,7 @@ int ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev, __u8 dsfield,
 	struct ipv6_tel_txoption opt;
 	struct dst_entry *dst = NULL, *ndst = NULL;
 	struct net_device *tdev;
-	int mtu;
+	int err_count, mtu;
 	unsigned int eth_hlen = t->dev->type == ARPHRD_ETHER ? ETH_HLEN : 0;
 	unsigned int psh_hlen = sizeof(struct ipv6hdr) + t->encap_hlen;
 	unsigned int max_headroom = psh_hlen;
@@ -1207,14 +1214,15 @@ route_lookup:
 		goto tx_err_dst_release;
 	}
 
-	if (t->err_count > 0) {
+	err_count = READ_ONCE(t->err_count);
+	if (err_count > 0) {
 		if (time_before(jiffies,
-				t->err_time + IP6TUNNEL_ERR_TIMEO)) {
-			t->err_count--;
+				READ_ONCE(t->err_time) + IP6TUNNEL_ERR_TIMEO)) {
+			WRITE_ONCE(t->err_count, err_count - 1);
 
 			dst_link_failure(skb);
 		} else {
-			t->err_count = 0;
+			WRITE_ONCE(t->err_count, 0);
 		}
 	}
 
@@ -1843,6 +1851,13 @@ static int ip6_tnl_fill_forward_path(struct net_device_path_ctx *ctx,
 	struct dst_entry *dst;
 	int err;
 
+	if (!(t->parms.flags & IP6_TNL_F_IGN_ENCAP_LIMIT)) {
+		/* encaplimit option is currently not supported is
+		 * sw-acceleration path.
+		 */
+		return -EOPNOTSUPP;
+	}
+
 	dst = ip6_route_output(dev_net(ctx->dev), NULL, &fl6);
 	if (!dst->error) {
 		path->type = DEV_PATH_TUN;
@@ -2094,6 +2109,9 @@ static int ip6_tnl_changelink(struct net_device *dev, struct nlattr *tb[],
 	struct net *net = t->net;
 	struct ip6_tnl_net *ip6n = net_generic(net, ip6_tnl_net_id);
 	struct ip_tunnel_encap ipencap;
+
+	if (!rtnl_dev_link_net_capable(dev, net))
+		return -EPERM;
 
 	if (dev == ip6n->fb_tnl_dev) {
 		if (ip_tunnel_netlink_encap_parms(data, &ipencap)) {

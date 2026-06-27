@@ -1452,6 +1452,15 @@ static inline u32 lan78xx_hash(char addr[ETH_ALEN])
 	return (ether_crc(ETH_ALEN, addr) >> 23) & 0x1ff;
 }
 
+static int lan78xx_write_mchash_table(struct lan78xx_net *dev)
+{
+	struct lan78xx_priv *pdata = (struct lan78xx_priv *)(dev->data[0]);
+
+	return lan78xx_dataport_write(dev, DP_SEL_RSEL_VLAN_DA_,
+				      DP_SEL_VHF_VLAN_LEN,
+				      DP_SEL_VHF_HASH_LEN, pdata->mchash_table);
+}
+
 static void lan78xx_deferred_multicast_write(struct work_struct *param)
 {
 	struct lan78xx_priv *pdata =
@@ -1462,9 +1471,7 @@ static void lan78xx_deferred_multicast_write(struct work_struct *param)
 	netif_dbg(dev, drv, dev->net, "deferred multicast write 0x%08x\n",
 		  pdata->rfe_ctl);
 
-	ret = lan78xx_dataport_write(dev, DP_SEL_RSEL_VLAN_DA_,
-				     DP_SEL_VHF_VLAN_LEN,
-				     DP_SEL_VHF_HASH_LEN, pdata->mchash_table);
+	ret = lan78xx_write_mchash_table(dev);
 	if (ret < 0)
 		goto multicast_write_done;
 
@@ -1557,6 +1564,7 @@ static void lan78xx_set_multicast(struct net_device *netdev)
 }
 
 static void lan78xx_rx_urb_submit_all(struct lan78xx_net *dev);
+static int lan78xx_write_vlan_table(struct lan78xx_net *dev);
 
 static int lan78xx_mac_reset(struct lan78xx_net *dev)
 {
@@ -2514,6 +2522,17 @@ static void lan78xx_mac_link_up(struct phylink_config *config,
 	if (ret < 0)
 		goto link_up_fail;
 
+	/* The RFE clears the VLAN/DA hash filter (VHF) on a link down/up
+	 * cycle, so reprogram both tables from their shadow copies.
+	 */
+	ret = lan78xx_write_vlan_table(dev);
+	if (ret < 0)
+		goto link_up_fail;
+
+	ret = lan78xx_write_mchash_table(dev);
+	if (ret < 0)
+		goto link_up_fail;
+
 	netif_start_queue(net);
 
 	return;
@@ -3065,14 +3084,20 @@ static int lan78xx_set_features(struct net_device *netdev,
 	return lan78xx_write_reg(dev, RFE_CTL, pdata->rfe_ctl);
 }
 
+static int lan78xx_write_vlan_table(struct lan78xx_net *dev)
+{
+	struct lan78xx_priv *pdata = (struct lan78xx_priv *)(dev->data[0]);
+
+	return lan78xx_dataport_write(dev, DP_SEL_RSEL_VLAN_DA_, 0,
+				      DP_SEL_VHF_VLAN_LEN, pdata->vlan_table);
+}
+
 static void lan78xx_deferred_vlan_write(struct work_struct *param)
 {
 	struct lan78xx_priv *pdata =
 			container_of(param, struct lan78xx_priv, set_vlan);
-	struct lan78xx_net *dev = pdata->dev;
 
-	lan78xx_dataport_write(dev, DP_SEL_RSEL_VLAN_DA_, 0,
-			       DP_SEL_VHF_VLAN_LEN, pdata->vlan_table);
+	lan78xx_write_vlan_table(pdata->dev);
 }
 
 static int lan78xx_vlan_rx_add_vid(struct net_device *netdev,
@@ -4536,7 +4561,6 @@ static void intr_complete(struct urb *urb)
 static void lan78xx_disconnect(struct usb_interface *intf)
 {
 	struct lan78xx_net *dev;
-	struct usb_device *udev;
 	struct net_device *net;
 
 	dev = usb_get_intfdata(intf);
@@ -4544,7 +4568,6 @@ static void lan78xx_disconnect(struct usb_interface *intf)
 	if (!dev)
 		return;
 
-	udev = interface_to_usbdev(intf);
 	net = dev->net;
 
 	rtnl_lock();
@@ -4571,7 +4594,6 @@ static void lan78xx_disconnect(struct usb_interface *intf)
 	usb_free_urb(dev->urb_intr);
 
 	free_netdev(net);
-	usb_put_dev(udev);
 }
 
 static void lan78xx_tx_timeout(struct net_device *net, unsigned int txqueue)
@@ -4633,13 +4655,11 @@ static int lan78xx_probe(struct usb_interface *intf,
 	u8 *buf = NULL;
 
 	udev = interface_to_usbdev(intf);
-	udev = usb_get_dev(udev);
 
 	netdev = alloc_etherdev(sizeof(struct lan78xx_net));
 	if (!netdev) {
 		dev_err(&intf->dev, "Error: OOM\n");
-		ret = -ENOMEM;
-		goto out1;
+		return -ENOMEM;
 	}
 
 	SET_NETDEV_DEV(netdev, &intf->dev);
@@ -4788,8 +4808,6 @@ out3:
 	lan78xx_free_tx_resources(dev);
 out2:
 	free_netdev(netdev);
-out1:
-	usb_put_dev(udev);
 
 	return ret;
 }

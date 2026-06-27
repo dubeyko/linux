@@ -28,8 +28,9 @@ struct xe_pat_table_entry {
 	/**
 	 * @coh_mode: The GPU coherency mode that @value maps to.
 	 */
-#define XE_COH_NONE          1
-#define XE_COH_AT_LEAST_1WAY 2
+#define XE_COH_NONE		1
+#define XE_COH_1WAY		2
+#define XE_COH_2WAY		3
 	u16 coh_mode;
 
 	/**
@@ -80,5 +81,13 @@ bool xe_pat_index_get_comp_en(struct xe_device *xe, u16 pat_index);
  * @pat_index: The pat_index to query
  */
 u16 xe_pat_index_get_l3_policy(struct xe_device *xe, u16 pat_index);
+
+#define xe_cache_pat_idx(xe, cache_mode) ({					\
+	const struct xe_device *__xedev = (xe);					\
+	enum xe_cache_level __mode = (cache_mode);				\
+	xe_assert(__xedev, __mode < __XE_CACHE_LEVEL_COUNT);			\
+	xe_assert(__xedev, __xedev->pat.idx[__mode] != XE_PAT_INVALID_IDX);	\
+	__xedev->pat.idx[__mode];						\
+})
 
 #endif

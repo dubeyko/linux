@@ -7,13 +7,18 @@
 vdsos-y			:= 32
 
 # Files to link into the vDSO:
-vobjs-y			:= note.o vclock_gettime.o vgetcpu.o
-vobjs-y			+= system_call.o sigreturn.o
+vobjs-y					:= note.o vclock_gettime.o vgetcpu.o
+vobjs-y					+= system_call.o sigreturn.o
+vobjs-$(CONFIG_FUTEX_ROBUST_UNLOCK)	+= vfutex.o
 
 # Compilation flags
 flags-y			:= -DBUILD_VDSO32 -m32 -mregparm=0
 flags-$(CONFIG_X86_64)	+= -include $(src)/fake_32bit_build.h
 flags-remove-y          := -m64
+
+# Checker flags
+CHECKFLAGS := $(subst -m64,-m32,$(CHECKFLAGS))
+CHECKFLAGS := $(subst -D__x86_64__,-D__i386__,$(CHECKFLAGS))
 
 # The location of this include matters!
 include $(src)/../common/Makefile.include

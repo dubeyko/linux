@@ -2046,6 +2046,7 @@ static int vangogh_od_edit_dpm_table(struct smu_context *smu, enum PP_OD_DPM_TAB
 		if (input[0] >= smu->cpu_core_num) {
 			dev_err(smu->adev->dev, "core index is overflow, should be less than %d\n",
 				smu->cpu_core_num);
+			return -EINVAL;
 		}
 		smu->cpu_core_id_select = input[0];
 		if (input[1] == 0) {
@@ -2511,7 +2512,7 @@ static u32 vangogh_get_gfxoff_entrycount(struct smu_context *smu, uint64_t *entr
 static const struct pptable_funcs vangogh_ppt_funcs = {
 
 	.check_fw_status = smu_v11_0_check_fw_status,
-	.check_fw_version = smu_v11_0_check_fw_version,
+	.check_fw_version = smu_cmn_check_fw_version,
 	.init_smc_tables = vangogh_init_smc_tables,
 	.fini_smc_tables = smu_v11_0_fini_smc_tables,
 	.init_power = smu_v11_0_init_power,
@@ -2561,5 +2562,6 @@ void vangogh_set_ppt_funcs(struct smu_context *smu)
 	smu->table_map = vangogh_table_map;
 	smu->workload_map = vangogh_workload_map;
 	smu->is_apu = true;
+	smu->smc_driver_if_version = SMU13_DRIVER_IF_VERSION;
 	smu_v11_0_init_msg_ctl(smu, vangogh_message_map);
 }

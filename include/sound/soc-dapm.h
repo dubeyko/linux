@@ -424,6 +424,7 @@ enum snd_soc_dapm_type {
 	snd_soc_dapm_input = 0,		/* input pin */
 	snd_soc_dapm_output,		/* output pin */
 	snd_soc_dapm_mux,		/* selects 1 analog signal from many inputs */
+	snd_soc_dapm_mux_named_ctl,	/* mux with named controls */
 	snd_soc_dapm_demux,		/* connects the input to one of multiple outputs */
 	snd_soc_dapm_mixer,		/* mixes several analog signals together */
 	snd_soc_dapm_mixer_named_ctl,	/* mixer with named controls */
@@ -635,6 +636,7 @@ int snd_soc_dapm_new_dai_widgets(struct snd_soc_dapm_context *dapm, struct snd_s
 void snd_soc_dapm_free_widget(struct snd_soc_dapm_widget *w);
 int snd_soc_dapm_link_dai_widgets(struct snd_soc_card *card);
 void snd_soc_dapm_connect_dai_link_widgets(struct snd_soc_card *card);
+int snd_soc_dapm_ignore_suspend_widgets(struct snd_soc_card *card);
 
 int snd_soc_dapm_update_dai(struct snd_pcm_substream *substream,
 			    struct snd_pcm_hw_params *params, struct snd_soc_dai *dai);
@@ -672,6 +674,7 @@ int snd_soc_dapm_mux_update_power(struct snd_soc_dapm_context *dapm,
 /* dapm sys fs - used by the core */
 extern struct attribute *snd_soc_dapm_dev_attrs[];
 void snd_soc_dapm_debugfs_init(struct snd_soc_dapm_context *dapm, struct dentry *parent);
+void snd_soc_dapm_debugfs_pop_time(struct dentry *parent);
 
 /* dapm audio pin control and status */
 int snd_soc_dapm_enable_pin(struct snd_soc_dapm_context *dapm, const char *pin);
@@ -684,6 +687,7 @@ int snd_soc_dapm_sync_unlocked(struct snd_soc_dapm_context *dapm);
 int snd_soc_dapm_force_enable_pin(struct snd_soc_dapm_context *dapm, const char *pin);
 int snd_soc_dapm_force_enable_pin_unlocked(struct snd_soc_dapm_context *dapm, const char *pin);
 int snd_soc_dapm_ignore_suspend(struct snd_soc_dapm_context *dapm, const char *pin);
+bool snd_soc_dapm_pin_has_prefix(struct snd_soc_card *card, const char *pin);
 void snd_soc_dapm_mark_endpoints_dirty(struct snd_soc_card *card);
 
 /* dapm path query */

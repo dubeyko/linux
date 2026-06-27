@@ -215,6 +215,12 @@ enum gdma_page_type {
 
 #define GDMA_INVALID_DMA_REGION 0
 
+struct mana_serv_work {
+	struct work_struct serv_work;
+	struct pci_dev *pdev;
+	enum gdma_eqe_type type;
+};
+
 struct gdma_mem_info {
 	struct device *dev;
 
@@ -336,6 +342,7 @@ struct gdma_queue {
 			void *context;
 
 			unsigned int msix_index;
+			unsigned int irq;
 
 			u32 log2_throttle_limit;
 		} eq;
@@ -382,18 +389,26 @@ struct gdma_irq_context {
 	spinlock_t lock;
 	struct list_head eq_list;
 	char name[MANA_IRQ_NAME_SZ];
+	unsigned int msi;
+	unsigned int irq;
+	refcount_t refcount;
+	unsigned int bitmap_refs;
+	bool dyn_msix;
 };
 
 enum gdma_context_flags {
 	GC_PROBE_SUCCEEDED	= 0,
+	GC_IN_SERVICE		= 1,
 };
 
 struct gdma_context {
 	struct device		*dev;
 	struct dentry		*mana_pci_debugfs;
 
-	/* Per-vPort max number of queues */
+	/* Hardware max number of queues */
 	unsigned int		max_num_queues;
+	/* Per-vPort max number of queues */
+	unsigned int		max_num_queues_vport;
 	unsigned int		max_num_msix;
 	unsigned int		num_msix_usable;
 	struct xarray		irq_contexts;
@@ -411,14 +426,16 @@ struct gdma_context {
 	u32			test_event_eq_id;
 
 	bool			is_pf;
-	bool			in_service;
+	bool			is_pf2;
 
 	phys_addr_t		bar0_pa;
 	void __iomem		*bar0_va;
+	resource_size_t		bar0_size;
 	void __iomem		*shm_base;
 	void __iomem		*db_page_base;
 	phys_addr_t		phys_db_page_base;
-	u32 db_page_size;
+	u64 db_page_off;
+	u64 db_page_size;
 	int                     numa_node;
 
 	/* Shared memory chanenl (used to bootstrap HWC) */
@@ -434,10 +451,20 @@ struct gdma_context {
 	struct gdma_dev		mana_ib;
 
 	u64 pf_cap_flags1;
+	u64 gdma_protocol_ver;
 
 	struct workqueue_struct *service_wq;
 
 	unsigned long		flags;
+
+	/* Protect access to GIC context */
+	struct mutex		gic_mutex;
+
+	/* Indicate if this device is sharing MSI for EQs on MANA */
+	bool msi_sharing;
+
+	/* Bitmap tracks where MSI is allocated when it is not shared for EQs */
+	unsigned long *msi_bitmap;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)
@@ -472,6 +499,8 @@ void mana_gd_destroy_queue(struct gdma_context *gc, struct gdma_queue *queue);
 int mana_gd_poll_cq(struct gdma_queue *cq, struct gdma_comp *comp, int num_cqe);
 
 void mana_gd_ring_cq(struct gdma_queue *cq, u8 arm_bit);
+
+int mana_schedule_serv_work(struct gdma_context *gc, enum gdma_eqe_type type);
 
 struct gdma_wqe {
 	u32 reserved	:24;
@@ -560,6 +589,7 @@ struct gdma_eqe {
 #define GDMA_SRIOV_REG_CFG_BASE_OFF	0x108
 
 #define MANA_PF_DEVICE_ID 0x00B9
+#define MANA_PF2_DEVICE_ID 0x00C1
 #define MANA_VF_DEVICE_ID 0x00BA
 
 struct gdma_posted_wqe_info {
@@ -588,6 +618,7 @@ enum {
 #define GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECONFIG BIT(3)
 #define GDMA_DRV_CAP_FLAG_1_GDMA_PAGES_4MB_1GB_2GB BIT(4)
 #define GDMA_DRV_CAP_FLAG_1_VARIABLE_INDIRECTION_TABLE_SUPPORT BIT(5)
+#define GDMA_DRV_CAP_FLAG_1_HW_VPORT_LINK_AWARE BIT(6)
 
 /* Driver can handle holes (zeros) in the device list */
 #define GDMA_DRV_CAP_FLAG_1_DEV_LIST_HOLES_SUP BIT(11)
@@ -604,7 +635,8 @@ enum {
 /* Driver detects stalled send queues and recovers them */
 #define GDMA_DRV_CAP_FLAG_1_HANDLE_STALL_SQ_RECOVERY BIT(18)
 
-#define GDMA_DRV_CAP_FLAG_1_HW_VPORT_LINK_AWARE BIT(6)
+/* Driver supports separate EQ/MSIs for each vPort */
+#define GDMA_DRV_CAP_FLAG_1_EQ_MSI_UNSHARE_MULTI_VPORT BIT(19)
 
 /* Driver supports linearizing the skb when num_sge exceeds hardware limit */
 #define GDMA_DRV_CAP_FLAG_1_SKB_LINEARIZE BIT(20)
@@ -614,6 +646,9 @@ enum {
 
 /* Driver can handle hardware recovery events during probe */
 #define GDMA_DRV_CAP_FLAG_1_PROBE_RECOVERY BIT(22)
+
+/* Driver supports self recovery on Hardware Channel timeouts */
+#define GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECOVERY BIT(25)
 
 #define GDMA_DRV_CAP_FLAGS1 \
 	(GDMA_DRV_CAP_FLAG_1_EQ_SHARING_MULTI_VPORT | \
@@ -628,7 +663,9 @@ enum {
 	 GDMA_DRV_CAP_FLAG_1_PERIODIC_STATS_QUERY | \
 	 GDMA_DRV_CAP_FLAG_1_SKB_LINEARIZE | \
 	 GDMA_DRV_CAP_FLAG_1_PROBE_RECOVERY | \
-	 GDMA_DRV_CAP_FLAG_1_HANDLE_STALL_SQ_RECOVERY)
+	 GDMA_DRV_CAP_FLAG_1_HANDLE_STALL_SQ_RECOVERY | \
+	 GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECOVERY | \
+	 GDMA_DRV_CAP_FLAG_1_EQ_MSI_UNSHARE_MULTI_VPORT)
 
 #define GDMA_DRV_CAP_FLAGS2 0
 
@@ -778,6 +815,7 @@ enum gdma_mr_access_flags {
 	GDMA_ACCESS_FLAG_REMOTE_READ = BIT_ULL(2),
 	GDMA_ACCESS_FLAG_REMOTE_WRITE = BIT_ULL(3),
 	GDMA_ACCESS_FLAG_REMOTE_ATOMIC = BIT_ULL(4),
+	GDMA_ACCESS_FLAG_BIND_MW = BIT_ULL(5),
 };
 
 /* GDMA_CREATE_DMA_REGION */
@@ -870,6 +908,10 @@ enum gdma_mr_type {
 	GDMA_MR_TYPE_ZBVA = 4,
 	/* Device address MRs */
 	GDMA_MR_TYPE_DM = 5,
+	/* Memory Window type 1 */
+	GDMA_MR_TYPE_MW1 = 6,
+	/* Memory Window type 2 */
+	GDMA_MR_TYPE_MW2 = 7,
 };
 
 struct gdma_create_mr_params {
@@ -999,4 +1041,11 @@ int mana_gd_resume(struct pci_dev *pdev);
 
 bool mana_need_log(struct gdma_context *gc, int err);
 
+struct gdma_irq_context *mana_gd_get_gic(struct gdma_context *gc,
+					 bool use_msi_bitmap,
+					 int *msi_requested);
+void mana_gd_put_gic(struct gdma_context *gc, bool use_msi_bitmap, int msi);
+int mana_gd_query_device_cfg(struct gdma_context *gc, u32 proto_major_ver,
+			     u32 proto_minor_ver, u32 proto_micro_ver,
+			     u16 *max_num_vports, u8 *bm_hostmode);
 #endif /* _GDMA_H */

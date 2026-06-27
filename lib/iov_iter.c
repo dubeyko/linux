@@ -277,7 +277,7 @@ static __always_inline
 size_t copy_from_user_iter_nocache(void __user *iter_from, size_t progress,
 				   size_t len, void *to, void *priv2)
 {
-	return __copy_from_user_inatomic_nocache(to + progress, iter_from, len);
+	return copy_from_user_inatomic_nontemporal(to + progress, iter_from, len);
 }
 
 size_t _copy_from_iter_nocache(void *addr, size_t bytes, struct iov_iter *i)
@@ -296,7 +296,7 @@ static __always_inline
 size_t copy_from_user_iter_flushcache(void __user *iter_from, size_t progress,
 				      size_t len, void *to, void *priv2)
 {
-	return __copy_from_user_flushcache(to + progress, iter_from, len);
+	return copy_from_user_flushcache(to + progress, iter_from, len);
 }
 
 static __always_inline
@@ -1224,13 +1224,13 @@ const void *dup_iter(struct iov_iter *new, struct iov_iter *old, gfp_t flags)
 {
 	*new = *old;
 	if (iov_iter_is_bvec(new))
-		return new->bvec = kmemdup(new->bvec,
-				    new->nr_segs * sizeof(struct bio_vec),
+		return new->bvec = kmemdup_array(new->bvec,
+				    new->nr_segs, sizeof(struct bio_vec),
 				    flags);
 	else if (iov_iter_is_kvec(new) || iter_is_iovec(new))
 		/* iovec and kvec have identical layout */
-		return new->__iov = kmemdup(new->__iov,
-				   new->nr_segs * sizeof(struct iovec),
+		return new->__iov = kmemdup_array(new->__iov,
+				   new->nr_segs, sizeof(struct iovec),
 				   flags);
 	return NULL;
 }

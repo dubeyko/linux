@@ -264,13 +264,13 @@ void precision_many_frames__bar(void)
  */
 SEC("socket")
 __success __log_level(2)
-__msg("11: (0f) r2 += r1")
+__msg("12: (0f) r2 += r1")
 /* foo frame */
-__msg("frame1: regs=r1 stack= before 10: (bf) r2 = r10")
-__msg("frame1: regs=r1 stack= before 9: (25) if r1 > 0x7 goto pc+0")
-__msg("frame1: regs=r1 stack=-8,-16 before 8: (7b) *(u64 *)(r10 -16) = r1")
-__msg("frame1: regs=r1 stack=-8 before 7: (7b) *(u64 *)(r10 -8) = r1")
-__msg("frame1: regs=r1 stack= before 4: (85) call pc+2")
+__msg("frame1: regs=r1 stack= before 11: (bf) r2 = r10")
+__msg("frame1: regs=r1 stack= before 10: (25) if r1 > 0x7 goto pc+0")
+__msg("frame1: regs=r1 stack=-8,-16 before 9: (7b) *(u64 *)(r10 -16) = r1")
+__msg("frame1: regs=r1 stack=-8 before 8: (7b) *(u64 *)(r10 -8) = r1")
+__msg("frame1: regs=r1 stack= before 4: (85) call pc+3")
 /* main frame */
 __msg("frame0: regs=r1 stack=-8 before 3: (7b) *(u64 *)(r10 -8) = r1")
 __msg("frame0: regs=r1 stack= before 2: (bf) r1 = r0")
@@ -286,6 +286,7 @@ __naked void precision_stack(void)
 	"r1 = r0;"
 	"*(u64*)(r10 - 8) = r1;"
 	"call precision_stack__foo;"
+	"r0 = *(u64*)(r10 - 8);"
 	"r0 = 0;"
 	"exit;"
 	:
@@ -309,6 +310,8 @@ void precision_stack__foo(void)
 	 */
 	"r2 = r10;"
 	"r2 += r1;"
+	"r0 = *(u64*)(r10 - 8);"
+	"r0 = *(u64*)(r10 - 16);"
 	"exit"
 	::: __clobber_all);
 }
@@ -369,37 +372,36 @@ __naked void precision_two_ids(void)
 SEC("socket")
 __success __log_level(2)
 __flag(BPF_F_TEST_STATE_FREQ)
-/* check that r0 and r6 have different IDs after 'if',
- * collect_linked_regs() can't tie more than 6 registers for a single insn.
+/*
+ * check that r0 and r5 have different IDs after 'if',
+ * collect_linked_regs() can't tie more than 5 registers for a single insn.
  */
-__msg("8: (25) if r0 > 0x7 goto pc+0         ; R0=scalar(id=1")
-__msg("14: (bf) r6 = r6                      ; R6=scalar(id=2")
-/* check that r{0-5} are marked precise after 'if' */
-__msg("frame0: regs=r0 stack= before 8: (25) if r0 > 0x7 goto pc+0")
-__msg("frame0: parent state regs=r0,r1,r2,r3,r4,r5 stack=:")
+__msg("7: (25) if r0 > 0x7 goto pc+0         ; R0=scalar(id=1")
+__msg("12: (bf) r5 = r5                      ; R5=scalar(id=2")
+/* check that r{0-4} are marked precise after 'if' */
+__msg("frame0: regs=r0 stack= before 7: (25) if r0 > 0x7 goto pc+0")
+__msg("frame0: parent state regs=r0,r1,r2,r3,r4 stack=:")
 __naked void linked_regs_too_many_regs(void)
 {
 	asm volatile (
 	/* r0 = random number up to 0xff */
 	"call %[bpf_ktime_get_ns];"
 	"r0 &= 0xff;"
-	/* tie r{0-6} IDs */
+	/* tie r{0-5} IDs */
 	"r1 = r0;"
 	"r2 = r0;"
 	"r3 = r0;"
 	"r4 = r0;"
 	"r5 = r0;"
-	"r6 = r0;"
-	/* propagate range for r{0-6} */
+	/* propagate range for r{0-5} */
 	"if r0 > 7 goto +0;"
-	/* keep r{1-5} live */
+	/* keep r{1-4} live */
 	"r1 = r1;"
 	"r2 = r2;"
 	"r3 = r3;"
 	"r4 = r4;"
+	/* make r5 appear in the log */
 	"r5 = r5;"
-	/* make r6 appear in the log */
-	"r6 = r6;"
 	/* force r0 to be precise,
 	 * this would cause r{0-4} to be precise because of shared IDs
 	 */
@@ -592,10 +594,10 @@ __naked void check_ids_in_regsafe_2(void)
  */
 SEC("socket")
 __success __log_level(2)
-__msg("11: (1d) if r3 == r4 goto pc+0")
+__msg("14: (1d) if r3 == r4 goto pc+0")
 __msg("frame 0: propagating r3,r4")
-__msg("11: safe")
-__msg("processed 15 insns")
+__msg("14: safe")
+__msg("processed 18 insns")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void no_scalar_id_for_const(void)
 {
@@ -605,6 +607,7 @@ __naked void no_scalar_id_for_const(void)
 	"if r0 > 7 goto l0_%=;"
 	/* possibly generate same scalar ids for r3 and r4 */
 	"r1 = 0;"
+	"r1 ^= r1;" /* prevent bpf_prune_dead_branches from folding the branch */
 	"r1 = r1;"
 	"r3 = r1;"
 	"r4 = r1;"
@@ -612,7 +615,9 @@ __naked void no_scalar_id_for_const(void)
 "l0_%=:"
 	/* possibly generate different scalar ids for r3 and r4 */
 	"r1 = 0;"
+	"r1 ^= r1;"
 	"r2 = 0;"
+	"r2 ^= r2;"
 	"r3 = r1;"
 	"r4 = r2;"
 "l1_%=:"
@@ -628,10 +633,10 @@ __naked void no_scalar_id_for_const(void)
 /* Same as no_scalar_id_for_const() but for 32-bit values */
 SEC("socket")
 __success __log_level(2)
-__msg("11: (1e) if w3 == w4 goto pc+0")
+__msg("14: (1e) if w3 == w4 goto pc+0")
 __msg("frame 0: propagating r3,r4")
-__msg("11: safe")
-__msg("processed 15 insns")
+__msg("14: safe")
+__msg("processed 18 insns")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void no_scalar_id_for_const32(void)
 {
@@ -641,6 +646,7 @@ __naked void no_scalar_id_for_const32(void)
 	"if r0 > 7 goto l0_%=;"
 	/* possibly generate same scalar ids for r3 and r4 */
 	"w1 = 0;"
+	"w1 ^= w1;" /* prevent bpf_prune_dead_branches from folding the branch */
 	"w1 = w1;"
 	"w3 = w1;"
 	"w4 = w1;"
@@ -648,11 +654,13 @@ __naked void no_scalar_id_for_const32(void)
 "l0_%=:"
 	/* possibly generate different scalar ids for r3 and r4 */
 	"w1 = 0;"
+	"w1 ^= w1;"
 	"w2 = 0;"
+	"w2 ^= w2;"
 	"w3 = w1;"
 	"w4 = w2;"
 "l1_%=:"
-	/* predictable jump, marks r1 and r2 precise */
+	/* predictable jump, marks r3 and r4 precise */
 	"if w3 == w4 goto +0;"
 	"r0 = 0;"
 	"exit;"
@@ -796,9 +804,9 @@ __success __log_level(2)
 /* The exit instruction should be reachable from two states,
  * use two matches and "processed .. insns" to ensure this.
  */
-__msg("15: (95) exit")
-__msg("15: (95) exit")
-__msg("processed 20 insns")
+__msg("16: (95) exit")
+__msg("16: (95) exit")
+__msg("processed 22 insns")
 __flag(BPF_F_TEST_STATE_FREQ)
 __naked void two_old_ids_one_cur_id(void)
 {
@@ -829,6 +837,11 @@ __naked void two_old_ids_one_cur_id(void)
 	"r2 = r10;"
 	"r2 += r6;"
 	"r2 += r7;"
+	/*
+	 * keep r8 and r9 live, otherwise r6->id and r7->id
+	 * will become singular and reset to zero before if r6 > r7
+	 */
+	"r9 += r8;"
 	"exit;"
 	:
 	: __imm(bpf_ktime_get_ns)

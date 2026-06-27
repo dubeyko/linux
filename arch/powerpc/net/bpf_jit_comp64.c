@@ -179,8 +179,51 @@ static int bpf_jit_stack_offsetof(struct codegen_context *ctx, int reg)
 	BUG();
 }
 
+void prepare_for_fsession_fentry(u32 *image, struct codegen_context *ctx, int cookie_cnt,
+				int cookie_off, int retval_off)
+{
+	EMIT(PPC_RAW_LI(bpf_to_ppc(TMP_REG_1), 0));
+
+	for (int i = 0; i < cookie_cnt; i++)
+		EMIT(PPC_RAW_STD(bpf_to_ppc(TMP_REG_1), _R1, cookie_off + 8 * i));
+	EMIT(PPC_RAW_STD(bpf_to_ppc(TMP_REG_1), _R1, retval_off));
+}
+
+void store_func_meta(u32 *image, struct codegen_context *ctx,
+					u64 func_meta, int func_meta_off)
+{
+	/*
+	 * Store func_meta to stack at [R1 + func_meta_off] = func_meta
+	 *
+	 * func_meta :
+	 *	bit[63]: is_return flag
+	 *	byte[1]: cookie offset from ctx
+	 *	byte[0]: args count
+	 */
+	PPC_LI64(bpf_to_ppc(TMP_REG_1), func_meta);
+	EMIT(PPC_RAW_STD(bpf_to_ppc(TMP_REG_1), _R1, func_meta_off));
+}
+
 void bpf_jit_realloc_regs(struct codegen_context *ctx)
 {
+}
+
+static void emit_fp_priv_stack(u32 *image, struct codegen_context *ctx)
+{
+	PPC_LI64(bpf_to_ppc(BPF_REG_FP), (__force long)ctx->priv_sp);
+	/*
+	 * Load base percpu pointer of private stack allocation.
+	 * Runtime per-cpu address = (base + data_offset) + (guard + stack_size)
+	 */
+#ifdef CONFIG_SMP
+	/* Load percpu data offset */
+	EMIT(PPC_RAW_LD(bpf_to_ppc(TMP_REG_1), _R13,
+		offsetof(struct paca_struct, data_offset)));
+	EMIT(PPC_RAW_ADD(bpf_to_ppc(BPF_REG_FP),
+		bpf_to_ppc(TMP_REG_1), bpf_to_ppc(BPF_REG_FP)));
+#endif
+	EMIT(PPC_RAW_ADDI(bpf_to_ppc(BPF_REG_FP), bpf_to_ppc(BPF_REG_FP),
+			PRIV_STACK_GUARD_SZ + round_up(ctx->priv_stack_size, 16)));
 }
 
 /*
@@ -307,9 +350,16 @@ void bpf_jit_build_prologue(u32 *image, struct codegen_context *ctx)
 	 * Exception_cb not restricted from using stack area or arena.
 	 * Setup frame pointer to point to the bpf stack area
 	 */
-	if (bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_FP)))
-		EMIT(PPC_RAW_ADDI(bpf_to_ppc(BPF_REG_FP), _R1,
-			STACK_FRAME_MIN_SIZE + ctx->stack_size));
+	if (bpf_is_seen_register(ctx, bpf_to_ppc(BPF_REG_FP))) {
+		if (ctx->priv_sp) {
+			/* Set up fp in private stack */
+			emit_fp_priv_stack(image, ctx);
+		} else {
+			/* Setup frame pointer to point to the bpf stack area */
+			EMIT(PPC_RAW_ADDI(bpf_to_ppc(BPF_REG_FP), _R1,
+				STACK_FRAME_MIN_SIZE + ctx->stack_size));
+		}
+	}
 
 	if (ctx->arena_vm_start)
 		PPC_LI64(bpf_to_ppc(ARENA_VM_START), ctx->arena_vm_start);
@@ -401,10 +451,28 @@ void arch_bpf_stack_walk(bool (*consume_fn)(void *, u64, u64, u64), void *cookie
 	}
 }
 
+static int bpf_jit_emit_func_call(u32 *image, struct codegen_context *ctx, u64 func_addr, int reg)
+{
+	long reladdr = func_addr - kernel_toc_addr();
+
+	if (reladdr > 0x7FFFFFFF || reladdr < -(0x80000000L)) {
+		pr_err("eBPF: address of %ps out of range of kernel_toc.\n", (void *)func_addr);
+		return -ERANGE;
+	}
+
+	EMIT(PPC_RAW_ADDIS(reg, _R2, PPC_HA(reladdr)));
+	EMIT(PPC_RAW_ADDI(reg, reg, PPC_LO(reladdr)));
+	EMIT(PPC_RAW_MTCTR(reg));
+	EMIT(PPC_RAW_BCTRL());
+
+	return 0;
+}
+
 int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *ctx, u64 func)
 {
 	unsigned long func_addr = func ? ppc_function_entry((void *)func) : 0;
-	long reladdr;
+	long __maybe_unused reladdr;
+	int ret;
 
 	/* bpf to bpf call, func is not known in the initial pass. Emit 5 nops as a placeholder */
 	if (!func) {
@@ -457,16 +525,9 @@ int bpf_jit_emit_func_call_rel(u32 *image, u32 *fimage, struct codegen_context *
 	EMIT(PPC_RAW_BCTRL());
 #else
 	if (core_kernel_text(func_addr)) {
-		reladdr = func_addr - kernel_toc_addr();
-		if (reladdr > 0x7FFFFFFF || reladdr < -(0x80000000L)) {
-			pr_err("eBPF: address of %ps out of range of kernel_toc.\n", (void *)func);
-			return -ERANGE;
-		}
-
-		EMIT(PPC_RAW_ADDIS(_R12, _R2, PPC_HA(reladdr)));
-		EMIT(PPC_RAW_ADDI(_R12, _R12, PPC_LO(reladdr)));
-		EMIT(PPC_RAW_MTCTR(_R12));
-		EMIT(PPC_RAW_BCTRL());
+		ret = bpf_jit_emit_func_call(image, ctx, func_addr, _R12);
+		if (ret)
+			return ret;
 	} else {
 		if (IS_ENABLED(CONFIG_PPC64_ELF_ABI_V1)) {
 			/* func points to the function descriptor */
@@ -1659,6 +1720,14 @@ emit_clear:
 			break;
 
 		/*
+		 * JUMP reg
+		 */
+		case BPF_JMP | BPF_JA | BPF_X:
+			EMIT(PPC_RAW_MTCTR(dst_reg));
+			EMIT(PPC_RAW_BCTR());
+			break;
+
+		/*
 		 * Return/Exit
 		 */
 		case BPF_JMP | BPF_EXIT:
@@ -1696,6 +1765,35 @@ emit_clear:
 						    &func_addr, &func_addr_fixed);
 			if (ret < 0)
 				return ret;
+
+			/*
+			 * Call to arch_bpf_timed_may_goto() is emitted by the
+			 * verifier and called with custom calling convention with
+			 * first argument and return value in BPF_REG_AX (_R12).
+			 *
+			 * The generic helper or bpf function call emission path
+			 * may use the same scratch register as BPF_REG_AX to
+			 * materialize the target address. This would clobber AX
+			 * and break timed may_goto semantics.
+			 *
+			 * Emit a minimal indirect call sequence here using a temp
+			 * register and skip the normal post-call return-value move.
+			 */
+
+			if (func_addr == (u64)arch_bpf_timed_may_goto) {
+				ret = 0;
+				if (!IS_ENABLED(CONFIG_PPC_KERNEL_PCREL))
+					ret = bpf_jit_emit_func_call(image, ctx, func_addr,
+								     tmp1_reg);
+
+				if (ret || IS_ENABLED(CONFIG_PPC_KERNEL_PCREL)) {
+					PPC_LI_ADDR(tmp1_reg, func_addr);
+					EMIT(PPC_RAW_MTCTR(tmp1_reg));
+					EMIT(PPC_RAW_BCTRL());
+				}
+
+				break;
+			}
 
 			/* Take care of powerpc ABI requirements before kfunc call */
 			if (insn[i].src_reg == BPF_PSEUDO_KFUNC_CALL) {

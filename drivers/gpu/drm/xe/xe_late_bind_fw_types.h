@@ -3,14 +3,15 @@
  * Copyright © 2025 Intel Corporation
  */
 
-#ifndef _XE_LATE_BIND_TYPES_H_
-#define _XE_LATE_BIND_TYPES_H_
+#ifndef _XE_LATE_BIND_FW_TYPES_H_
+#define _XE_LATE_BIND_FW_TYPES_H_
 
 #include <linux/iosys-map.h>
 #include <linux/mutex.h>
 #include <linux/types.h>
 #include <linux/workqueue.h>
-#include "xe_uc_fw_abi.h"
+
+#include "abi/uc_fw_abi.h"
 
 #define XE_LB_MAX_PAYLOAD_SIZE SZ_4K
 

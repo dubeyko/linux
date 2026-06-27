@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/inotify.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
@@ -25,6 +26,7 @@
 
 static bool has_localevents;
 static bool has_recursiveprot;
+static int page_size;
 
 int get_temp_fd(void)
 {
@@ -33,7 +35,7 @@ int get_temp_fd(void)
 
 int alloc_pagecache(int fd, size_t size)
 {
-	char buf[PAGE_SIZE];
+	char buf[BUF_SIZE];
 	struct stat st;
 	int i;
 
@@ -54,14 +56,30 @@ cleanup:
 	return -1;
 }
 
-int alloc_anon(const char *cgroup, void *arg)
+static char *alloc_and_populate_anon(size_t size)
 {
-	size_t size = (unsigned long)arg;
 	char *buf, *ptr;
 
 	buf = malloc(size);
-	for (ptr = buf; ptr < buf + size; ptr += PAGE_SIZE)
+	if (buf == NULL) {
+		fprintf(stderr, "malloc() failed\n");
+		return NULL;
+	}
+
+	for (ptr = buf; ptr < buf + size; ptr += page_size)
 		*ptr = 0;
+
+	return buf;
+}
+
+int alloc_anon(const char *cgroup, void *arg)
+{
+	size_t size = (unsigned long)arg;
+	char *buf;
+
+	buf = alloc_and_populate_anon(size);
+	if (!buf)
+		return -1;
 
 	free(buf);
 	return 0;
@@ -69,7 +87,7 @@ int alloc_anon(const char *cgroup, void *arg)
 
 int is_swap_enabled(void)
 {
-	char buf[PAGE_SIZE];
+	char buf[BUF_SIZE];
 	const char delim[] = "\n";
 	int cnt = 0;
 	char *line;
@@ -112,7 +130,7 @@ static int test_memcg_subtree_control(const char *root)
 {
 	char *parent, *child, *parent2 = NULL, *child2 = NULL;
 	int ret = KSFT_FAIL;
-	char buf[PAGE_SIZE];
+	char buf[BUF_SIZE];
 
 	/* Create two nested cgroups with the memory controller enabled */
 	parent = cg_name(root, "memcg_test_0");
@@ -173,18 +191,13 @@ cleanup_free:
 static int alloc_anon_50M_check(const char *cgroup, void *arg)
 {
 	size_t size = MB(50);
-	char *buf, *ptr;
+	char *buf;
 	long anon, current;
 	int ret = -1;
 
-	buf = malloc(size);
-	if (buf == NULL) {
-		fprintf(stderr, "malloc() failed\n");
+	buf = alloc_and_populate_anon(size);
+	if (!buf)
 		return -1;
-	}
-
-	for (ptr = buf; ptr < buf + size; ptr += PAGE_SIZE)
-		*ptr = 0;
 
 	current = cg_read_long(cgroup, "memory.current");
 	if (current < size)
@@ -405,16 +418,11 @@ static int alloc_anon_noexit(const char *cgroup, void *arg)
 {
 	int ppid = getppid();
 	size_t size = (unsigned long)arg;
-	char *buf, *ptr;
+	char *buf;
 
-	buf = malloc(size);
-	if (buf == NULL) {
-		fprintf(stderr, "malloc() failed\n");
+	buf = alloc_and_populate_anon(size);
+	if (!buf)
 		return -1;
-	}
-
-	for (ptr = buf; ptr < buf + size; ptr += PAGE_SIZE)
-		*ptr = 0;
 
 	while (getppid() == ppid)
 		sleep(1);
@@ -989,18 +997,13 @@ static int alloc_anon_50M_check_swap(const char *cgroup, void *arg)
 {
 	long mem_max = (long)arg;
 	size_t size = MB(50);
-	char *buf, *ptr;
+	char *buf;
 	long mem_current, swap_current;
 	int ret = -1;
 
-	buf = malloc(size);
-	if (buf == NULL) {
-		fprintf(stderr, "malloc() failed\n");
+	buf = alloc_and_populate_anon(size);
+	if (!buf)
 		return -1;
-	}
-
-	for (ptr = buf; ptr < buf + size; ptr += PAGE_SIZE)
-		*ptr = 0;
 
 	mem_current = cg_read_long(cgroup, "memory.current");
 	if (!mem_current || !values_close(mem_current, mem_max, 3))
@@ -1280,8 +1283,11 @@ static int tcp_server(const char *cgroup, void *arg)
 	saddr.sin6_port = htons(srv_args->port);
 
 	sk = socket(AF_INET6, SOCK_STREAM, 0);
-	if (sk < 0)
+	if (sk < 0) {
+		/* Pass back errno to the ctl_fd */
+		write(ctl_fd, &errno, sizeof(errno));
 		return ret;
+	}
 
 	if (setsockopt(sk, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes)) < 0)
 		goto cleanup;
@@ -1411,6 +1417,12 @@ static int test_memcg_sock(const char *root)
 		if (read(args.ctl[0], &err, sizeof(err)) != sizeof(err))
 			goto cleanup;
 		close(args.ctl[0]);
+
+		/* Skip if address family not supported by protocol */
+		if (err == EAFNOSUPPORT) {
+			ret = KSFT_SKIP;
+			goto cleanup;
+		}
 
 		if (!err)
 			break;
@@ -1643,6 +1655,115 @@ cleanup:
 	return ret;
 }
 
+static int read_event(int inotify_fd, int expected_event, int expected_wd)
+{
+	struct inotify_event event;
+	ssize_t len = 0;
+
+	len = read(inotify_fd, &event, sizeof(event));
+	if (len < (ssize_t)sizeof(event))
+		return -1;
+
+	if (event.mask != expected_event || event.wd != expected_wd) {
+		fprintf(stderr,
+			"event does not match expected values: mask %d (expected %d) wd %d (expected %d)\n",
+			event.mask, expected_event, event.wd, expected_wd);
+		return -1;
+	}
+
+	return 0;
+}
+
+static int test_memcg_inotify_delete_file(const char *root)
+{
+	int ret = KSFT_FAIL;
+	char *memcg = NULL;
+	int fd, wd;
+
+	memcg = cg_name(root, "memcg_test_0");
+
+	if (!memcg)
+		goto cleanup;
+
+	if (cg_create(memcg))
+		goto cleanup;
+
+	fd = inotify_init1(0);
+	if (fd == -1)
+		goto cleanup;
+
+	wd = inotify_add_watch(fd, cg_control(memcg, "memory.events"), IN_DELETE_SELF);
+	if (wd == -1)
+		goto cleanup;
+
+	if (cg_destroy(memcg))
+		goto cleanup;
+	free(memcg);
+	memcg = NULL;
+
+	if (read_event(fd, IN_DELETE_SELF, wd))
+		goto cleanup;
+
+	if (read_event(fd, IN_IGNORED, wd))
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	if (fd >= 0)
+		close(fd);
+	if (memcg)
+		cg_destroy(memcg);
+	free(memcg);
+
+	return ret;
+}
+
+static int test_memcg_inotify_delete_dir(const char *root)
+{
+	int ret = KSFT_FAIL;
+	char *memcg = NULL;
+	int fd, wd;
+
+	memcg = cg_name(root, "memcg_test_0");
+
+	if (!memcg)
+		goto cleanup;
+
+	if (cg_create(memcg))
+		goto cleanup;
+
+	fd = inotify_init1(0);
+	if (fd == -1)
+		goto cleanup;
+
+	wd = inotify_add_watch(fd, memcg, IN_DELETE_SELF);
+	if (wd == -1)
+		goto cleanup;
+
+	if (cg_destroy(memcg))
+		goto cleanup;
+	free(memcg);
+	memcg = NULL;
+
+	if (read_event(fd, IN_DELETE_SELF, wd))
+		goto cleanup;
+
+	if (read_event(fd, IN_IGNORED, wd))
+		goto cleanup;
+
+	ret = KSFT_PASS;
+
+cleanup:
+	if (fd >= 0)
+		close(fd);
+	if (memcg)
+		cg_destroy(memcg);
+	free(memcg);
+
+	return ret;
+}
+
 #define T(x) { x, #x }
 struct memcg_test {
 	int (*fn)(const char *root);
@@ -1662,6 +1783,8 @@ struct memcg_test {
 	T(test_memcg_oom_group_leaf_events),
 	T(test_memcg_oom_group_parent_events),
 	T(test_memcg_oom_group_score_events),
+	T(test_memcg_inotify_delete_file),
+	T(test_memcg_inotify_delete_dir),
 };
 #undef T
 
@@ -1669,6 +1792,10 @@ int main(int argc, char **argv)
 {
 	char root[PATH_MAX];
 	int i, proc_status;
+
+	page_size = sysconf(_SC_PAGE_SIZE);
+	if (page_size <= 0)
+		page_size = BUF_SIZE;
 
 	ksft_print_header();
 	ksft_set_plan(ARRAY_SIZE(tests));

@@ -9,11 +9,13 @@
 #include <linux/poll.h>
 
 #include <drm/drm_drv.h>
+#include <drm/drm_gem.h>
 #include <drm/drm_managed.h>
 #include <drm/drm_syncobj.h>
 #include <uapi/drm/xe_drm.h>
 
 #include <generated/xe_wa_oob.h>
+#include <generated/xe_device_wa_oob.h>
 
 #include "abi/guc_actions_slpc_abi.h"
 #include "instructions/xe_mi_commands.h"
@@ -29,7 +31,7 @@
 #include "xe_gt.h"
 #include "xe_gt_mcr.h"
 #include "xe_gt_printk.h"
-#include "xe_guc_pc.h"
+#include "xe_guc_rc.h"
 #include "xe_macros.h"
 #include "xe_mmio.h"
 #include "xe_oa.h"
@@ -213,32 +215,45 @@ static u32 xe_oa_hw_tail_read(struct xe_oa_stream *stream)
 #define oa_report_header_64bit(__s) \
 	((__s)->oa_buffer.format->header == HDR_64_BIT)
 
-static u64 oa_report_id(struct xe_oa_stream *stream, void *report)
+static u64 oa_report_id(struct xe_oa_stream *stream, u32 report_offset)
 {
-	return oa_report_header_64bit(stream) ? *(u64 *)report : *(u32 *)report;
-}
+	struct iosys_map *map = &stream->oa_buffer.bo->vmap;
 
-static void oa_report_id_clear(struct xe_oa_stream *stream, u32 *report)
-{
-	if (oa_report_header_64bit(stream))
-		*(u64 *)report = 0;
-	else
-		*report = 0;
-}
-
-static u64 oa_timestamp(struct xe_oa_stream *stream, void *report)
-{
 	return oa_report_header_64bit(stream) ?
-		*((u64 *)report + 1) :
-		*((u32 *)report + 1);
+		xe_map_rd(stream->oa->xe, map, report_offset, u64) :
+		xe_map_rd(stream->oa->xe, map, report_offset, u32);
 }
 
-static void oa_timestamp_clear(struct xe_oa_stream *stream, u32 *report)
+static void oa_report_id_clear(struct xe_oa_stream *stream, u32 report_offset)
 {
-	if (oa_report_header_64bit(stream))
-		*(u64 *)&report[2] = 0;
-	else
-		report[1] = 0;
+	struct iosys_map *map = &stream->oa_buffer.bo->vmap;
+
+	oa_report_header_64bit(stream) ?
+		xe_map_wr(stream->oa->xe, map, report_offset, u64, 0) :
+		xe_map_wr(stream->oa->xe, map, report_offset, u32, 0);
+}
+
+static u64 oa_timestamp(struct xe_oa_stream *stream, u32 report_offset)
+{
+	struct iosys_map *map = &stream->oa_buffer.bo->vmap;
+
+	return oa_report_header_64bit(stream) ?
+		xe_map_rd(stream->oa->xe, map, report_offset + 8, u64) :
+		xe_map_rd(stream->oa->xe, map, report_offset + 4, u32);
+}
+
+static void oa_timestamp_clear(struct xe_oa_stream *stream, u32 report_offset)
+{
+	struct iosys_map *map = &stream->oa_buffer.bo->vmap;
+
+	oa_report_header_64bit(stream) ?
+		xe_map_wr(stream->oa->xe, map, report_offset + 8, u64, 0) :
+		xe_map_wr(stream->oa->xe, map, report_offset + 4, u32, 0);
+}
+
+static bool mert_wa_14026633728(struct xe_oa_stream *s)
+{
+	return s->oa_unit->type == DRM_XE_OA_UNIT_TYPE_MERT && XE_DEVICE_WA(s->oa->xe, 14026633728);
 }
 
 static bool xe_oa_buffer_check_unlocked(struct xe_oa_stream *stream)
@@ -275,9 +290,7 @@ static bool xe_oa_buffer_check_unlocked(struct xe_oa_stream *stream)
 	 * they were written.  If not : (╯°□°）╯︵ ┻━┻
 	 */
 	while (xe_oa_circ_diff(stream, tail, stream->oa_buffer.tail) >= report_size) {
-		void *report = stream->oa_buffer.vaddr + tail;
-
-		if (oa_report_id(stream, report) || oa_timestamp(stream, report))
+		if (oa_report_id(stream, tail) || oa_timestamp(stream, tail))
 			break;
 
 		tail = xe_oa_circ_diff(stream, tail, report_size);
@@ -311,30 +324,37 @@ static enum hrtimer_restart xe_oa_poll_check_timer_cb(struct hrtimer *hrtimer)
 	return HRTIMER_RESTART;
 }
 
+static unsigned long
+xe_oa_copy_to_user(struct xe_oa_stream *stream, void __user *dst, u32 report_offset, u32 len)
+{
+	xe_assert(stream->oa->xe, len <= stream->oa_buffer.format->size);
+
+	xe_map_memcpy_from(stream->oa->xe, stream->oa_buffer.bounce,
+			   &stream->oa_buffer.bo->vmap, report_offset, len);
+	return copy_to_user(dst, stream->oa_buffer.bounce, len);
+}
+
 static int xe_oa_append_report(struct xe_oa_stream *stream, char __user *buf,
-			       size_t count, size_t *offset, const u8 *report)
+			       size_t count, size_t *offset, u32 report_offset)
 {
 	int report_size = stream->oa_buffer.format->size;
 	int report_size_partial;
-	u8 *oa_buf_end;
 
 	if ((count - *offset) < report_size)
 		return -ENOSPC;
 
 	buf += *offset;
 
-	oa_buf_end = stream->oa_buffer.vaddr + stream->oa_buffer.circ_size;
-	report_size_partial = oa_buf_end - report;
+	report_size_partial = stream->oa_buffer.circ_size - report_offset;
 
 	if (report_size_partial < report_size) {
-		if (copy_to_user(buf, report, report_size_partial))
+		if (xe_oa_copy_to_user(stream, buf, report_offset, report_size_partial))
 			return -EFAULT;
 		buf += report_size_partial;
 
-		if (copy_to_user(buf, stream->oa_buffer.vaddr,
-				 report_size - report_size_partial))
+		if (xe_oa_copy_to_user(stream, buf, 0, report_size - report_size_partial))
 			return -EFAULT;
-	} else if (copy_to_user(buf, report, report_size)) {
+	} else if (xe_oa_copy_to_user(stream, buf, report_offset, report_size)) {
 		return -EFAULT;
 	}
 
@@ -347,7 +367,6 @@ static int xe_oa_append_reports(struct xe_oa_stream *stream, char __user *buf,
 				size_t count, size_t *offset)
 {
 	int report_size = stream->oa_buffer.format->size;
-	u8 *oa_buf_base = stream->oa_buffer.vaddr;
 	u32 gtt_offset = xe_bo_ggtt_addr(stream->oa_buffer.bo);
 	size_t start_offset = *offset;
 	unsigned long flags;
@@ -364,26 +383,24 @@ static int xe_oa_append_reports(struct xe_oa_stream *stream, char __user *buf,
 
 	for (; xe_oa_circ_diff(stream, tail, head);
 	     head = xe_oa_circ_incr(stream, head, report_size)) {
-		u8 *report = oa_buf_base + head;
-
-		ret = xe_oa_append_report(stream, buf, count, offset, report);
+		ret = xe_oa_append_report(stream, buf, count, offset, head);
 		if (ret)
 			break;
 
 		if (!(stream->oa_buffer.circ_size % report_size)) {
 			/* Clear out report id and timestamp to detect unlanded reports */
-			oa_report_id_clear(stream, (void *)report);
-			oa_timestamp_clear(stream, (void *)report);
+			oa_report_id_clear(stream, head);
+			oa_timestamp_clear(stream, head);
 		} else {
-			u8 *oa_buf_end = stream->oa_buffer.vaddr + stream->oa_buffer.circ_size;
-			u32 part = oa_buf_end - report;
+			struct iosys_map *map = &stream->oa_buffer.bo->vmap;
+			u32 part = stream->oa_buffer.circ_size - head;
 
 			/* Zero out the entire report */
 			if (report_size <= part) {
-				memset(report, 0, report_size);
+				xe_map_memset(stream->oa->xe, map, head, 0, report_size);
 			} else {
-				memset(report, 0, part);
-				memset(oa_buf_base, 0, report_size - part);
+				xe_map_memset(stream->oa->xe, map, head, 0, part);
+				xe_map_memset(stream->oa->xe, map, 0, 0, report_size - part);
 			}
 		}
 	}
@@ -436,7 +453,8 @@ static void xe_oa_init_oa_buffer(struct xe_oa_stream *stream)
 	spin_unlock_irqrestore(&stream->oa_buffer.ptr_lock, flags);
 
 	/* Zero out the OA buffer since we rely on zero report id and timestamp fields */
-	memset(stream->oa_buffer.vaddr, 0, xe_bo_size(stream->oa_buffer.bo));
+	xe_map_memset(stream->oa->xe, &stream->oa_buffer.bo->vmap, 0, 0,
+		      xe_bo_size(stream->oa_buffer.bo));
 }
 
 static u32 __format_to_oactrl(const struct xe_oa_format *format, int counter_sel_mask)
@@ -699,6 +717,7 @@ static int num_lri_dwords(int num_regs)
 static void xe_oa_free_oa_buffer(struct xe_oa_stream *stream)
 {
 	xe_bo_unpin_map_no_vm(stream->oa_buffer.bo);
+	kfree(stream->oa_buffer.bounce);
 }
 
 static void xe_oa_free_configs(struct xe_oa_stream *stream)
@@ -757,8 +776,9 @@ static int xe_oa_configure_oar_context(struct xe_oa_stream *stream, bool enable)
 		},
 		{
 			RING_CONTEXT_CONTROL(stream->hwe->mmio_base),
-			_MASKED_FIELD(CTX_CTRL_OAC_CONTEXT_ENABLE,
-				      enable ? CTX_CTRL_OAC_CONTEXT_ENABLE : 0)
+			enable ?
+			REG_MASKED_FIELD_ENABLE(CTX_CTRL_OAC_CONTEXT_ENABLE) :
+			REG_MASKED_FIELD_DISABLE(CTX_CTRL_OAC_CONTEXT_ENABLE)
 		},
 	};
 
@@ -781,9 +801,9 @@ static int xe_oa_configure_oac_context(struct xe_oa_stream *stream, bool enable)
 		},
 		{
 			RING_CONTEXT_CONTROL(stream->hwe->mmio_base),
-			_MASKED_FIELD(CTX_CTRL_OAC_CONTEXT_ENABLE,
-				      enable ? CTX_CTRL_OAC_CONTEXT_ENABLE : 0) |
-			_MASKED_FIELD(CTX_CTRL_RUN_ALONE, enable ? CTX_CTRL_RUN_ALONE : 0),
+			enable ?
+			REG_MASKED_FIELD_ENABLE(CTX_CTRL_OAC_CONTEXT_ENABLE | CTX_CTRL_RUN_ALONE) :
+			REG_MASKED_FIELD_DISABLE(CTX_CTRL_OAC_CONTEXT_ENABLE | CTX_CTRL_RUN_ALONE),
 		},
 	};
 
@@ -811,9 +831,10 @@ static int xe_oa_configure_oa_context(struct xe_oa_stream *stream, bool enable)
 
 static u32 oag_configure_mmio_trigger(const struct xe_oa_stream *stream, bool enable)
 {
-	return _MASKED_FIELD(OAG_OA_DEBUG_DISABLE_MMIO_TRG,
-			     enable && stream && stream->sample ?
-			     0 : OAG_OA_DEBUG_DISABLE_MMIO_TRG);
+	if (enable && stream && stream->sample)
+		return REG_MASKED_FIELD_DISABLE(OAG_OA_DEBUG_DISABLE_MMIO_TRG);
+	else
+		return REG_MASKED_FIELD_ENABLE(OAG_OA_DEBUG_DISABLE_MMIO_TRG);
 }
 
 static void xe_oa_disable_metric_set(struct xe_oa_stream *stream)
@@ -824,9 +845,9 @@ static void xe_oa_disable_metric_set(struct xe_oa_stream *stream)
 	/* Enable thread stall DOP gating and EU DOP gating. */
 	if (XE_GT_WA(stream->gt, 1508761755)) {
 		xe_gt_mcr_multicast_write(stream->gt, ROW_CHICKEN,
-					  _MASKED_BIT_DISABLE(STALL_DOP_GATING_DISABLE));
+					  REG_MASKED_FIELD_DISABLE(STALL_DOP_GATING_DISABLE));
 		xe_gt_mcr_multicast_write(stream->gt, ROW_CHICKEN2,
-					  _MASKED_BIT_DISABLE(DISABLE_DOP_GATING));
+					  REG_MASKED_FIELD_DISABLE(DISABLE_DOP_GATING));
 	}
 
 	xe_mmio_write32(mmio, __oa_regs(stream)->oa_debug,
@@ -872,28 +893,31 @@ static void xe_oa_stream_destroy(struct xe_oa_stream *stream)
 	xe_force_wake_put(gt_to_fw(gt), stream->fw_ref);
 	xe_pm_runtime_put(stream->oa->xe);
 
-	/* Wa_1509372804:pvc: Unset the override of GUCRC mode to enable rc6 */
-	if (stream->override_gucrc)
-		xe_gt_WARN_ON(gt, xe_guc_pc_unset_gucrc_mode(&gt->uc.guc.pc));
-
 	xe_oa_free_configs(stream);
 	xe_file_put(stream->xef);
 }
 
 static int xe_oa_alloc_oa_buffer(struct xe_oa_stream *stream, size_t size)
 {
+	u32 vram = mert_wa_14026633728(stream) ?
+		XE_BO_FLAG_VRAM_IF_DGFX(xe_device_get_root_tile(stream->oa->xe)) :
+		XE_BO_FLAG_SYSTEM;
 	struct xe_bo *bo;
 
 	bo = xe_bo_create_pin_map_novm(stream->oa->xe, stream->gt->tile,
 				       size, ttm_bo_type_kernel,
-				       XE_BO_FLAG_SYSTEM | XE_BO_FLAG_GGTT, false);
+				       vram | XE_BO_FLAG_GGTT, false);
 	if (IS_ERR(bo))
 		return PTR_ERR(bo);
 
 	stream->oa_buffer.bo = bo;
-	/* mmap implementation requires OA buffer to be in system memory */
-	xe_assert(stream->oa->xe, bo->vmap.is_iomem == 0);
-	stream->oa_buffer.vaddr = bo->vmap.vaddr;
+
+	stream->oa_buffer.bounce = kmalloc(stream->oa_buffer.format->size, GFP_KERNEL);
+	if (!stream->oa_buffer.bounce) {
+		xe_bo_unpin_map_no_vm(stream->oa_buffer.bo);
+		return -ENOMEM;
+	}
+
 	return 0;
 }
 
@@ -968,7 +992,7 @@ static void xe_oa_config_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
 	struct xe_oa_fence *ofence = container_of(cb, typeof(*ofence), cb);
 
 	INIT_DELAYED_WORK(&ofence->work, xe_oa_fence_work_fn);
-	queue_delayed_work(system_unbound_wq, &ofence->work,
+	queue_delayed_work(system_dfl_wq, &ofence->work,
 			   usecs_to_jiffies(NOA_PROGRAM_ADDITIONAL_DELAY_US));
 	dma_fence_put(fence);
 }
@@ -1058,16 +1082,18 @@ exit:
 static u32 oag_report_ctx_switches(const struct xe_oa_stream *stream)
 {
 	/* If user didn't require OA reports, ask HW not to emit ctx switch reports */
-	return _MASKED_FIELD(OAG_OA_DEBUG_DISABLE_CTX_SWITCH_REPORTS,
-			     stream->sample ?
-			     0 : OAG_OA_DEBUG_DISABLE_CTX_SWITCH_REPORTS);
+	if (stream->sample)
+		return REG_MASKED_FIELD_DISABLE(OAG_OA_DEBUG_DISABLE_CTX_SWITCH_REPORTS);
+	else
+		return REG_MASKED_FIELD_ENABLE(OAG_OA_DEBUG_DISABLE_CTX_SWITCH_REPORTS);
 }
 
 static u32 oag_buf_size_select(const struct xe_oa_stream *stream)
 {
-	return _MASKED_FIELD(OAG_OA_DEBUG_BUF_SIZE_SELECT,
-			     xe_bo_size(stream->oa_buffer.bo) > SZ_16M ?
-			     OAG_OA_DEBUG_BUF_SIZE_SELECT : 0);
+	if (xe_bo_size(stream->oa_buffer.bo) > SZ_16M)
+		return REG_MASKED_FIELD_ENABLE(OAG_OA_DEBUG_BUF_SIZE_SELECT);
+	else
+		return REG_MASKED_FIELD_DISABLE(OAG_OA_DEBUG_BUF_SIZE_SELECT);
 }
 
 static int xe_oa_enable_metric_set(struct xe_oa_stream *stream)
@@ -1082,9 +1108,9 @@ static int xe_oa_enable_metric_set(struct xe_oa_stream *stream)
 	 */
 	if (XE_GT_WA(stream->gt, 1508761755)) {
 		xe_gt_mcr_multicast_write(stream->gt, ROW_CHICKEN,
-					  _MASKED_BIT_ENABLE(STALL_DOP_GATING_DISABLE));
+					  REG_MASKED_FIELD_ENABLE(STALL_DOP_GATING_DISABLE));
 		xe_gt_mcr_multicast_write(stream->gt, ROW_CHICKEN2,
-					  _MASKED_BIT_ENABLE(DISABLE_DOP_GATING));
+					  REG_MASKED_FIELD_ENABLE(DISABLE_DOP_GATING));
 	}
 
 	/* Disable clk ratio reports */
@@ -1099,7 +1125,7 @@ static int xe_oa_enable_metric_set(struct xe_oa_stream *stream)
 			OAG_OA_DEBUG_DISABLE_START_TRG_1_COUNT_QUAL;
 
 	xe_mmio_write32(mmio, __oa_regs(stream)->oa_debug,
-			_MASKED_BIT_ENABLE(oa_debug) |
+			REG_MASKED_FIELD_ENABLE(oa_debug) |
 			oag_report_ctx_switches(stream) |
 			oag_buf_size_select(stream) |
 			oag_configure_mmio_trigger(stream, true));
@@ -1673,8 +1699,6 @@ static int xe_oa_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct xe_oa_stream *stream = file->private_data;
 	struct xe_bo *bo = stream->oa_buffer.bo;
-	unsigned long start = vma->vm_start;
-	int i, ret;
 
 	if (xe_observation_paranoid && !perfmon_capable()) {
 		drm_dbg(&stream->oa->xe->drm, "Insufficient privilege to map OA buffer\n");
@@ -1682,7 +1706,7 @@ static int xe_oa_mmap(struct file *file, struct vm_area_struct *vma)
 	}
 
 	/* Can mmap the entire OA buffer or nothing (no partial OA buffer mmaps) */
-	if (vma->vm_end - vma->vm_start != xe_bo_size(stream->oa_buffer.bo)) {
+	if (vma->vm_end - vma->vm_start != xe_bo_size(bo)) {
 		drm_dbg(&stream->oa->xe->drm, "Wrong mmap size, must be OA buffer size\n");
 		return -EINVAL;
 	}
@@ -1698,17 +1722,7 @@ static int xe_oa_mmap(struct file *file, struct vm_area_struct *vma)
 	vm_flags_mod(vma, VM_PFNMAP | VM_DONTEXPAND | VM_DONTDUMP | VM_DONTCOPY,
 		     VM_MAYWRITE | VM_MAYEXEC);
 
-	xe_assert(stream->oa->xe, bo->ttm.ttm->num_pages == vma_pages(vma));
-	for (i = 0; i < bo->ttm.ttm->num_pages; i++) {
-		ret = remap_pfn_range(vma, start, page_to_pfn(bo->ttm.ttm->pages[i]),
-				      PAGE_SIZE, vma->vm_page_prot);
-		if (ret)
-			break;
-
-		start += PAGE_SIZE;
-	}
-
-	return ret;
+	return drm_gem_mmap_obj(&bo->ttm.base, xe_bo_size(bo), vma);
 }
 
 static const struct file_operations xe_oa_fops = {
@@ -1763,19 +1777,6 @@ static int xe_oa_stream_init(struct xe_oa_stream *stream,
 		goto exit;
 	}
 
-	/*
-	 * GuC reset of engines causes OA to lose configuration
-	 * state. Prevent this by overriding GUCRC mode.
-	 */
-	if (XE_GT_WA(stream->gt, 1509372804)) {
-		ret = xe_guc_pc_override_gucrc_mode(&gt->uc.guc.pc,
-						    SLPC_GUCRC_MODE_GUCRC_NO_RC6);
-		if (ret)
-			goto err_free_configs;
-
-		stream->override_gucrc = true;
-	}
-
 	/* Take runtime pm ref and forcewake to disable RC6 */
 	xe_pm_runtime_get(stream->oa->xe);
 	stream->fw_ref = xe_force_wake_get(gt_to_fw(gt), XE_FORCEWAKE_ALL);
@@ -1826,9 +1827,6 @@ err_free_oa_buf:
 err_fw_put:
 	xe_force_wake_put(gt_to_fw(gt), stream->fw_ref);
 	xe_pm_runtime_put(stream->oa->xe);
-	if (stream->override_gucrc)
-		xe_gt_WARN_ON(gt, xe_guc_pc_unset_gucrc_mode(&gt->uc.guc.pc));
-err_free_configs:
 	xe_oa_free_configs(stream);
 exit:
 	xe_file_put(stream->xef);
@@ -1936,16 +1934,21 @@ static u64 oa_exponent_to_ns(struct xe_gt *gt, int exponent)
 	return div_u64(nom + den - 1, den);
 }
 
-static bool oa_unit_supports_oa_format(struct xe_oa_open_param *param, int type)
+static bool oa_unit_supports_oa_format(struct xe_oa *oa, struct xe_oa_open_param *param)
 {
+	const struct xe_oa_format *f = &oa->oa_formats[param->oa_format];
+
 	switch (param->oa_unit->type) {
 	case DRM_XE_OA_UNIT_TYPE_OAG:
-		return type == DRM_XE_OA_FMT_TYPE_OAG || type == DRM_XE_OA_FMT_TYPE_OAR ||
-			type == DRM_XE_OA_FMT_TYPE_OAC || type == DRM_XE_OA_FMT_TYPE_PEC;
+		return f->type == DRM_XE_OA_FMT_TYPE_OAG || f->type == DRM_XE_OA_FMT_TYPE_OAR ||
+			f->type == DRM_XE_OA_FMT_TYPE_OAC || f->type == DRM_XE_OA_FMT_TYPE_PEC;
+	case DRM_XE_OA_UNIT_TYPE_MERT:
+		if (XE_DEVICE_WA(oa->xe, 14026746987))
+			return param->oa_format == XE_OAM_FORMAT_MPEC8u32_B8_C8;
+		fallthrough;
 	case DRM_XE_OA_UNIT_TYPE_OAM:
 	case DRM_XE_OA_UNIT_TYPE_OAM_SAG:
-	case DRM_XE_OA_UNIT_TYPE_MERT:
-		return type == DRM_XE_OA_FMT_TYPE_OAM || type == DRM_XE_OA_FMT_TYPE_OAM_MPEC;
+		return f->type == DRM_XE_OA_FMT_TYPE_OAM || f->type == DRM_XE_OA_FMT_TYPE_OAM_MPEC;
 	default:
 		return false;
 	}
@@ -2048,8 +2051,10 @@ int xe_oa_stream_open_ioctl(struct drm_device *dev, u64 data, struct drm_file *f
 		if (XE_IOCTL_DBG(oa->xe, !param.exec_q))
 			return -ENOENT;
 
-		if (XE_IOCTL_DBG(oa->xe, param.exec_q->width > 1))
-			return -EOPNOTSUPP;
+		if (XE_IOCTL_DBG(oa->xe, param.exec_q->width > 1)) {
+			ret = -EOPNOTSUPP;
+			goto err_exec_q;
+		}
 	}
 
 	/*
@@ -2085,8 +2090,7 @@ int xe_oa_stream_open_ioctl(struct drm_device *dev, u64 data, struct drm_file *f
 		goto err_exec_q;
 
 	f = &oa->oa_formats[param.oa_format];
-	if (!param.oa_format || !f->size ||
-	    !oa_unit_supports_oa_format(&param, f->type)) {
+	if (!param.oa_format || !f->size || !oa_unit_supports_oa_format(oa, &param)) {
 		drm_dbg(&oa->xe->drm, "Invalid OA format %d type %d size %d for class %d\n",
 			param.oa_format, f->type, f->size, param.hwe->class);
 		ret = -EINVAL;
@@ -2247,15 +2251,19 @@ static bool xe_oa_is_valid_mux_addr(struct xe_oa *oa, u32 addr)
 		return xe_oa_reg_in_range_table(addr, gen12_oa_mux_regs);
 }
 
-static bool xe_oa_is_valid_config_reg_addr(struct xe_oa *oa, u32 addr)
+static bool xe_oa_is_valid_config_reg(struct xe_oa *oa, u32 addr, u32 val)
 {
+	if (XE_DEVICE_WA(oa->xe, 14026779378) &&
+	    addr == SYS_MEM_LAT_MEASURE.addr && val & SYS_MEM_LAT_MEASURE_EN)
+		return false;
+
 	return xe_oa_is_valid_flex_addr(oa, addr) ||
 		xe_oa_is_valid_b_counter_addr(oa, addr) ||
 		xe_oa_is_valid_mux_addr(oa, addr);
 }
 
 static struct xe_oa_reg *
-xe_oa_alloc_regs(struct xe_oa *oa, bool (*is_valid)(struct xe_oa *oa, u32 addr),
+xe_oa_alloc_regs(struct xe_oa *oa, bool (*is_valid)(struct xe_oa *oa, u32 addr, u32 val),
 		 u32 __user *regs, u32 n_regs)
 {
 	struct xe_oa_reg *oa_regs;
@@ -2273,15 +2281,15 @@ xe_oa_alloc_regs(struct xe_oa *oa, bool (*is_valid)(struct xe_oa *oa, u32 addr),
 		if (err)
 			goto addr_err;
 
-		if (!is_valid(oa, addr)) {
-			drm_dbg(&oa->xe->drm, "Invalid oa_reg address: %X\n", addr);
-			err = -EINVAL;
-			goto addr_err;
-		}
-
 		err = get_user(value, regs + 1);
 		if (err)
 			goto addr_err;
+
+		if (!is_valid(oa, addr, value)) {
+			drm_dbg(&oa->xe->drm, "Invalid oa_reg addr/value: %#x %#x\n", addr, value);
+			err = -EINVAL;
+			goto addr_err;
+		}
 
 		oa_regs[i].addr = XE_REG(addr);
 		oa_regs[i].value = value;
@@ -2381,7 +2389,7 @@ int xe_oa_add_config_ioctl(struct drm_device *dev, u64 data, struct drm_file *fi
 	memcpy(oa_config->uuid, arg->uuid, sizeof(arg->uuid));
 
 	oa_config->regs_len = arg->n_regs;
-	regs = xe_oa_alloc_regs(oa, xe_oa_is_valid_config_reg_addr,
+	regs = xe_oa_alloc_regs(oa, xe_oa_is_valid_config_reg,
 				u64_to_user_ptr(arg->regs_ptr),
 				arg->n_regs);
 	if (IS_ERR(regs)) {

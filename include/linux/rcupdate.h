@@ -206,18 +206,6 @@ static inline void exit_tasks_rcu_finish(void) { }
 #endif /* #else #ifdef CONFIG_TASKS_RCU_GENERIC */
 
 /**
- * rcu_trace_implies_rcu_gp - does an RCU Tasks Trace grace period imply an RCU grace period?
- *
- * As an accident of implementation, an RCU Tasks Trace grace period also
- * acts as an RCU grace period.  However, this could change at any time.
- * Code relying on this accident must call this function to verify that
- * this accident is still happening.
- *
- * You have been warned!
- */
-static inline bool rcu_trace_implies_rcu_gp(void) { return true; }
-
-/**
  * cond_resched_tasks_rcu_qs - Report potential quiescent states to RCU
  *
  * This macro resembles cond_resched(), except that it is defined to
@@ -604,11 +592,13 @@ context_unsafe(							      \
  * lockdep checks for being in an RCU read-side critical section.  This is
  * useful when the value of this pointer is accessed, but the pointer is
  * not dereferenced, for example, when testing an RCU-protected pointer
- * against NULL.  Although rcu_access_pointer() may also be used in cases
- * where update-side locks prevent the value of the pointer from changing,
- * you should instead use rcu_dereference_protected() for this use case.
- * Within an RCU read-side critical section, there is little reason to
- * use rcu_access_pointer().
+ * against NULL.  Within an RCU read-side critical section, there is little
+ * reason to use rcu_access_pointer().  Although rcu_access_pointer() may
+ * also be used in cases where update-side locks prevent the value of the
+ * pointer from changing, you should instead use rcu_dereference_protected()
+ * for this use case.  It is also permissible to use rcu_access_pointer()
+ * within lockless updaters to obtain the old value for an atomic operation,
+ * for example, for cmpxchg().
  *
  * It is usually best to test the rcu_access_pointer() return value
  * directly in order to avoid accidental dereferences being introduced

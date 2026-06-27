@@ -98,6 +98,9 @@ static int rtw89_ops_config(struct ieee80211_hw *hw, int radio_idx, u32 changed)
 	    !rtwdev->scanning)
 		rtw89_enter_ips(rtwdev);
 
+	if (changed & IEEE80211_CONF_CHANGE_MONITOR)
+		rtw89_physts_parsing_init(rtwdev);
+
 	return 0;
 }
 
@@ -356,6 +359,11 @@ static void rtw89_ops_configure_filter(struct ieee80211_hw *hw,
 		}
 	}
 
+	if (rtwdev->hw->conf.flags & IEEE80211_CONF_MONITOR)
+		rtwdev->hal.rx_fltr |= B_AX_SNIFFER_MODE;
+	else
+		rtwdev->hal.rx_fltr &= ~B_AX_SNIFFER_MODE;
+
 	rx_fltr = rtwdev->hal.rx_fltr;
 
 	/* mac80211 doesn't configure filter when HW scan, driver need to
@@ -527,6 +535,8 @@ static int __rtw89_ops_sta_add(struct rtw89_dev *rtwdev,
 
 	if (vif->type == NL80211_IFTYPE_AP || sta->tdls)
 		rtw89_queue_chanctx_change(rtwdev, RTW89_CHANCTX_REMOTE_STA_CHANGE);
+
+	rtw89_fw_h2c_init_trx_protect(rtwdev);
 
 	return 0;
 
@@ -719,14 +729,21 @@ static void rtw89_ops_vif_cfg_changed(struct ieee80211_hw *hw,
 
 	if (changed & BSS_CHANGED_MLD_VALID_LINKS) {
 		struct rtw89_vif_link *cur = rtw89_get_designated_link(rtwvif);
+		u16 mac_id;
 
 		if (RTW89_CHK_FW_FEATURE_GROUP(WITH_RFK_PRE_NOTIFY, &rtwdev->fw))
 			rtw89_chip_rfk_channel(rtwdev, cur);
 
-		if (hweight16(vif->active_links) == 1)
+		if (hweight16(vif->active_links) == 1) {
+			mac_id = cur->mac_id;
 			rtwvif->mlo_mode = RTW89_MLO_MODE_MLSR;
-		else
+		} else {
+			/* Specify for all MAC ID */
+			mac_id = 0xffff;
 			rtwvif->mlo_mode = RTW89_MLO_MODE_EMLSR;
+		}
+
+		rtw89_fw_h2c_tx_history(rtwdev, mac_id);
 	}
 }
 
@@ -962,6 +979,8 @@ static int rtw89_ops_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 			rtw89_err(rtwdev, "failed to add key to sec cam\n");
 			return ret;
 		}
+		if (key->flags & IEEE80211_KEY_FLAG_PAIRWISE)
+			rtw89_core_tid_rx_stats_reset(rtwdev);
 		break;
 	case DISABLE_KEY:
 		flush_work(&rtwdev->txq_work);
@@ -1003,6 +1022,8 @@ static int rtw89_ops_ampdu_action(struct ieee80211_hw *hw,
 		clear_bit(tid, rtwsta->ampdu_map);
 		rtw89_chip_h2c_ampdu_cmac_tbl(rtwdev, rtwvif, rtwsta);
 		ieee80211_stop_tx_ba_cb_irqsafe(vif, sta->addr, tid);
+		rtw89_leave_ps_mode(rtwdev);
+		rtw89_phy_ra_recalc_agg_limit(rtwdev);
 		break;
 	case IEEE80211_AMPDU_TX_OPERATIONAL:
 		set_bit(RTW89_TXQ_F_AMPDU, &rtwtxq->flags);
@@ -1011,11 +1032,14 @@ static int rtw89_ops_ampdu_action(struct ieee80211_hw *hw,
 		set_bit(tid, rtwsta->ampdu_map);
 		rtw89_leave_ps_mode(rtwdev);
 		rtw89_chip_h2c_ampdu_cmac_tbl(rtwdev, rtwvif, rtwsta);
+		rtw89_phy_ra_recalc_agg_limit(rtwdev);
 		break;
 	case IEEE80211_AMPDU_RX_START:
+		rtw89_core_tid_rx_stats_ctrl(rtwdev, rtwsta, params, true);
 		rtw89_chip_h2c_ba_cam(rtwdev, rtwsta, true, params);
 		break;
 	case IEEE80211_AMPDU_RX_STOP:
+		rtw89_core_tid_rx_stats_ctrl(rtwdev, rtwsta, params, false);
 		rtw89_chip_h2c_ba_cam(rtwdev, rtwsta, false, params);
 		break;
 	default:
@@ -1233,12 +1257,19 @@ static int rtw89_ops_hw_scan(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 	struct rtw89_dev *rtwdev = hw->priv;
 	struct rtw89_vif *rtwvif = vif_to_rtwvif(vif);
 	struct rtw89_vif_link *rtwvif_link;
+	struct rtw89_hal *hal = &rtwdev->hal;
 	int ret;
 
 	lockdep_assert_wiphy(hw->wiphy);
 
 	if (!RTW89_CHK_FW_FEATURE(SCAN_OFFLOAD, &rtwdev->fw))
 		return 1;
+
+	if (hal->disabled_dm_bitmap & BIT(RTW89_DM_HW_SCAN)) {
+		rtw89_debug(rtwdev, RTW89_DBG_HW_SCAN,
+			    "reject hw scan due to disabled_dm\n");
+		return -EBUSY;
+	}
 
 	if (rtwdev->scanning || rtwvif->offchan)
 		return -EBUSY;
@@ -1584,6 +1615,8 @@ static void __rtw89_ops_clr_vif_links(struct rtw89_dev *rtwdev,
 		if (unlikely(!rtwvif_link))
 			continue;
 
+		rtw89_fw_h2c_trx_protect(rtwdev, rtwvif_link->phy_idx, false);
+
 		__rtw89_ops_remove_iface_link(rtwdev, rtwvif_link);
 
 		rtw89_vif_unset_link(rtwvif, link_id);
@@ -1609,6 +1642,7 @@ static int __rtw89_ops_set_vif_links(struct rtw89_dev *rtwdev,
 				  __func__, link_id);
 			return ret;
 		}
+		rtw89_fw_h2c_trx_protect(rtwdev, rtwvif_link->phy_idx, true);
 	}
 
 	return 0;

@@ -73,7 +73,6 @@ static void update_cu_mask(struct mqd_manager *mm, void *mqd,
 static void set_priority(struct vi_mqd *m, struct queue_properties *q)
 {
 	m->cp_hqd_pipe_priority = pipe_priority_map[q->priority];
-	/* m->cp_hqd_queue_priority = q->priority; */
 }
 
 static struct kfd_mem_obj *allocate_mqd(struct mqd_manager *mm,
@@ -148,6 +147,11 @@ static void init_mqd(struct mqd_manager *mm, void **mqd,
 		m->cp_hqd_cntl_stack_offset = q->ctl_stack_size;
 		m->cp_hqd_wg_state_offset = q->ctl_stack_size;
 	}
+
+	mutex_lock(&mm->dev->kfd->profiler_lock);
+	if (mm->dev->kfd->profiler_process != NULL)
+		m->compute_perfcount_enable = 1;
+	mutex_unlock(&mm->dev->kfd->profiler_lock);
 
 	*mqd = m;
 	if (gart_addr)
@@ -231,6 +235,12 @@ static void __update_mqd(struct mqd_manager *mm, void *mqd,
 		m->cp_hqd_ctx_save_control =
 			atc_bit << CP_HQD_CTX_SAVE_CONTROL__ATC__SHIFT |
 			mtype << CP_HQD_CTX_SAVE_CONTROL__MTYPE__SHIFT;
+	if (minfo) {
+		if (minfo->update_flag == UPDATE_FLAG_PERFCOUNT_ENABLE)
+			m->compute_perfcount_enable = 1;
+		else if (minfo->update_flag == UPDATE_FLAG_PERFCOUNT_DISABLE)
+			m->compute_perfcount_enable = 0;
+	}
 
 	update_cu_mask(mm, mqd, minfo);
 	set_priority(m, q);
@@ -275,10 +285,11 @@ static int get_wave_state(struct mqd_manager *mm, void *mqd,
 	return 0;
 }
 
-static void get_checkpoint_info(struct mqd_manager *mm, void *mqd, u32 *ctl_stack_size)
+static int get_checkpoint_info(struct mqd_manager *mm, void *mqd, u32 *ctl_stack_size)
 {
 	/* Control stack is stored in user mode */
 	*ctl_stack_size = 0;
+	return 0;
 }
 
 static void checkpoint_mqd(struct mqd_manager *mm, void *mqd, void *mqd_dst, void *ctl_stack_dst)

@@ -38,12 +38,12 @@
 #include <drm/drm_probe_helper.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
-#include <linux/hrtimer.h>
 #include "amdgpu_irq.h"
 
 #include <drm/display/drm_dp_mst_helper.h>
 #include "modules/inc/mod_freesync.h"
 #include "amdgpu_dm_irq_params.h"
+#include "amdgpu_dm_ism.h"
 
 struct amdgpu_bo;
 struct amdgpu_device;
@@ -486,6 +486,10 @@ struct amdgpu_crtc {
 	int deferred_flip_completion;
 	/* parameters access from DM IRQ handler */
 	struct dm_irq_params dm_irq_params;
+
+	/* DM idle state manager */
+	struct amdgpu_dm_ism ism;
+
 	/* pll sharing */
 	struct amdgpu_atom_ss ss;
 	bool ss_enabled;
@@ -500,9 +504,6 @@ struct amdgpu_crtc {
 	u32 line_time;
 	u32 lb_vblank_lead_lines;
 	struct drm_display_mode hw_mode;
-	/* for virtual dce */
-	struct hrtimer vblank_timer;
-	enum amdgpu_interrupt_state vsync_timer_enabled;
 
 	int otg_inst;
 	struct drm_pending_vblank_event *event;
@@ -624,7 +625,7 @@ struct amdgpu_connector {
 	bool use_digital;
 	/* we need to mind the EDID between detect
 	   and get modes due to analog/digital/tvencoder */
-	struct edid *edid;
+	const struct drm_edid *edid;
 	void *con_priv;
 	bool dac_load_detect;
 	bool detected_by_load; /* if the connection status was determined by load */

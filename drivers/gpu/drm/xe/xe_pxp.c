@@ -13,10 +13,12 @@
 #include "xe_device_types.h"
 #include "xe_exec_queue.h"
 #include "xe_force_wake.h"
+#include "xe_guc_exec_queue_types.h"
 #include "xe_guc_submit.h"
 #include "xe_gsc_proxy.h"
 #include "xe_gt_types.h"
 #include "xe_huc.h"
+#include "xe_hw_engine.h"
 #include "xe_mmio.h"
 #include "xe_pm.h"
 #include "xe_pxp_submit.h"
@@ -312,8 +314,8 @@ void xe_pxp_irq_handler(struct xe_device *xe, u16 iir)
 
 static int kcr_pxp_set_status(const struct xe_pxp *pxp, bool enable)
 {
-	u32 val = enable ? _MASKED_BIT_ENABLE(KCR_INIT_ALLOW_DISPLAY_ME_WRITES) :
-		  _MASKED_BIT_DISABLE(KCR_INIT_ALLOW_DISPLAY_ME_WRITES);
+	u32 val = enable ? REG_MASKED_FIELD_ENABLE(KCR_INIT_ALLOW_DISPLAY_ME_WRITES) :
+		  REG_MASKED_FIELD_DISABLE(KCR_INIT_ALLOW_DISPLAY_ME_WRITES);
 
 	CLASS(xe_force_wake, fw_ref)(gt_to_fw(pxp->gt), XE_FW_GT);
 	if (!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FW_GT))
@@ -740,6 +742,10 @@ static void pxp_invalidate_queues(struct xe_pxp *pxp)
 	spin_unlock_irq(&pxp->queues.lock);
 
 	list_for_each_entry_safe(q, tmp, &to_clean, pxp.link) {
+		drm_dbg(&pxp->xe->drm,
+			"Killing queue due to PXP termination: eclass=%s, guc_id=%d\n",
+			xe_hw_engine_class_to_str(q->class), q->guc->id);
+
 		xe_exec_queue_kill(q);
 
 		/*

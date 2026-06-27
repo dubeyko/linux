@@ -38,35 +38,8 @@ static int class_read_prop(struct sdw_slave *sdw)
 	return 0;
 }
 
-static int class_sdw_update_status(struct sdw_slave *sdw, enum sdw_slave_status status)
-{
-	struct sdca_class_drv *drv = dev_get_drvdata(&sdw->dev);
-
-	switch (status) {
-	case SDW_SLAVE_ATTACHED:
-		dev_dbg(drv->dev, "device attach\n");
-
-		drv->attached = true;
-
-		complete(&drv->device_attach);
-		break;
-	case SDW_SLAVE_UNATTACHED:
-		dev_dbg(drv->dev, "device detach\n");
-
-		drv->attached = false;
-
-		reinit_completion(&drv->device_attach);
-		break;
-	default:
-		break;
-	}
-
-	return 0;
-}
-
 static const struct sdw_slave_ops class_sdw_ops = {
 	.read_prop	= class_read_prop,
-	.update_status	= class_sdw_update_status,
 };
 
 static void class_regmap_lock(void *data)
@@ -81,24 +54,6 @@ static void class_regmap_unlock(void *data)
 	struct mutex *lock = data;
 
 	mutex_unlock(lock);
-}
-
-static int class_wait_for_attach(struct sdca_class_drv *drv)
-{
-	if (!drv->attached) {
-		unsigned long timeout = msecs_to_jiffies(CLASS_SDW_ATTACH_TIMEOUT_MS);
-		unsigned long time;
-
-		time = wait_for_completion_timeout(&drv->device_attach, timeout);
-		if (!time) {
-			dev_err(drv->dev, "timed out waiting for device re-attach\n");
-			return -ETIMEDOUT;
-		}
-	}
-
-	regcache_cache_only(drv->dev_regmap, false);
-
-	return 0;
 }
 
 static bool class_dev_regmap_volatile(struct device *dev, unsigned int reg)
@@ -137,6 +92,13 @@ static const struct regmap_config class_dev_regmap_config = {
 	.unlock			= class_regmap_unlock,
 };
 
+static void class_remove_functions(void *data)
+{
+	struct sdca_class_drv *drv = data;
+
+	sdca_dev_unregister_functions(drv->sdw);
+}
+
 static void class_boot_work(struct work_struct *work)
 {
 	struct sdca_class_drv *drv = container_of(work,
@@ -144,9 +106,11 @@ static void class_boot_work(struct work_struct *work)
 						  boot_work);
 	int ret;
 
-	ret = class_wait_for_attach(drv);
+	ret = sdw_slave_wait_for_init(drv->sdw, CLASS_SDW_ATTACH_TIMEOUT_MS);
 	if (ret)
 		goto err;
+
+	regcache_cache_only(drv->dev_regmap, false);
 
 	drv->irq_info = sdca_irq_allocate(drv->dev, drv->dev_regmap,
 					  drv->sdw->irq);
@@ -154,6 +118,11 @@ static void class_boot_work(struct work_struct *work)
 		goto err;
 
 	ret = sdca_dev_register_functions(drv->sdw);
+	if (ret)
+		goto err;
+
+	/* Ensure function drivers are removed before the IRQ is destroyed */
+	ret = devm_add_action_or_reset(drv->dev, class_remove_functions, drv);
 	if (ret)
 		goto err;
 
@@ -168,19 +137,9 @@ err:
 	pm_runtime_put_sync(drv->dev);
 }
 
-static void class_dev_remove(void *data)
-{
-	struct sdca_class_drv *drv = data;
-
-	cancel_work_sync(&drv->boot_work);
-
-	sdca_dev_unregister_functions(drv->sdw);
-}
-
 static int class_sdw_probe(struct sdw_slave *sdw, const struct sdw_device_id *id)
 {
 	struct device *dev = &sdw->dev;
-	struct sdca_device_data *data = &sdw->sdca_data;
 	struct regmap_config *dev_config;
 	struct sdca_class_drv *drv;
 	int ret;
@@ -196,12 +155,6 @@ static int class_sdw_probe(struct sdw_slave *sdw, const struct sdw_device_id *id
 	if (!dev_config)
 		return -ENOMEM;
 
-	drv->functions = devm_kcalloc(dev, data->num_functions,
-				      sizeof(*drv->functions),
-				      GFP_KERNEL);
-	if (!drv->functions)
-		return -ENOMEM;
-
 	drv->dev = dev;
 	drv->sdw = sdw;
 	mutex_init(&drv->regmap_lock);
@@ -210,7 +163,6 @@ static int class_sdw_probe(struct sdw_slave *sdw, const struct sdw_device_id *id
 	dev_set_drvdata(drv->dev, drv);
 
 	INIT_WORK(&drv->boot_work, class_boot_work);
-	init_completion(&drv->device_attach);
 
 	dev_config->lock_arg = &drv->regmap_lock;
 
@@ -230,13 +182,17 @@ static int class_sdw_probe(struct sdw_slave *sdw, const struct sdw_device_id *id
 	if (ret)
 		return ret;
 
-	ret = devm_add_action_or_reset(dev, class_dev_remove, drv);
-	if (ret)
-		return ret;
-
 	queue_work(system_long_wq, &drv->boot_work);
 
 	return 0;
+}
+
+static void class_sdw_remove(struct sdw_slave *sdw)
+{
+	struct device *dev = &sdw->dev;
+	struct sdca_class_drv *drv = dev_get_drvdata(dev);
+
+	cancel_work_sync(&drv->boot_work);
 }
 
 static int class_suspend(struct device *dev)
@@ -290,10 +246,11 @@ static int class_runtime_resume(struct device *dev)
 	struct sdca_class_drv *drv = dev_get_drvdata(dev);
 	int ret;
 
-	ret = class_wait_for_attach(drv);
+	ret = sdw_slave_wait_for_init(drv->sdw, CLASS_SDW_ATTACH_TIMEOUT_MS);
 	if (ret)
 		goto err;
 
+	regcache_cache_only(drv->dev_regmap, false);
 	regcache_mark_dirty(drv->dev_regmap);
 
 	ret = regcache_sync(drv->dev_regmap);
@@ -317,6 +274,8 @@ static const struct dev_pm_ops class_pm_ops = {
 
 static const struct sdw_device_id class_sdw_id[] = {
 	SDW_SLAVE_ENTRY(0x01FA, 0x4245, 0),
+	SDW_SLAVE_ENTRY(0x01FA, 0x4249, 0),
+	SDW_SLAVE_ENTRY(0x01FA, 0x4747, 0),
 	{}
 };
 MODULE_DEVICE_TABLE(sdw, class_sdw_id);
@@ -328,6 +287,7 @@ static struct sdw_driver class_sdw_driver = {
 	},
 
 	.probe		= class_sdw_probe,
+	.remove		= class_sdw_remove,
 	.id_table	= class_sdw_id,
 	.ops		= &class_sdw_ops,
 };

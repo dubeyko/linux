@@ -11,7 +11,6 @@ use kernel::{
         Io, //
     },
     prelude::*,
-    sync::aref::ARef,
     time::{
         delay::fsleep,
         Delta, //
@@ -67,6 +66,7 @@ const CMD_SIZE: usize = size_of::<fw::SequencerBufferCmd>();
 /// GSP Sequencer Command types with payload data.
 /// Commands have an opcode and an opcode-dependent struct.
 #[allow(clippy::enum_variant_names)]
+#[derive(Debug)]
 pub(crate) enum GspSeqCmd {
     RegWrite(fw::RegWritePayload),
     RegModify(fw::RegModifyPayload),
@@ -131,7 +131,7 @@ pub(crate) struct GspSequencer<'a> {
     /// Sequencer information with command data.
     seq_info: GspSequence,
     /// `Bar0` for register access.
-    bar: &'a Bar0,
+    bar: Bar0<'a>,
     /// SEC2 falcon for core operations.
     sec2_falcon: &'a Falcon<Sec2>,
     /// GSP falcon for core operations.
@@ -141,15 +141,10 @@ pub(crate) struct GspSequencer<'a> {
     /// Bootloader application version.
     bootloader_app_version: u32,
     /// Device for logging.
-    dev: ARef<device::Device>,
+    dev: &'a device::Device,
 }
 
-/// Trait for running sequencer commands.
-pub(crate) trait GspSeqCmdRunner {
-    fn run(&self, sequencer: &GspSequencer<'_>) -> Result;
-}
-
-impl GspSeqCmdRunner for fw::RegWritePayload {
+impl fw::RegWritePayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -157,7 +152,7 @@ impl GspSeqCmdRunner for fw::RegWritePayload {
     }
 }
 
-impl GspSeqCmdRunner for fw::RegModifyPayload {
+impl fw::RegModifyPayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -169,7 +164,7 @@ impl GspSeqCmdRunner for fw::RegModifyPayload {
     }
 }
 
-impl GspSeqCmdRunner for fw::RegPollPayload {
+impl fw::RegPollPayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -194,14 +189,14 @@ impl GspSeqCmdRunner for fw::RegPollPayload {
     }
 }
 
-impl GspSeqCmdRunner for fw::DelayUsPayload {
+impl fw::DelayUsPayload {
     fn run(&self, _sequencer: &GspSequencer<'_>) -> Result {
         fsleep(Delta::from_micros(i64::from(self.val())));
         Ok(())
     }
 }
 
-impl GspSeqCmdRunner for fw::RegStorePayload {
+impl fw::RegStorePayload {
     fn run(&self, sequencer: &GspSequencer<'_>) -> Result {
         let addr = usize::from_safe_cast(self.addr());
 
@@ -209,7 +204,7 @@ impl GspSeqCmdRunner for fw::RegStorePayload {
     }
 }
 
-impl GspSeqCmdRunner for GspSeqCmd {
+impl GspSeqCmd {
     fn run(&self, seq: &GspSequencer<'_>) -> Result {
         match self {
             GspSeqCmd::RegWrite(cmd) => cmd.run(seq),
@@ -285,7 +280,7 @@ pub(crate) struct GspSeqIter<'a> {
     /// Number of commands processed so far.
     cmds_processed: u32,
     /// Device for logging.
-    dev: ARef<device::Device>,
+    dev: &'a device::Device,
 }
 
 impl<'a> Iterator for GspSeqIter<'a> {
@@ -313,7 +308,7 @@ impl<'a> Iterator for GspSeqIter<'a> {
             self.cmd_data.len() - offset
         };
         buffer[..copy_len].copy_from_slice(&self.cmd_data[offset..offset + copy_len]);
-        let cmd_result = GspSeqCmd::new(&buffer, &self.dev);
+        let cmd_result = GspSeqCmd::new(&buffer, self.dev);
 
         cmd_result.map_or_else(
             |_err| {
@@ -338,7 +333,7 @@ impl<'a> GspSequencer<'a> {
             current_offset: 0,
             total_cmds: self.seq_info.cmd_index,
             cmds_processed: 0,
-            dev: self.dev.clone(),
+            dev: self.dev,
         }
     }
 }
@@ -354,15 +349,15 @@ pub(crate) struct GspSequencerParams<'a> {
     /// SEC2 falcon for core operations.
     pub(crate) sec2_falcon: &'a Falcon<Sec2>,
     /// Device for logging.
-    pub(crate) dev: ARef<device::Device>,
+    pub(crate) dev: &'a device::Device,
     /// BAR0 for register access.
-    pub(crate) bar: &'a Bar0,
+    pub(crate) bar: Bar0<'a>,
 }
 
 impl<'a> GspSequencer<'a> {
-    pub(crate) fn run(cmdq: &mut Cmdq, params: GspSequencerParams<'a>) -> Result {
+    pub(crate) fn run(cmdq: &Cmdq, params: GspSequencerParams<'a>) -> Result {
         let seq_info = loop {
-            match cmdq.receive_msg::<GspSequence>(Delta::from_secs(10)) {
+            match cmdq.receive_msg::<GspSequence>(Cmdq::RECEIVE_TIMEOUT) {
                 Ok(seq_info) => break seq_info,
                 Err(ERANGE) => continue,
                 Err(e) => return Err(e),

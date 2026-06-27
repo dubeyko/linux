@@ -972,27 +972,6 @@ reload_tlb:
 }
 
 /*
- * Please ignore the name of this function.  It should be called
- * switch_to_kernel_thread().
- *
- * enter_lazy_tlb() is a hint from the scheduler that we are entering a
- * kernel thread or other context without an mm.  Acceptable implementations
- * include doing nothing whatsoever, switching to init_mm, or various clever
- * lazy tricks to try to minimize TLB flushes.
- *
- * The scheduler reserves the right to call enter_lazy_tlb() several times
- * in a row.  It will notify us that we're going back to a real mm by
- * calling switch_mm_irqs_off().
- */
-void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
-{
-	if (this_cpu_read(cpu_tlbstate.loaded_mm) == &init_mm)
-		return;
-
-	this_cpu_write(cpu_tlbstate_shared.is_lazy, true);
-}
-
-/*
  * Using a temporary mm allows to set temporary mappings that are not accessible
  * by other CPUs. Such mappings are needed to perform sensitive memory writes
  * that override the kernel memory protections (e.g., W^X), without exposing the
@@ -1144,7 +1123,7 @@ static void flush_tlb_func(void *info)
 	VM_WARN_ON(!irqs_disabled());
 
 	if (!local) {
-		inc_irq_stat(irq_tlb_count);
+		inc_irq_stat(TLB);
 		count_vm_tlb_event(NR_TLB_REMOTE_FLUSH_RECEIVED);
 	}
 
@@ -1790,7 +1769,7 @@ bool nmi_uaccess_okay(void)
 }
 
 static ssize_t tlbflush_read_file(struct file *file, char __user *user_buf,
-			     size_t count, loff_t *ppos)
+				  size_t count, loff_t *ppos)
 {
 	char buf[32];
 	unsigned int len;
@@ -1799,20 +1778,15 @@ static ssize_t tlbflush_read_file(struct file *file, char __user *user_buf,
 	return simple_read_from_buffer(user_buf, count, ppos, buf, len);
 }
 
-static ssize_t tlbflush_write_file(struct file *file,
-		 const char __user *user_buf, size_t count, loff_t *ppos)
+static ssize_t tlbflush_write_file(struct file *file, const char __user *user_buf,
+				   size_t count, loff_t *ppos)
 {
-	char buf[32];
-	ssize_t len;
 	int ceiling;
+	int err;
 
-	len = min(count, sizeof(buf) - 1);
-	if (copy_from_user(buf, user_buf, len))
-		return -EFAULT;
-
-	buf[len] = '\0';
-	if (kstrtoint(buf, 0, &ceiling))
-		return -EINVAL;
+	err = kstrtoint_from_user(user_buf, count, 0, &ceiling);
+	if (err)
+		return err;
 
 	if (ceiling < 0)
 		return -EINVAL;

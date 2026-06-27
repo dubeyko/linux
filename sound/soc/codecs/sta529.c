@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * ASoC codec driver for spear platform
  *
@@ -5,10 +6,6 @@
  *
  * Copyright (C) 2012 ST Microelectronics
  * Rajeev Kumar <rajeevkumar.linux@gmail.com>
- *
- * This file is licensed under the terms of the GNU General Public
- * License version 2. This program is licensed "as is" without any
- * warranty of any kind, whether express or implied.
  */
 
 #include <linux/clk.h>
@@ -364,7 +361,7 @@ static int sta529_i2c_probe(struct i2c_client *i2c)
 }
 
 static const struct i2c_device_id sta529_i2c_id[] = {
-	{ "sta529" },
+	{ .name = "sta529" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, sta529_i2c_id);

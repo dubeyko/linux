@@ -18,8 +18,6 @@
 
 char _license[] SEC("license") = "GPL";
 
-const volatile u32 nr_cpus = 32;	/* !0 for veristat, set during init */
-
 UEI_DEFINE(uei);
 
 /*
@@ -66,7 +64,7 @@ void BPF_STRUCT_OPS(cpu0_enqueue, struct task_struct *p, u64 enq_flags)
 void BPF_STRUCT_OPS(cpu0_dispatch, s32 cpu, struct task_struct *prev)
 {
 	if (cpu == 0)
-		scx_bpf_dsq_move_to_local(DSQ_CPU0);
+		scx_bpf_dsq_move_to_local(DSQ_CPU0, 0);
 }
 
 s32 BPF_STRUCT_OPS_SLEEPABLE(cpu0_init)

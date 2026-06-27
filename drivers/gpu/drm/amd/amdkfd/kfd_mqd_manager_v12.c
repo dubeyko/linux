@@ -77,7 +77,6 @@ static void update_cu_mask(struct mqd_manager *mm, void *mqd,
 static void set_priority(struct v12_compute_mqd *m, struct queue_properties *q)
 {
 	m->cp_hqd_pipe_priority = pipe_priority_map[q->priority];
-	/* m->cp_hqd_queue_priority = q->priority; */
 }
 
 static struct kfd_mem_obj *allocate_mqd(struct mqd_manager *mm,
@@ -139,10 +138,9 @@ static void init_mqd(struct mqd_manager *mm, void **mqd,
 	if (amdgpu_amdkfd_have_atomics_support(mm->dev->adev))
 		m->cp_hqd_hq_status0 |= 1 << 29;
 
-	if (q->format == KFD_QUEUE_FORMAT_AQL) {
+	if (q->format == KFD_QUEUE_FORMAT_AQL)
 		m->cp_hqd_aql_control =
 			1 << CP_HQD_AQL_CONTROL__CONTROL0__SHIFT;
-	}
 
 	if (mm->dev->kfd->cwsr_enabled) {
 		m->cp_hqd_persistent_state |=
@@ -156,6 +154,11 @@ static void init_mqd(struct mqd_manager *mm, void **mqd,
 		m->cp_hqd_cntl_stack_offset = q->ctl_stack_size;
 		m->cp_hqd_wg_state_offset = q->ctl_stack_size;
 	}
+
+	mutex_lock(&mm->dev->kfd->profiler_lock);
+	if (mm->dev->kfd->profiler_process != NULL)
+		m->compute_perfcount_enable = 1;
+	mutex_unlock(&mm->dev->kfd->profiler_lock);
 
 	*mqd = m;
 	if (gart_addr)

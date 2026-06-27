@@ -25,6 +25,8 @@ share it. GEM has simpler initialization and execution requirements than
 TTM, but has no video RAM management capabilities and is thus limited to
 UMA devices.
 
+.. contents::
+
 The Translation Table Manager (TTM)
 ===================================
 
@@ -526,8 +528,14 @@ DRM GPUVM Function References
 DRM Buddy Allocator
 ===================
 
-DRM Buddy Function References
------------------------------
+Buddy Allocator Function References (GPU buddy)
+-----------------------------------------------
+
+.. kernel-doc:: drivers/gpu/buddy.c
+   :export:
+
+DRM Buddy Specific Logging Function References
+----------------------------------------------
 
 .. kernel-doc:: drivers/gpu/drm/drm_buddy.c
    :export:

@@ -1,12 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * CS4270 ALSA SoC (ASoC) codec driver
  *
  * Author: Timur Tabi <timur@freescale.com>
  *
- * Copyright 2007-2009 Freescale Semiconductor, Inc.  This file is licensed
- * under the terms of the GNU General Public License version 2.  This
- * program is licensed "as is" without any warranty of any kind, whether
- * express or implied.
+ * Copyright 2007-2009 Freescale Semiconductor, Inc.
  *
  * This is an ASoC device driver for the Cirrus Logic CS4270 codec.
  *
@@ -734,8 +732,8 @@ static int cs4270_i2c_probe(struct i2c_client *i2c_client)
  * cs4270_id - I2C device IDs supported by this driver
  */
 static const struct i2c_device_id cs4270_id[] = {
-	{"cs4270"},
-	{}
+	{ .name = "cs4270" },
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, cs4270_id);
 

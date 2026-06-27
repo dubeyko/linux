@@ -72,7 +72,7 @@
 static void enable_memory_low_power(struct dc *dc)
 {
 	struct dce_hwseq *hws = dc->hwseq;
-	int i;
+	unsigned int i;
 
 	if (dc->debug.enable_mem_low_power.bits.dmcu) {
 		// Force ERAM to shutdown if DMCU is not enabled
@@ -104,6 +104,8 @@ static void enable_memory_low_power(struct dc *dc)
 				dc->res_pool->stream_enc[i]->vpg->funcs->vpg_powerdown(dc->res_pool->stream_enc[i]->vpg);
 		for (i = 0; i < dc->res_pool->hpo_dp_stream_enc_count; i++)
 			dc->res_pool->hpo_dp_stream_enc[i]->vpg->funcs->vpg_powerdown(dc->res_pool->hpo_dp_stream_enc[i]->vpg);
+		for (i = 0; i < dc->res_pool->hpo_frl_stream_enc_count; i++)
+			dc->res_pool->hpo_frl_stream_enc[i]->vpg->funcs->vpg_powerdown(dc->res_pool->hpo_frl_stream_enc[i]->vpg);
 	}
 
 }
@@ -116,7 +118,7 @@ void dcn31_init_hw(struct dc *dc)
 	struct resource_pool *res_pool = dc->res_pool;
 	uint32_t backlight = MAX_BACKLIGHT_LEVEL;
 	uint32_t user_level = MAX_BACKLIGHT_LEVEL;
-	int i;
+	unsigned int i;
 
 	if (dc->clk_mgr && dc->clk_mgr->funcs->init_clocks)
 		dc->clk_mgr->funcs->init_clocks(dc->clk_mgr);
@@ -377,27 +379,37 @@ void dcn31_update_info_frame(struct pipe_ctx *pipe_ctx)
 {
 	bool is_hdmi_tmds;
 	bool is_dp;
+	bool is_hdmi_frl;
 
 	ASSERT(pipe_ctx->stream);
 
-	if (pipe_ctx->stream_res.stream_enc == NULL)
+	if (pipe_ctx->stream_res.stream_enc == NULL &&
+			pipe_ctx->stream_res.hpo_frl_stream_enc == NULL)
 		return;  /* this is not root pipe */
 
 	is_hdmi_tmds = dc_is_hdmi_tmds_signal(pipe_ctx->stream->signal);
 	is_dp = dc_is_dp_signal(pipe_ctx->stream->signal);
 
-	if (!is_hdmi_tmds && !is_dp)
+	is_hdmi_frl = dc_is_hdmi_frl_signal(pipe_ctx->stream->signal);
+	if (!is_hdmi_tmds && !is_dp && !is_hdmi_frl)
 		return;
 
 	if (is_hdmi_tmds)
 		pipe_ctx->stream_res.stream_enc->funcs->update_hdmi_info_packets(
 			pipe_ctx->stream_res.stream_enc,
 			&pipe_ctx->stream_res.encoder_info_frame);
+	else if (is_hdmi_frl)
+		pipe_ctx->stream_res.hpo_frl_stream_enc->funcs->update_hdmi_info_packets(
+			pipe_ctx->stream_res.hpo_frl_stream_enc,
+			&pipe_ctx->stream_res.encoder_info_frame);
 	else if (pipe_ctx->stream->ctx->dc->link_srv->dp_is_128b_132b_signal(pipe_ctx)) {
 		if (pipe_ctx->stream_res.hpo_dp_stream_enc->funcs->update_dp_info_packets_sdp_line_num)
 			pipe_ctx->stream_res.hpo_dp_stream_enc->funcs->update_dp_info_packets_sdp_line_num(
 				pipe_ctx->stream_res.hpo_dp_stream_enc,
 				&pipe_ctx->stream_res.encoder_info_frame);
+
+		pipe_ctx->stream_res.encoder_info_frame.firmware_controlled_hdr_info_packet
+			= pipe_ctx->stream->firmware_controlled_hdr_info_packet;
 
 		pipe_ctx->stream_res.hpo_dp_stream_enc->funcs->update_dp_info_packets(
 				pipe_ctx->stream_res.hpo_dp_stream_enc,
@@ -408,6 +420,9 @@ void dcn31_update_info_frame(struct pipe_ctx *pipe_ctx)
 			pipe_ctx->stream_res.stream_enc->funcs->update_dp_info_packets_sdp_line_num(
 				pipe_ctx->stream_res.stream_enc,
 				&pipe_ctx->stream_res.encoder_info_frame);
+
+		pipe_ctx->stream_res.encoder_info_frame.firmware_controlled_hdr_info_packet
+			= pipe_ctx->stream->firmware_controlled_hdr_info_packet;
 
 		pipe_ctx->stream_res.stream_enc->funcs->update_dp_info_packets(
 			pipe_ctx->stream_res.stream_enc,
@@ -484,6 +499,7 @@ void dcn31_hubp_pg_control(struct dce_hwseq *hws, unsigned int hubp_inst, bool p
 
 int dcn31_init_sys_ctx(struct dce_hwseq *hws, struct dc *dc, struct dc_phy_addr_space_config *pa_config)
 {
+	(void)hws;
 	struct dcn_hubbub_phys_addr_config config = {0};
 
 	config.system_aperture.fb_top = pa_config->system_aperture.fb_top;
@@ -511,9 +527,9 @@ static void dcn31_reset_back_end_for_pipe(
 		struct pipe_ctx *pipe_ctx,
 		struct dc_state *context)
 {
+	(void)context;
 	struct dc_link *link;
 
-	DC_LOGGER_INIT(dc->ctx->logger);
 	if (pipe_ctx->stream_res.stream_enc == NULL) {
 		pipe_ctx->stream = NULL;
 		return;
@@ -549,7 +565,7 @@ static void dcn31_reset_back_end_for_pipe(
 	 * the case where the same symclk is shared across multiple otg
 	 * instances
 	 */
-	if (dc_is_hdmi_tmds_signal(pipe_ctx->stream->signal))
+	if (dc_is_tmds_signal(pipe_ctx->stream->signal))
 		link->phy_state.symclk_ref_cnts.otg = 0;
 
 	if (pipe_ctx->top_pipe == NULL) {
@@ -664,7 +680,7 @@ void dcn31_setup_hpo_hw_control(const struct dce_hwseq *hws, bool enable)
 void dcn31_set_static_screen_control(struct pipe_ctx **pipe_ctx,
 		int num_pipes, const struct dc_static_screen_params *params)
 {
-	unsigned int i;
+	int i;
 	unsigned int triggers = 0;
 
 	if (params->triggers.surface_update)

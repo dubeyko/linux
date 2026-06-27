@@ -224,6 +224,12 @@ struct ustat {
 	char			f_fpack[6];
 };
 
+struct kcov_common_handle_id {
+#ifdef CONFIG_KCOV
+	u64 val;
+#endif
+};
+
 /**
  * struct callback_head - callback structure for use with RCU and task_work
  * @next: next update requests in a list
@@ -239,7 +245,7 @@ struct ustat {
  *
  * This guarantee is important for few reasons:
  *  - future call_rcu_lazy() will make use of lower bits in the pointer;
- *  - the structure shares storage space in struct page with @compound_head,
+ *  - the structure shares storage space in struct page with @compound_info,
  *    which encode PageTail() in bit 0. The guarantee is needed to avoid
  *    false-positive PageTail().
  */

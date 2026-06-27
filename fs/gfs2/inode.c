@@ -738,6 +738,13 @@ static int gfs2_create_inode(struct inode *dir, struct dentry *dentry,
 	inode = gfs2_dir_search(dir, &dentry->d_name, !S_ISREG(mode) || excl);
 	error = PTR_ERR(inode);
 	if (!IS_ERR(inode)) {
+		if (file && (file->f_flags & __O_REGULAR) &&
+		    !S_ISREG(inode->i_mode)) {
+			iput(inode);
+			inode = NULL;
+			error = -EFTYPE;
+			goto fail_gunlock;
+		}
 		if (S_ISDIR(inode->i_mode)) {
 			iput(inode);
 			inode = NULL;
@@ -892,7 +899,7 @@ retry:
 		goto fail_gunlock4;
 
 	mark_inode_dirty(inode);
-	d_instantiate(dentry, inode);
+	d_instantiate_new(dentry, inode);
 	/* After instantiate, errors should result in evict which will destroy
 	 * both inode and iopen glocks properly. */
 	if (file) {
@@ -904,7 +911,6 @@ retry:
 	gfs2_glock_dq_uninit(&gh);
 	gfs2_glock_put(io_gl);
 	gfs2_qa_put(dip);
-	unlock_new_inode(inode);
 	return error;
 
 fail_gunlock4:
@@ -988,12 +994,8 @@ static struct dentry *__gfs2_lookup(struct inode *dir, struct dentry *dentry,
 	int error;
 
 	inode = gfs2_lookupi(dir, &dentry->d_name, 0);
-	if (inode == NULL) {
-		d_add(dentry, NULL);
-		return NULL;
-	}
-	if (IS_ERR(inode))
-		return ERR_CAST(inode);
+	if (inode == NULL || IS_ERR(inode))
+		return d_splice_alias(inode, dentry);
 
 	gl = GFS2_I(inode)->i_gl;
 	error = gfs2_glock_nq_init(gl, LM_ST_SHARED, LM_FLAG_ANY, &gh);

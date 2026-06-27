@@ -628,6 +628,7 @@ static struct link_encoder *dce112_link_encoder_create(
 	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
+	(void)ctx;
 	struct dce110_link_encoder *enc110 =
 		kzalloc_obj(struct dce110_link_encoder);
 	int link_regs_id;
@@ -803,7 +804,7 @@ static void dce112_resource_destruct(struct dce110_resource_pool *pool)
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		if (pool->base.engines[i] != NULL)
 			dce110_engine_destroy(&pool->base.engines[i]);
 		if (pool->base.hw_i2cs[i] != NULL) {
@@ -852,6 +853,7 @@ static struct clock_source *find_matching_pll(
 		const struct resource_pool *pool,
 		const struct dc_stream_state *const stream)
 {
+	(void)res_ctx;
 	switch (stream->link->link_enc->transmitter) {
 	case TRANSMITTER_UNIPHY_A:
 		return pool->clock_sources[DCE112_CLK_SRC_PLL0];
@@ -875,6 +877,7 @@ static enum dc_status build_mapped_resource(
 		struct dc_state *context,
 		struct dc_stream_state *stream)
 {
+	(void)dc;
 	struct pipe_ctx *pipe_ctx = resource_get_otg_master_for_stream(&context->res_ctx, stream);
 
 	if (!pipe_ctx)
@@ -892,6 +895,7 @@ enum dc_status dce112_validate_bandwidth(
 	struct dc_state *context,
 	enum dc_validate_mode validate_mode)
 {
+	(void)validate_mode;
 	bool result = false;
 
 	DC_LOG_BANDWIDTH_CALCS(
@@ -976,6 +980,9 @@ enum dc_status resource_map_phy_clock_resources(
 		|| dc_is_virtual_signal(pipe_ctx->stream->signal))
 		pipe_ctx->clock_source =
 				dc->res_pool->dp_clock_source;
+	else if (pipe_ctx->stream->signal == SIGNAL_TYPE_HDMI_FRL)
+			pipe_ctx->clock_source =
+				dc->res_pool->dp_clock_source;
 	else {
 		if (stream && stream->link && stream->link->link_enc)
 			pipe_ctx->clock_source = find_matching_pll(
@@ -1037,6 +1044,7 @@ static enum dc_status dce112_validate_global(
 		struct dc *dc,
 		struct dc_state *context)
 {
+	(void)dc;
 	if (!dce112_validate_surface_sets(context))
 		return DC_FAIL_SURFACE_VALIDATE;
 
@@ -1240,7 +1248,7 @@ static bool dce112_resource_construct(
 	/*************************************************
 	 *  Resource + asic cap harcoding                *
 	 *************************************************/
-	pool->base.underlay_pipe_index = NO_UNDERLAY_PIPE;
+	pool->base.underlay_pipe_index = (unsigned int)NO_UNDERLAY_PIPE;
 	pool->base.pipe_count = pool->base.res_cap->num_timing_generator;
 	pool->base.timing_generator_count = pool->base.res_cap->num_timing_generator;
 	dc->caps.max_downscale_ratio = 200;
@@ -1377,7 +1385,7 @@ static bool dce112_resource_construct(
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dce112_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();

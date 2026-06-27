@@ -170,7 +170,7 @@ macro_rules! bitfield {
     (@check_field_bounds $hi:tt:$lo:tt $field:ident as bool) => {
         #[allow(clippy::eq_op)]
         const _: () = {
-            ::kernel::build_assert!(
+            ::kernel::build_assert::build_assert!(
                 $hi == $lo,
                 concat!("boolean field `", stringify!($field), "` covers more than one bit")
             );
@@ -181,7 +181,7 @@ macro_rules! bitfield {
     (@check_field_bounds $hi:tt:$lo:tt $field:ident as $type:tt) => {
         #[allow(clippy::eq_op)]
         const _: () = {
-            ::kernel::build_assert!(
+            ::kernel::build_assert::build_assert!(
                 $hi >= $lo,
                 concat!("field `", stringify!($field), "`'s MSB is smaller than its LSB")
             );
@@ -314,12 +314,11 @@ macro_rules! bitfield {
         /// Returns a value for the bitfield where all fields are set to their default value.
         impl ::core::default::Default for $name {
             fn default() -> Self {
-                #[allow(unused_mut)]
-                let mut value = Self(Default::default());
+                let value = Self(Default::default());
 
                 ::kernel::macros::paste!(
                 $(
-                value.[<set_ $field>](Default::default());
+                let value = value.[<set_ $field>](Default::default());
                 )*
                 );
 

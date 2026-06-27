@@ -6,7 +6,12 @@
 
 use kernel::{
     device::Core,
-    dma::{CoherentAllocation, DataDirection, Device, DmaMask},
+    dma::{
+        Coherent,
+        DataDirection,
+        Device,
+        DmaMask, //
+    },
     page, pci,
     prelude::*,
     scatterlist::{Owned, SGTable},
@@ -16,7 +21,7 @@ use kernel::{
 #[pin_data(PinnedDrop)]
 struct DmaSampleDriver {
     pdev: ARef<pci::Device>,
-    ca: CoherentAllocation<MyStruct>,
+    ca: Coherent<[MyStruct]>,
     #[pin]
     sgt: SGTable<Owned<VVec<u8>>>,
 }
@@ -53,9 +58,13 @@ kernel::pci_device_table!(
 
 impl pci::Driver for DmaSampleDriver {
     type IdInfo = ();
+    type Data<'bound> = Self;
     const ID_TABLE: pci::IdTable<Self::IdInfo> = &PCI_TABLE;
 
-    fn probe(pdev: &pci::Device<Core>, _info: &Self::IdInfo) -> impl PinInit<Self, Error> {
+    fn probe<'bound>(
+        pdev: &'bound pci::Device<Core<'_>>,
+        _info: &'bound Self::IdInfo,
+    ) -> impl PinInit<Self, Error> + 'bound {
         pin_init::pin_init_scope(move || {
             dev_info!(pdev, "Probe DMA test driver.\n");
 
@@ -64,11 +73,11 @@ impl pci::Driver for DmaSampleDriver {
             // SAFETY: There are no concurrent calls to DMA allocation and mapping primitives.
             unsafe { pdev.dma_set_mask_and_coherent(mask)? };
 
-            let ca: CoherentAllocation<MyStruct> =
-                CoherentAllocation::alloc_coherent(pdev.as_ref(), TEST_VALUES.len(), GFP_KERNEL)?;
+            let ca: Coherent<[MyStruct]> =
+                Coherent::zeroed_slice(pdev.as_ref(), TEST_VALUES.len(), GFP_KERNEL)?;
 
             for (i, value) in TEST_VALUES.into_iter().enumerate() {
-                kernel::dma_write!(ca, [i]?, MyStruct::new(value.0, value.1));
+                kernel::dma_write!(ca, [try: i], MyStruct::new(value.0, value.1));
             }
 
             let size = 4 * page::PAGE_SIZE;
@@ -86,16 +95,14 @@ impl pci::Driver for DmaSampleDriver {
 }
 
 impl DmaSampleDriver {
-    fn check_dma(&self) -> Result {
+    fn check_dma(&self) {
         for (i, value) in TEST_VALUES.into_iter().enumerate() {
-            let val0 = kernel::dma_read!(self.ca, [i]?.h);
-            let val1 = kernel::dma_read!(self.ca, [i]?.b);
+            let val0 = kernel::dma_read!(self.ca, [panic: i].h);
+            let val1 = kernel::dma_read!(self.ca, [panic: i].b);
 
             assert_eq!(val0, value.0);
             assert_eq!(val1, value.1);
         }
-
-        Ok(())
     }
 }
 
@@ -104,7 +111,7 @@ impl PinnedDrop for DmaSampleDriver {
     fn drop(self: Pin<&mut Self>) {
         dev_info!(self.pdev, "Unload DMA test driver.\n");
 
-        assert!(self.check_dma().is_ok());
+        self.check_dma();
 
         for (i, entry) in self.sgt.iter().enumerate() {
             dev_info!(

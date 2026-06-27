@@ -355,8 +355,8 @@ void audit_panic(const char *message)
 
 static inline int audit_rate_check(void)
 {
-	static unsigned long	last_check = 0;
-	static int		messages   = 0;
+	static unsigned long	last_check;
+	static int		messages;
 	static DEFINE_SPINLOCK(lock);
 	unsigned long		flags;
 	unsigned long		now;
@@ -391,7 +391,7 @@ static inline int audit_rate_check(void)
 */
 void audit_log_lost(const char *message)
 {
-	static unsigned long	last_msg = 0;
+	static unsigned long	last_msg;
 	static DEFINE_SPINLOCK(lock);
 	unsigned long		flags;
 	unsigned long		now;
@@ -1295,6 +1295,8 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 		memset(&s, 0, sizeof(s));
 		/* guard against past and future API changes */
 		memcpy(&s, data, min_t(size_t, sizeof(s), data_len));
+		if (s.mask & ~AUDIT_STATUS_ALL)
+			return -EINVAL;
 		if (s.mask & AUDIT_STATUS_ENABLED) {
 			err = audit_set_enabled(s.enabled);
 			if (err < 0)
@@ -1466,6 +1468,8 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 		err = audit_list_rules_send(skb, seq);
 		break;
 	case AUDIT_TRIM:
+		if (audit_enabled == AUDIT_LOCKED)
+			return -EPERM;
 		audit_trim_trees();
 		audit_log_common_recv_msg(audit_context(), &ab,
 					  AUDIT_CONFIG_CHANGE);
@@ -1478,6 +1482,8 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh,
 		size_t msglen = data_len;
 		char *old, *new;
 
+		if (audit_enabled == AUDIT_LOCKED)
+			return -EPERM;
 		err = -EINVAL;
 		if (msglen < 2 * sizeof(u32))
 			break;
@@ -2028,7 +2034,7 @@ void audit_log_vformat(struct audit_buffer *ab, const char *fmt, va_list args)
 		 * here and AUDIT_BUFSIZ is at least 1024, then we can
 		 * log everything that printk could have logged. */
 		avail = audit_expand(ab,
-			max_t(unsigned, AUDIT_BUFSIZ, 1+len-avail));
+			max_t(unsigned int, AUDIT_BUFSIZ, 1+len-avail));
 		if (!avail)
 			goto out_va_end;
 		len = vsnprintf(skb_tail_pointer(skb), avail, fmt, args2);

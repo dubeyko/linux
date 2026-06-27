@@ -21,7 +21,6 @@ test_lirc_mode2_user
 flow_dissector_load
 test_tcpnotify_user
 test_libbpf
-xdping
 test_cpp
 *.d
 *.subskel.h
@@ -47,3 +46,5 @@ verification_cert.h
 *.BTF
 *.BTF_ids
 *.BTF.base
+usdt_1
+usdt_2

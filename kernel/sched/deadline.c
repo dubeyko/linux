@@ -18,6 +18,7 @@
 
 #include <linux/cpuset.h>
 #include <linux/sched/clock.h>
+#include <linux/sched/deadline.h>
 #include <uapi/linux/sched/types.h>
 #include "sched.h"
 #include "pelt.h"
@@ -56,17 +57,6 @@ static int __init sched_dl_sysctl_init(void)
 }
 late_initcall(sched_dl_sysctl_init);
 #endif /* CONFIG_SYSCTL */
-
-static bool dl_server(struct sched_dl_entity *dl_se)
-{
-	return dl_se->dl_server;
-}
-
-static inline struct task_struct *dl_task_of(struct sched_dl_entity *dl_se)
-{
-	BUG_ON(dl_server(dl_se));
-	return container_of(dl_se, struct task_struct, dl);
-}
 
 static inline struct rq *rq_of_dl_rq(struct dl_rq *dl_rq)
 {
@@ -114,6 +104,19 @@ static inline bool is_dl_boosted(struct sched_dl_entity *dl_se)
 	return false;
 }
 #endif /* !CONFIG_RT_MUTEXES */
+
+static inline u8 dl_get_type(struct sched_dl_entity *dl_se, struct rq *rq)
+{
+	if (!dl_server(dl_se))
+		return DL_TASK;
+	if (dl_se == &rq->fair_server)
+		return DL_SERVER_FAIR;
+#ifdef CONFIG_SCHED_CLASS_EXT
+	if (dl_se == &rq->ext_server)
+		return DL_SERVER_EXT;
+#endif
+	return DL_OTHER;
+}
 
 static inline struct dl_bw *dl_bw_of(int i)
 {
@@ -733,6 +736,7 @@ static inline void replenish_dl_new_period(struct sched_dl_entity *dl_se,
 		dl_se->dl_throttled = 1;
 		dl_se->dl_defer_armed = 1;
 	}
+	trace_sched_dl_replenish_tp(dl_se, cpu_of(rq), dl_get_type(dl_se, rq));
 }
 
 /*
@@ -847,6 +851,8 @@ static void replenish_dl_entity(struct sched_dl_entity *dl_se)
 		dl_se->dl_yielded = 0;
 	if (dl_se->dl_throttled)
 		dl_se->dl_throttled = 0;
+
+	trace_sched_dl_replenish_tp(dl_se, cpu_of(rq), dl_get_type(dl_se, rq));
 
 	/*
 	 * If this is the replenishment of a deferred reservation,
@@ -975,22 +981,6 @@ update_dl_revised_wakeup(struct sched_dl_entity *dl_se, struct rq *rq)
 }
 
 /*
- * Regarding the deadline, a task with implicit deadline has a relative
- * deadline == relative period. A task with constrained deadline has a
- * relative deadline <= relative period.
- *
- * We support constrained deadline tasks. However, there are some restrictions
- * applied only for tasks which do not have an implicit deadline. See
- * update_dl_entity() to know more about such restrictions.
- *
- * The dl_is_implicit() returns true if the task has an implicit deadline.
- */
-static inline bool dl_is_implicit(struct sched_dl_entity *dl_se)
-{
-	return dl_se->dl_deadline == dl_se->dl_period;
-}
-
-/*
  * When a deadline entity is placed in the runqueue, its runtime and deadline
  * might need to be updated. This is done by a CBS wake up rule. There are two
  * different rules: 1) the original CBS; and 2) the Revisited CBS.
@@ -1097,7 +1087,7 @@ static int start_dl_timer(struct sched_dl_entity *dl_se)
 		act = ns_to_ktime(dl_next_period(dl_se));
 	}
 
-	now = hrtimer_cb_get_time(timer);
+	now = ktime_get();
 	delta = ktime_to_ns(now) - rq_clock(rq);
 	act = ktime_add_ns(act, delta);
 
@@ -1345,6 +1335,7 @@ static inline void dl_check_constrained_dl(struct sched_dl_entity *dl_se)
 	    dl_time_before(rq_clock(rq), dl_next_period(dl_se))) {
 		if (unlikely(is_dl_boosted(dl_se) || !start_dl_timer(dl_se)))
 			return;
+		trace_sched_dl_throttle_tp(dl_se, cpu_of(rq), dl_get_type(dl_se, rq));
 		dl_se->dl_throttled = 1;
 		if (dl_se->runtime > 0)
 			dl_se->runtime = 0;
@@ -1508,6 +1499,7 @@ static void update_curr_dl_se(struct rq *rq, struct sched_dl_entity *dl_se, s64 
 
 throttle:
 	if (dl_runtime_exceeded(dl_se) || dl_se->dl_yielded) {
+		trace_sched_dl_throttle_tp(dl_se, cpu_of(rq), dl_get_type(dl_se, rq));
 		dl_se->dl_throttled = 1;
 
 		/* If requested, inform the user about runtime overruns. */
@@ -1523,8 +1515,12 @@ throttle:
 
 		if (unlikely(is_dl_boosted(dl_se) || !start_dl_timer(dl_se))) {
 			if (dl_server(dl_se)) {
-				replenish_dl_new_period(dl_se, rq);
-				start_dl_timer(dl_se);
+				if (dl_se->dl_defer) {
+					replenish_dl_new_period(dl_se, rq);
+					start_dl_timer(dl_se);
+				} else {
+					enqueue_dl_entity(dl_se, ENQUEUE_REPLENISH);
+				}
 			} else {
 				enqueue_task_dl(rq, dl_task_of(dl_se), ENQUEUE_REPLENISH);
 			}
@@ -1532,6 +1528,8 @@ throttle:
 
 		if (!is_leftmost(dl_se, &rq->dl))
 			resched_curr(rq);
+	} else {
+		trace_sched_dl_update_tp(dl_se, cpu_of(rq), dl_get_type(dl_se, rq));
 	}
 
 	/*
@@ -1799,7 +1797,8 @@ void dl_server_start(struct sched_dl_entity *dl_se)
 	struct rq *rq = dl_se->rq;
 
 	dl_se->dl_defer_idle = 0;
-	if (!dl_server(dl_se) || dl_se->dl_server_active || !dl_se->dl_runtime)
+	if (!dl_server(dl_se) || dl_se->dl_server_active || !dl_se->dl_runtime ||
+	    !dl_se->dl_bw_attached)
 		return;
 
 	/*
@@ -1810,6 +1809,7 @@ void dl_server_start(struct sched_dl_entity *dl_se)
 	if (WARN_ON_ONCE(!cpu_online(cpu_of(rq))))
 		return;
 
+	trace_sched_dl_server_start_tp(dl_se, cpu_of(rq), dl_get_type(dl_se, rq));
 	dl_se->dl_server_active = 1;
 	enqueue_dl_entity(dl_se, ENQUEUE_WAKEUP);
 	if (!dl_task(dl_se->rq->curr) || dl_entity_preempt(dl_se, &rq->curr->dl))
@@ -1821,6 +1821,8 @@ void dl_server_stop(struct sched_dl_entity *dl_se)
 	if (!dl_server(dl_se) || !dl_server_active(dl_se))
 		return;
 
+	trace_sched_dl_server_stop_tp(dl_se, cpu_of(dl_se->rq),
+				      dl_get_type(dl_se, dl_se->rq));
 	dequeue_dl_entity(dl_se, DEQUEUE_SLEEP);
 	hrtimer_try_to_cancel(&dl_se->dl_timer);
 	dl_se->dl_defer_armed = 0;
@@ -1871,6 +1873,13 @@ void sched_init_dl_servers(void)
 		dl_se->dl_server = 1;
 		dl_se->dl_defer = 1;
 		setup_new_dl_entity(dl_se);
+
+		/*
+		 * No BPF scheduler is loaded at boot, so the ext_server has no
+		 * tasks to protect. Detach its bandwidth reservation, it will
+		 * be attached when a BPF scheduler is loaded.
+		 */
+		dl_server_detach_bw(dl_se);
 #endif
 	}
 }
@@ -1880,6 +1889,9 @@ void __dl_server_attach_root(struct sched_dl_entity *dl_se, struct rq *rq)
 	u64 new_bw = dl_se->dl_bw;
 	int cpu = cpu_of(rq);
 	struct dl_bw *dl_b;
+
+	if (!dl_se->dl_bw_attached)
+		return;
 
 	dl_b = dl_bw_of(cpu_of(rq));
 	guard(raw_spinlock)(&dl_b->lock);
@@ -1892,7 +1904,8 @@ void __dl_server_attach_root(struct sched_dl_entity *dl_se, struct rq *rq)
 
 int dl_server_apply_params(struct sched_dl_entity *dl_se, u64 runtime, u64 period, bool init)
 {
-	u64 old_bw = init ? 0 : to_ratio(dl_se->dl_period, dl_se->dl_runtime);
+	u64 old_bw = (init || !dl_se->dl_bw_attached) ? 0 :
+		     to_ratio(dl_se->dl_period, dl_se->dl_runtime);
 	u64 new_bw = to_ratio(period, runtime);
 	struct rq *rq = dl_se->rq;
 	int cpu = cpu_of(rq);
@@ -1912,7 +1925,8 @@ int dl_server_apply_params(struct sched_dl_entity *dl_se, u64 runtime, u64 perio
 	if (init) {
 		__add_rq_bw(new_bw, &rq->dl);
 		__dl_add(dl_b, new_bw, cpus);
-	} else {
+		dl_se->dl_bw_attached = 1;
+	} else if (dl_se->dl_bw_attached) {
 		__dl_sub(dl_b, dl_se->dl_bw, cpus);
 		__dl_add(dl_b, new_bw, cpus);
 
@@ -1928,6 +1942,181 @@ int dl_server_apply_params(struct sched_dl_entity *dl_se, u64 runtime, u64 perio
 
 	dl_se->dl_bw = to_ratio(dl_se->dl_period, dl_se->dl_runtime);
 	dl_se->dl_density = to_ratio(dl_se->dl_deadline, dl_se->dl_runtime);
+
+	return 0;
+}
+
+/*
+ * Add @dl_se's bw to the root-domain accounting.
+ *
+ * Return -EBUSY if attaching would overflow root domain capacity.
+ */
+static int __dl_server_attach_bw_locked(struct sched_dl_entity *dl_se,
+					struct dl_bw *dl_b, int cpus)
+{
+	struct rq *rq = dl_se->rq;
+	unsigned long cap;
+
+	/*
+	 * Always update @rq->dl.this_bw, but only update @dl_b->total_bw
+	 * (and run the overflow check it gates) while this CPU is active.
+	 *
+	 * This mirrors dl_server_add_bw() during root-domain rebuilds, which
+	 * only publishes bandwidth from active CPUs into @dl_b.
+	 */
+	if (cpu_active(cpu_of(rq))) {
+		cap = dl_bw_capacity(cpu_of(rq));
+		if (__dl_overflow(dl_b, cap, 0, dl_se->dl_bw))
+			return -EBUSY;
+		__dl_add(dl_b, dl_se->dl_bw, cpus);
+	}
+	__add_rq_bw(dl_se->dl_bw, &rq->dl);
+	dl_se->dl_bw_attached = 1;
+
+	return 0;
+}
+
+/*
+ * Drain @dl_se and remove its bw from the root-domain accounting.
+ */
+static void __dl_server_detach_bw_locked(struct sched_dl_entity *dl_se,
+					 struct dl_bw *dl_b, int cpus)
+{
+	struct rq *rq = dl_se->rq;
+
+	/*
+	 * If the server is still active (on_rq), dequeue it via
+	 * dl_server_stop(); task_non_contending() will either subtract
+	 * @dl_bw from running_bw immediately (0-lag passed) or set
+	 * dl_non_contending and arm the inactive_timer.
+	 */
+	if (dl_se->dl_server_active)
+		dl_server_stop(dl_se);
+
+	/*
+	 * Drop @dl_se's contribution from this rq's bandwidth accounting,
+	 * mirroring the __add_rq_bw() done at attach time.
+	 */
+	dl_rq_change_utilization(rq, dl_se, 0);
+
+	/*
+	 * Update @dl_b only while this CPU is active, matching
+	 * dl_server_add_bw() during root-domain rebuilds.
+	 *
+	 * If this CPU is inactive, its bandwidth is not currently accounted in
+	 * @dl_b->total_bw: either attach skipped adding it, or a rebuild
+	 * already dropped it while re-publishing active CPUs only.
+	 *
+	 * In that case there is nothing to subtract from @dl_b. Just clear
+	 * @dl_se->dl_bw_attached; if the CPU becomes active again, the next
+	 * rebuild will re-publish its bandwidth.
+	 */
+	if (cpu_active(cpu_of(rq)))
+		__dl_sub(dl_b, dl_se->dl_bw, cpus);
+	dl_se->dl_bw_attached = 0;
+}
+
+/*
+ * Attach @dl_se's bandwidth to the root domain's total_bw accounting.
+ *
+ * Use to dynamically register a dl_server's bandwidth reservation while
+ * preserving its configured @dl_runtime / @dl_period. No-op if @dl_se is
+ * already attached.
+ *
+ * Returns -EBUSY if attaching would overflow the root domain capacity.
+ */
+int dl_server_attach_bw(struct sched_dl_entity *dl_se)
+{
+	struct rq *rq = dl_se->rq;
+	int cpu = cpu_of(rq);
+	struct dl_bw *dl_b;
+	int cpus, ret;
+
+	if (dl_se->dl_bw_attached)
+		return 0;
+
+	scoped_guard (raw_spinlock, &dl_bw_of(cpu)->lock) {
+		dl_b = dl_bw_of(cpu);
+		cpus = dl_bw_cpus(cpu);
+		ret = __dl_server_attach_bw_locked(dl_se, dl_b, cpus);
+	}
+	if (ret)
+		return ret;
+
+	/*
+	 * The natural 0->nr_running transition that triggers dl_server_start()
+	 * may have happened while @dl_se was still detached (e.g., between
+	 * scx_bypass(false) and the scx_enable() re-balance loop), so kick a
+	 * start here.
+	 *
+	 * dl_server_start() bails out cleanly if there's nothing to schedule or
+	 * it's already active. Skip if @cpu is offline; the server will be
+	 * started naturally on the first enqueue once @cpu comes back.
+	 */
+	if (cpu_online(cpu))
+		dl_server_start(dl_se);
+
+	return 0;
+}
+
+/*
+ * Detach @dl_se's bandwidth from the root domain's total_bw accounting.
+ *
+ * Use to dynamically unregister a dl_server's bandwidth reservation while
+ * preserving its configured @dl_runtime / @dl_period. No-op if @dl_se is
+ * not currently attached.
+ */
+void dl_server_detach_bw(struct sched_dl_entity *dl_se)
+{
+	int cpu = cpu_of(dl_se->rq);
+	struct dl_bw *dl_b;
+	int cpus;
+
+	if (!dl_se->dl_bw_attached)
+		return;
+
+	dl_b = dl_bw_of(cpu);
+	guard(raw_spinlock)(&dl_b->lock);
+	cpus = dl_bw_cpus(cpu);
+	__dl_server_detach_bw_locked(dl_se, dl_b, cpus);
+}
+
+/*
+ * Atomically detach @detach_se and attach @attach_se on the same rq, holding
+ * @dl_b->lock across both operations so a concurrent sched_setattr() cannot
+ * steal the bandwidth freed by the detach before the attach can claim it.
+ *
+ * Both entities must live on the same rq (same root domain). Returns the
+ * result of the attach: -EBUSY if attaching @attach_se would overflow root
+ * domain capacity (in which case both servers end up detached).
+ */
+int dl_server_swap_bw(struct sched_dl_entity *detach_se,
+		      struct sched_dl_entity *attach_se)
+{
+	struct rq *rq = detach_se->rq;
+	int cpu = cpu_of(rq);
+	struct dl_bw *dl_b;
+	int cpus, ret;
+
+	WARN_ON_ONCE(attach_se->rq != rq);
+
+	scoped_guard (raw_spinlock, &dl_bw_of(cpu)->lock) {
+		dl_b = dl_bw_of(cpu);
+		cpus = dl_bw_cpus(cpu);
+
+		if (detach_se->dl_bw_attached)
+			__dl_server_detach_bw_locked(detach_se, dl_b, cpus);
+
+		if (attach_se->dl_bw_attached)
+			ret = 0;
+		else
+			ret = __dl_server_attach_bw_locked(attach_se, dl_b, cpus);
+	}
+	if (ret)
+		return ret;
+
+	if (cpu_online(cpu))
+		dl_server_start(attach_se);
 
 	return 0;
 }
@@ -2142,9 +2331,13 @@ update_stats_dequeue_dl(struct dl_rq *dl_rq, struct sched_dl_entity *dl_se,
 			int flags)
 {
 	struct task_struct *p = dl_task_of(dl_se);
+	struct rq *rq = rq_of_dl_rq(dl_rq);
 
 	if (!schedstat_enabled())
 		return;
+
+	if (p != rq->curr)
+		update_stats_wait_end_dl(dl_rq, dl_se);
 
 	if ((flags & DEQUEUE_SLEEP)) {
 		unsigned int state;
@@ -2291,7 +2484,10 @@ static void dequeue_dl_entity(struct sched_dl_entity *dl_se, int flags)
 
 static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 {
-	if (is_dl_boosted(&p->dl)) {
+	struct sched_dl_entity *dl_se = &p->dl;
+	struct dl_rq *dl_rq = &rq->dl;
+
+	if (is_dl_boosted(dl_se)) {
 		/*
 		 * Because of delays in the detection of the overrun of a
 		 * thread's runtime, it might be the case that a thread
@@ -2304,14 +2500,14 @@ static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 		 *
 		 * In this case, the boost overrides the throttle.
 		 */
-		if (p->dl.dl_throttled) {
+		if (dl_se->dl_throttled) {
 			/*
 			 * The replenish timer needs to be canceled. No
 			 * problem if it fires concurrently: boosted threads
 			 * are ignored in dl_task_timer().
 			 */
-			cancel_replenish_timer(&p->dl);
-			p->dl.dl_throttled = 0;
+			cancel_replenish_timer(dl_se);
+			dl_se->dl_throttled = 0;
 		}
 	} else if (!dl_prio(p->normal_prio)) {
 		/*
@@ -2323,7 +2519,7 @@ static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 		 * being boosted again with no means to replenish the runtime and clear
 		 * the throttle.
 		 */
-		p->dl.dl_throttled = 0;
+		dl_se->dl_throttled = 0;
 		if (!(flags & ENQUEUE_REPLENISH))
 			printk_deferred_once("sched: DL de-boosted task PID %d: REPLENISH flag missing\n",
 					     task_pid_nr(p));
@@ -2332,20 +2528,23 @@ static void enqueue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 	}
 
 	check_schedstat_required();
-	update_stats_wait_start_dl(dl_rq_of_se(&p->dl), &p->dl);
+	update_stats_wait_start_dl(dl_rq, dl_se);
 
-	if (p->on_rq == TASK_ON_RQ_MIGRATING)
+	if (task_on_rq_migrating(p))
 		flags |= ENQUEUE_MIGRATING;
 
-	enqueue_dl_entity(&p->dl, flags);
+	enqueue_dl_entity(dl_se, flags);
 
-	if (dl_server(&p->dl))
+	if (dl_server(dl_se))
 		return;
 
 	if (task_is_blocked(p))
 		return;
 
-	if (!task_current(rq, p) && !p->dl.dl_throttled && p->nr_cpus_allowed > 1)
+	if (dl_rq->curr == dl_se)
+		return;
+
+	if (!task_current(rq, p) && !dl_se->dl_throttled && p->nr_cpus_allowed > 1)
 		enqueue_pushable_dl_task(rq, p);
 }
 
@@ -2353,7 +2552,7 @@ static bool dequeue_task_dl(struct rq *rq, struct task_struct *p, int flags)
 {
 	update_curr_dl(rq);
 
-	if (p->on_rq == TASK_ON_RQ_MIGRATING)
+	if (task_on_rq_migrating(p))
 		flags |= DEQUEUE_MIGRATING;
 
 	dequeue_dl_entity(&p->dl, flags);
@@ -2505,8 +2704,14 @@ static void check_preempt_equal_dl(struct rq *rq, struct task_struct *p)
 	resched_curr(rq);
 }
 
-static int balance_dl(struct rq *rq, struct task_struct *p, struct rq_flags *rf)
+static int balance_dl(struct rq *rq, struct rq_flags *rf)
 {
+	/*
+	 * Note, rq->donor may change during rq lock drops,
+	 * so don't re-use prev across lock drops
+	 */
+	struct task_struct *p = rq->donor;
+
 	if (!on_dl_rq(&p->dl) && need_pull_dl_task(rq, p)) {
 		/*
 		 * This is OK, because current is on_cpu, which avoids it being
@@ -2561,6 +2766,10 @@ static void start_hrtick_dl(struct rq *rq, struct sched_dl_entity *dl_se)
 }
 #endif /* !CONFIG_SCHED_HRTICK */
 
+/*
+ * DL keeps current in tree, because ->deadline is not typically changed while
+ * a task is runnable.
+ */
 static void set_next_task_dl(struct rq *rq, struct task_struct *p, bool first)
 {
 	struct sched_dl_entity *dl_se = &p->dl;
@@ -2572,6 +2781,9 @@ static void set_next_task_dl(struct rq *rq, struct task_struct *p, bool first)
 
 	/* You can't push away the running task */
 	dequeue_pushable_dl_task(rq, p);
+
+	WARN_ON_ONCE(dl_rq->curr);
+	dl_rq->curr = dl_se;
 
 	if (!first)
 		return;
@@ -2636,17 +2848,20 @@ static void put_prev_task_dl(struct rq *rq, struct task_struct *p, struct task_s
 	struct sched_dl_entity *dl_se = &p->dl;
 	struct dl_rq *dl_rq = &rq->dl;
 
-	if (on_dl_rq(&p->dl))
+	if (on_dl_rq(dl_se))
 		update_stats_wait_start_dl(dl_rq, dl_se);
 
 	update_curr_dl(rq);
 
 	update_dl_rq_load_avg(rq_clock_pelt(rq), rq, 1);
 
+	WARN_ON_ONCE(dl_rq->curr != dl_se);
+	dl_rq->curr = NULL;
+
 	if (task_is_blocked(p))
 		return;
 
-	if (on_dl_rq(&p->dl) && p->nr_cpus_allowed > 1)
+	if (on_dl_rq(dl_se) && p->nr_cpus_allowed > 1)
 		enqueue_pushable_dl_task(rq, p);
 }
 
@@ -2801,12 +3016,26 @@ static int find_later_rq(struct task_struct *task)
 
 static struct task_struct *pick_next_pushable_dl_task(struct rq *rq)
 {
-	struct task_struct *p;
+	struct task_struct *i, *p = NULL;
+	struct rb_node *next_node;
 
 	if (!has_pushable_dl_tasks(rq))
 		return NULL;
 
-	p = __node_2_pdl(rb_first_cached(&rq->dl.pushable_dl_tasks_root));
+	next_node = rb_first_cached(&rq->dl.pushable_dl_tasks_root);
+	while (next_node) {
+		i = __node_2_pdl(next_node);
+		/* make sure task isn't on_cpu (possible with proxy-exec) */
+		if (!task_on_cpu(rq, i)) {
+			p = i;
+			break;
+		}
+
+		next_node = rb_next(next_node);
+	}
+
+	if (!p)
+		return NULL;
 
 	WARN_ON_ONCE(rq->cpu != task_cpu(p));
 	WARN_ON_ONCE(task_current(rq, p));
@@ -3092,20 +3321,18 @@ static void task_woken_dl(struct rq *rq, struct task_struct *p)
 static void set_cpus_allowed_dl(struct task_struct *p,
 				struct affinity_context *ctx)
 {
-	struct root_domain *src_rd;
 	struct rq *rq;
 
 	WARN_ON_ONCE(!dl_task(p));
 
 	rq = task_rq(p);
-	src_rd = rq->rd;
 	/*
 	 * Migrating a SCHED_DEADLINE task between exclusive
 	 * cpusets (different root_domains) entails a bandwidth
 	 * update. We already made space for us in the destination
 	 * domain (see cpuset_can_attach()).
 	 */
-	if (!cpumask_intersects(src_rd->span, ctx->new_mask)) {
+	if (dl_task_needs_bw_move(p, ctx->new_mask)) {
 		struct dl_bw *src_dl_b;
 
 		src_dl_b = dl_bw_of(cpu_of(rq));
@@ -3120,6 +3347,15 @@ static void set_cpus_allowed_dl(struct task_struct *p,
 	}
 
 	set_cpus_allowed_common(p, ctx);
+}
+
+bool dl_task_needs_bw_move(struct task_struct *p,
+			   const struct cpumask *new_mask)
+{
+	if (!dl_task(p))
+		return false;
+
+	return !cpumask_intersects(task_rq(p)->rd->span, new_mask);
 }
 
 /* Assumes rq->lock is held */
@@ -3214,12 +3450,12 @@ static void dl_server_add_bw(struct root_domain *rd, int cpu)
 	struct sched_dl_entity *dl_se;
 
 	dl_se = &cpu_rq(cpu)->fair_server;
-	if (dl_server(dl_se) && cpu_active(cpu))
+	if (dl_server(dl_se) && dl_se->dl_bw_attached && cpu_active(cpu))
 		__dl_add(&rd->dl_bw, dl_se->dl_bw, dl_bw_cpus(cpu));
 
 #ifdef CONFIG_SCHED_CLASS_EXT
 	dl_se = &cpu_rq(cpu)->ext_server;
-	if (dl_server(dl_se) && cpu_active(cpu))
+	if (dl_server(dl_se) && dl_se->dl_bw_attached && cpu_active(cpu))
 		__dl_add(&rd->dl_bw, dl_se->dl_bw, dl_bw_cpus(cpu));
 #endif
 }
@@ -3228,11 +3464,13 @@ static u64 dl_server_read_bw(int cpu)
 {
 	u64 dl_bw = 0;
 
-	if (cpu_rq(cpu)->fair_server.dl_server)
+	if (cpu_rq(cpu)->fair_server.dl_server &&
+	    cpu_rq(cpu)->fair_server.dl_bw_attached)
 		dl_bw += cpu_rq(cpu)->fair_server.dl_bw;
 
 #ifdef CONFIG_SCHED_CLASS_EXT
-	if (cpu_rq(cpu)->ext_server.dl_server)
+	if (cpu_rq(cpu)->ext_server.dl_server &&
+	    cpu_rq(cpu)->ext_server.dl_bw_attached)
 		dl_bw += cpu_rq(cpu)->ext_server.dl_bw;
 #endif
 
@@ -3613,13 +3851,26 @@ void __setparam_dl(struct task_struct *p, const struct sched_attr *attr)
 	dl_se->dl_density = to_ratio(dl_se->dl_deadline, dl_se->dl_runtime);
 }
 
-void __getparam_dl(struct task_struct *p, struct sched_attr *attr)
+void __getparam_dl(struct task_struct *p, struct sched_attr *attr, unsigned int flags)
 {
 	struct sched_dl_entity *dl_se = &p->dl;
+	struct rq *rq = task_rq(p);
+	u64 adj_deadline;
 
 	attr->sched_priority = p->rt_priority;
-	attr->sched_runtime = dl_se->dl_runtime;
-	attr->sched_deadline = dl_se->dl_deadline;
+	if (flags & SCHED_GETATTR_FLAG_DL_DYNAMIC) {
+		guard(raw_spinlock_irq)(&rq->__lock);
+		update_rq_clock(rq);
+		if (task_current(rq, p))
+			update_curr_dl(rq);
+
+		attr->sched_runtime = dl_se->runtime;
+		adj_deadline = dl_se->deadline - rq_clock(rq) + ktime_get_ns();
+		attr->sched_deadline = adj_deadline;
+	} else {
+		attr->sched_runtime = dl_se->dl_runtime;
+		attr->sched_deadline = dl_se->dl_deadline;
+	}
 	attr->sched_period = dl_se->dl_period;
 	attr->sched_flags &= ~SCHED_DL_FLAGS;
 	attr->sched_flags |= dl_se->flags;

@@ -87,6 +87,7 @@ void a8xx_gpu_get_slice_info(struct msm_gpu *gpu)
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
 	struct a6xx_gpu *a6xx_gpu = to_a6xx_gpu(adreno_gpu);
 	const struct a6xx_info *info = adreno_gpu->info->a6xx;
+	struct device *dev = &gpu->pdev->dev;
 	u32 slice_mask;
 
 	if (adreno_gpu->info->family < ADRENO_8XX_GEN1)
@@ -103,13 +104,22 @@ void a8xx_gpu_get_slice_info(struct msm_gpu *gpu)
 		return;
 	}
 
-	slice_mask &= a6xx_llc_read(a6xx_gpu,
+	slice_mask &= a6xx_cx_misc_read(a6xx_gpu,
 			REG_A8XX_CX_MISC_SLICE_ENABLE_FINAL);
 
 	a6xx_gpu->slice_mask = slice_mask;
 
 	/* Chip ID depends on the number of slices available. So update it */
 	adreno_gpu->chip_id |= FIELD_PREP(GENMASK(7, 4), hweight32(slice_mask));
+
+	/* Update the gpu-name to reflect the slice config: */
+	const char *name = devm_kasprintf(dev, GFP_KERNEL,
+			"%"ADRENO_CHIPID_FMT,
+			ADRENO_CHIPID_ARGS(adreno_gpu->chip_id));
+	if (name) {
+		devm_kfree(dev, adreno_gpu->base.name);
+		adreno_gpu->base.name = name;
+	}
 }
 
 static u32 a8xx_get_first_slice(struct a6xx_gpu *a6xx_gpu)
@@ -173,7 +183,7 @@ void a8xx_flush(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
 	/* Update HW if this is the current ring and we are not in preempt*/
 	if (!a6xx_in_preempt(a6xx_gpu)) {
 		if (a6xx_gpu->cur_ring == ring)
-			gpu_write(gpu, REG_A6XX_CP_RB_WPTR, wptr);
+			a6xx_fenced_write(a6xx_gpu, REG_A6XX_CP_RB_WPTR, wptr, BIT(0), false);
 		else
 			ring->restore_wptr = true;
 	} else {
@@ -255,8 +265,8 @@ static void a8xx_set_cp_protect(struct msm_gpu *gpu)
 	 * Last span feature is only supported on PIPE specific register.
 	 * So update those here
 	 */
-	a8xx_write_pipe(gpu, PIPE_BR, REG_A8XX_CP_PROTECT_PIPE(protect->count_max), final_cfg);
-	a8xx_write_pipe(gpu, PIPE_BV, REG_A8XX_CP_PROTECT_PIPE(protect->count_max), final_cfg);
+	a8xx_write_pipe(gpu, PIPE_BR, REG_A8XX_CP_PROTECT_PIPE(15), final_cfg);
+	a8xx_write_pipe(gpu, PIPE_BV, REG_A8XX_CP_PROTECT_PIPE(15), final_cfg);
 
 	a8xx_aperture_clear(gpu);
 }
@@ -265,41 +275,37 @@ static void a8xx_set_ubwc_config(struct msm_gpu *gpu)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
 	const struct qcom_ubwc_cfg_data *cfg = adreno_gpu->ubwc_config;
-	u32 level2_swizzling_dis = !(cfg->ubwc_swizzle & UBWC_SWIZZLE_ENABLE_LVL2);
-	u32 level3_swizzling_dis = !(cfg->ubwc_swizzle & UBWC_SWIZZLE_ENABLE_LVL3);
+	u32 level2_swizzling_dis = !(qcom_ubwc_swizzle(cfg) & UBWC_SWIZZLE_ENABLE_LVL2);
+	u32 level3_swizzling_dis = !(qcom_ubwc_swizzle(cfg) & UBWC_SWIZZLE_ENABLE_LVL3);
 	bool rgba8888_lossless = false, fp16compoptdis = false;
 	bool yuvnotcomptofc = false, min_acc_len_64b = false;
-	bool rgb565_predicator = false, amsbc = false;
+	bool rgb565_predicator = false;
+	bool amsbc = qcom_ubwc_enable_amsbc(cfg);
 	bool ubwc_mode = qcom_ubwc_get_ubwc_mode(cfg);
 	u32 ubwc_version = cfg->ubwc_enc_version;
-	u32 hbb, hbb_hi, hbb_lo, mode = 1;
+	u32 hbb, hbb_hi, hbb_lo, mode;
 	u8 uavflagprd_inv = 2;
 
-	switch (ubwc_version) {
-	case UBWC_6_0:
-		yuvnotcomptofc = true;
-		mode = 5;
-		break;
-	case UBWC_5_0:
-		amsbc = true;
-		rgb565_predicator = true;
-		mode = 4;
-		break;
-	case UBWC_4_0:
-		amsbc = true;
-		rgb565_predicator = true;
-		fp16compoptdis = true;
-		rgba8888_lossless = true;
-		mode = 2;
-		break;
-	case UBWC_3_0:
-		amsbc = true;
-		mode = 1;
-		break;
-	default:
+	if (ubwc_version > UBWC_6_0)
 		dev_err(&gpu->pdev->dev, "Unknown UBWC version: 0x%x\n", ubwc_version);
-		break;
-	}
+
+	if (ubwc_version == UBWC_6_0)
+		yuvnotcomptofc = true;
+
+	if (ubwc_version < UBWC_5_0 &&
+	    ubwc_version >= UBWC_4_0)
+		rgba8888_lossless = true;
+
+	if (ubwc_version < UBWC_4_3)
+		fp16compoptdis = true;
+
+	if (cfg->ubwc_enc_version >= UBWC_4_0)
+		rgb565_predicator = true;
+
+	if (ubwc_version < UBWC_3_0)
+		dev_err(&gpu->pdev->dev, "Unsupported UBWC version: 0x%x\n", ubwc_version);
+
+	mode = qcom_ubwc_version_tag(cfg);
 
 	/*
 	 * We subtract 13 from the highest bank bit (13 is the minimum value
@@ -386,8 +392,108 @@ static void a8xx_nonctxt_config(struct msm_gpu *gpu, u32 *gmem_protect)
 	a8xx_aperture_clear(gpu);
 }
 
+static void a8xx_patch_pwrup_reglist(struct msm_gpu *gpu)
+{
+	const struct adreno_reglist_pipe_list *dyn_pwrup_reglist;
+	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct a6xx_gpu *a6xx_gpu = to_a6xx_gpu(adreno_gpu);
+	const struct adreno_reglist_list *reglist;
+	void *ptr = a6xx_gpu->pwrup_reglist_ptr;
+	struct cpu_gpu_lock *lock = ptr;
+	u32 *dest = (u32 *)&lock->regs[0];
+	u32 dyn_pwrup_reglist_count = 0;
+	int i;
+
+	lock->gpu_req = lock->cpu_req = lock->turn = 0;
+
+	reglist = adreno_gpu->info->a6xx->ifpc_reglist;
+	if (reglist) {
+		lock->ifpc_list_len = reglist->count;
+
+		/*
+		 * For each entry in each of the lists, write the offset and the current
+		 * register value into the GPU buffer
+		 */
+		for (i = 0; i < reglist->count; i++) {
+			*dest++ = reglist->regs[i];
+			*dest++ = gpu_read(gpu, reglist->regs[i]);
+		}
+	}
+
+	reglist = adreno_gpu->info->a6xx->pwrup_reglist;
+	if (reglist) {
+		lock->preemption_list_len = reglist->count;
+
+		for (i = 0; i < reglist->count; i++) {
+			*dest++ = reglist->regs[i];
+			*dest++ = gpu_read(gpu, reglist->regs[i]);
+		}
+	}
+
+	/*
+	 * The overall register list is composed of
+	 * 1. Static IFPC-only registers
+	 * 2. Static IFPC + preemption registers
+	 * 3. Dynamic IFPC + preemption registers (ex: perfcounter selects)
+	 *
+	 * The first two lists are static. Size of these lists are stored as
+	 * number of pairs in ifpc_list_len and preemption_list_len
+	 * respectively. With concurrent binning, Some of the perfcounter
+	 * registers being virtualized, CP needs to know the pipe id to program
+	 * the aperture inorder to restore the same. Thus, third list is a
+	 * dynamic list with triplets as
+	 * (<aperture, shifted 12 bits> <address> <data>), and the length is
+	 * stored as number for triplets in dynamic_list_len.
+	 */
+	dyn_pwrup_reglist = adreno_gpu->info->a6xx->dyn_pwrup_reglist;
+	if (!dyn_pwrup_reglist)
+		goto done;
+
+	for (u32 pipe_id = PIPE_BR; pipe_id <= PIPE_DDE_BV; pipe_id++) {
+		for (i = 0; i < dyn_pwrup_reglist->count; i++) {
+			if (!(dyn_pwrup_reglist->regs[i].pipe & BIT(pipe_id)))
+				continue;
+			*dest++ = A8XX_CP_APERTURE_CNTL_HOST_PIPEID(pipe_id);
+			*dest++ = dyn_pwrup_reglist->regs[i].offset;
+			*dest++ = a8xx_read_pipe_slice(gpu,
+						       pipe_id,
+						       a8xx_get_first_slice(a6xx_gpu),
+						       dyn_pwrup_reglist->regs[i].offset);
+			dyn_pwrup_reglist_count++;
+		}
+	}
+
+	lock->dynamic_list_len = dyn_pwrup_reglist_count;
+	a6xx_gpu->dynamic_sel_reglist_offset = dyn_pwrup_reglist_count;
+
+done:
+	a8xx_aperture_clear(gpu);
+}
+
+static int a8xx_preempt_start(struct msm_gpu *gpu)
+{
+	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct a6xx_gpu *a6xx_gpu = to_a6xx_gpu(adreno_gpu);
+	struct msm_ringbuffer *ring = gpu->rb[0];
+
+	if (gpu->nr_rings <= 1)
+		return 0;
+
+	/* Turn CP protection off */
+	OUT_PKT7(ring, CP_SET_PROTECTED_MODE, 1);
+	OUT_RING(ring, 0);
+
+	a6xx_emit_set_pseudo_reg(ring, a6xx_gpu, NULL);
+
+	a6xx_flush_yield(gpu, ring);
+
+	return a8xx_idle(gpu, ring) ? 0 : -EINVAL;
+}
+
 static int a8xx_cp_init(struct msm_gpu *gpu)
 {
+	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
+	struct a6xx_gpu *a6xx_gpu = to_a6xx_gpu(adreno_gpu);
 	struct msm_ringbuffer *ring = gpu->rb[0];
 	u32 mask;
 
@@ -395,7 +501,7 @@ static int a8xx_cp_init(struct msm_gpu *gpu)
 	OUT_PKT7(ring, CP_THREAD_CONTROL, 1);
 	OUT_RING(ring, BIT(27));
 
-	OUT_PKT7(ring, CP_ME_INIT, 4);
+	OUT_PKT7(ring, CP_ME_INIT, 7);
 
 	/* Use multiple HW contexts */
 	mask = BIT(0);
@@ -409,6 +515,9 @@ static int a8xx_cp_init(struct msm_gpu *gpu)
 	/* Disable save/restore of performance counters across preemption */
 	mask |= BIT(6);
 
+	/* Enable the register init list with the spinlock */
+	mask |= BIT(8);
+
 	OUT_RING(ring, mask);
 
 	/* Enable multiple hardware contexts */
@@ -419,6 +528,14 @@ static int a8xx_cp_init(struct msm_gpu *gpu)
 
 	/* Operation mode mask */
 	OUT_RING(ring, 0x00000002);
+
+	/* Lo address */
+	OUT_RING(ring, lower_32_bits(a6xx_gpu->pwrup_reglist_iova));
+	/* Hi address */
+	OUT_RING(ring, upper_32_bits(a6xx_gpu->pwrup_reglist_iova));
+
+	/* Enable dyn pwrup list with triplets (offset, value, pipe) */
+	OUT_RING(ring, BIT(31));
 
 	a6xx_flush(gpu, ring);
 	return a8xx_idle(gpu, ring) ? 0 : -EINVAL;
@@ -648,6 +765,8 @@ static int hw_init(struct msm_gpu *gpu)
 	gpu_write64(gpu, REG_A6XX_CP_RB_RPTR_ADDR, shadowptr(a6xx_gpu, gpu->rb[0]));
 	gpu_write64(gpu, REG_A8XX_CP_RB_RPTR_ADDR_BV, rbmemptr(gpu->rb[0], bv_rptr));
 
+	a8xx_preempt_hw_init(gpu);
+
 	for (i = 0; i < gpu->nr_rings; i++)
 		a6xx_gpu->shadow[i] = 0;
 
@@ -702,14 +821,28 @@ static int hw_init(struct msm_gpu *gpu)
 	WARN_ON(!gmem_protect);
 	a8xx_aperture_clear(gpu);
 
+	if (!a6xx_gpu->pwrup_reglist_emitted) {
+		a8xx_patch_pwrup_reglist(gpu);
+		a6xx_gpu->pwrup_reglist_emitted = true;
+	}
+
 	/* Enable hardware clockgating */
 	a8xx_set_hwcg(gpu, true);
 out:
+	/* Last step - yield the ringbuffer */
+	a8xx_preempt_start(gpu);
+
 	/*
 	 * Tell the GMU that we are done touching the GPU and it can start power
 	 * management
 	 */
 	a6xx_gmu_clear_oob(&a6xx_gpu->gmu, GMU_OOB_GPU_SET);
+
+	if (!ret && msm_gpu_sysprof_no_perfcntr_zap(gpu)) {
+		ret = a6xx_gmu_set_oob(gmu, GMU_OOB_PERFCOUNTER_SET);
+		if (!ret)
+			set_bit(GMU_STATUS_OOB_PERF_SET, &gmu->status);
+	}
 
 	return ret;
 }
@@ -742,17 +875,22 @@ void a8xx_recover(struct msm_gpu *gpu)
 
 	adreno_dump_info(gpu);
 
-	if (hang_debug)
-		a8xx_dump(gpu);
-
 	/*
 	 * To handle recovery specific sequences during the rpm suspend we are
 	 * about to trigger
 	 */
 	a6xx_gpu->hung = true;
 
-	/* Halt SQE first */
-	gpu_write(gpu, REG_A8XX_CP_SQE_CNTL, 3);
+	if (adreno_gpu->funcs->gx_is_on(adreno_gpu)) {
+		/*
+		 * Sometimes crashstate capture is skipped, so SQE should be
+		 * halted here again
+		 */
+		gpu_write(gpu, REG_A8XX_CP_SQE_CNTL, 3);
+
+		if (hang_debug)
+			a8xx_dump(gpu);
+	}
 
 	pm_runtime_dont_use_autosuspend(&gpu->pdev->dev);
 
@@ -1108,11 +1246,11 @@ irqreturn_t a8xx_irq(struct msm_gpu *gpu)
 
 	if (status & A6XX_RBBM_INT_0_MASK_CP_CACHE_FLUSH_TS) {
 		msm_gpu_retire(gpu);
-		a6xx_preempt_trigger(gpu);
+		a8xx_preempt_trigger(gpu);
 	}
 
 	if (status & A6XX_RBBM_INT_0_MASK_CP_SW)
-		a6xx_preempt_irq(gpu);
+		a8xx_preempt_irq(gpu);
 
 	return IRQ_HANDLED;
 }
@@ -1174,23 +1312,19 @@ void a8xx_bus_clear_pending_transactions(struct adreno_gpu *adreno_gpu, bool gx_
 	gpu_write(gpu, REG_A6XX_GBIF_HALT, 0x0);
 }
 
-int a8xx_gmu_get_timestamp(struct msm_gpu *gpu, uint64_t *value)
+u64 a8xx_gmu_get_timestamp(struct msm_gpu *gpu)
 {
 	struct adreno_gpu *adreno_gpu = to_adreno_gpu(gpu);
 	struct a6xx_gpu *a6xx_gpu = to_a6xx_gpu(adreno_gpu);
+	u64 count_hi, count_lo, temp;
 
-	mutex_lock(&a6xx_gpu->gmu.lock);
+	do {
+		count_hi = gmu_read(&a6xx_gpu->gmu, REG_A8XX_GMU_ALWAYS_ON_COUNTER_H);
+		count_lo = gmu_read(&a6xx_gpu->gmu, REG_A8XX_GMU_ALWAYS_ON_COUNTER_L);
+		temp = gmu_read(&a6xx_gpu->gmu, REG_A8XX_GMU_ALWAYS_ON_COUNTER_H);
+	} while (unlikely(count_hi != temp));
 
-	/* Force the GPU power on so we can read this register */
-	a6xx_gmu_set_oob(&a6xx_gpu->gmu, GMU_OOB_PERFCOUNTER_SET);
-
-	*value = gpu_read64(gpu, REG_A8XX_CP_ALWAYS_ON_COUNTER);
-
-	a6xx_gmu_clear_oob(&a6xx_gpu->gmu, GMU_OOB_PERFCOUNTER_SET);
-
-	mutex_unlock(&a6xx_gpu->gmu.lock);
-
-	return 0;
+	return (count_hi << 32) | count_lo;
 }
 
 u64 a8xx_gpu_busy(struct msm_gpu *gpu, unsigned long *out_sample_rate)
@@ -1212,4 +1346,24 @@ u64 a8xx_gpu_busy(struct msm_gpu *gpu, unsigned long *out_sample_rate)
 bool a8xx_progress(struct msm_gpu *gpu, struct msm_ringbuffer *ring)
 {
 	return true;
+}
+
+void a8xx_perfcntr_flush(struct msm_gpu *gpu)
+{
+	u32 val;
+
+	/*
+	 * Flush delta counters (both perf counters and pipe stats) present in
+	 * RBBM_S and RBBM_US to perf RAM logic to get the latest data.
+	 */
+	gpu_write(gpu, REG_A8XX_RBBM_PERFCTR_FLUSH_HOST_CMD, BIT(0));
+	gpu_write(gpu, REG_A8XX_RBBM_SLICE_PERFCTR_FLUSH_HOST_CMD, BIT(0));
+
+	/* Ensure all writes are posted before polling status register */
+	wmb();
+
+	if (gpu_poll_timeout(gpu, REG_A8XX_RBBM_PERFCTR_FLUSH_HOST_STATUS, val,
+			     val & BIT(0), 100, 100 * 1000)) {
+		dev_err(&gpu->pdev->dev, "Perfcounter flush timed out: status=0x%08x\n", val);
+	}
 }

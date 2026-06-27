@@ -626,7 +626,7 @@ static void dce120_resource_destruct(struct dce110_resource_pool *pool)
 		}
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		if (pool->base.engines[i] != NULL)
 			dce110_engine_destroy(&pool->base.engines[i]);
 		if (pool->base.hw_i2cs[i] != NULL) {
@@ -712,6 +712,7 @@ static struct link_encoder *dce120_link_encoder_create(
 	struct dc_context *ctx,
 	const struct encoder_init_data *enc_init_data)
 {
+	(void)ctx;
 	struct dce110_link_encoder *enc110 =
 		kzalloc_obj(struct dce110_link_encoder);
 	int link_regs_id;
@@ -926,7 +927,7 @@ static void bw_calcs_data_update_from_pplib(struct dc *dc)
 	struct dm_pp_clock_levels_with_latency eng_clks = {0};
 	struct dm_pp_clock_levels_with_latency mem_clks = {0};
 	struct dm_pp_wm_sets_with_clock_ranges clk_ranges = {0};
-	int i;
+	unsigned int i;
 	unsigned int clk;
 	unsigned int latency;
 	/*original logic in dal3*/
@@ -1081,7 +1082,7 @@ static bool dce120_resource_construct(
 	/* TODO: Fill more data from GreenlandAsicCapability.cpp */
 	pool->base.pipe_count = res_cap.num_timing_generator;
 	pool->base.timing_generator_count = pool->base.res_cap->num_timing_generator;
-	pool->base.underlay_pipe_index = NO_UNDERLAY_PIPE;
+	pool->base.underlay_pipe_index = (unsigned int)NO_UNDERLAY_PIPE;
 
 	dc->caps.max_downscale_ratio = 200;
 	dc->caps.i2c_speed_in_khz = 100;
@@ -1226,7 +1227,7 @@ static bool dce120_resource_construct(
 		j++;
 	}
 
-	for (i = 0; i < pool->base.res_cap->num_ddc; i++) {
+	for (i = 0; i < (unsigned int)pool->base.res_cap->num_ddc; i++) {
 		pool->base.engines[i] = dce120_aux_engine_create(ctx, i);
 		if (pool->base.engines[i] == NULL) {
 			BREAK_TO_DEBUGGER();

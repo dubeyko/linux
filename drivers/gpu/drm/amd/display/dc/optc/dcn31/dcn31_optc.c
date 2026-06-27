@@ -43,6 +43,7 @@
 static void optc31_set_odm_combine(struct timing_generator *optc, int *opp_id, int opp_cnt,
 		int segment_width, int last_segment_width)
 {
+	(void)last_segment_width;
 	struct optc *optc1 = DCN10TG_FROM_TG(optc);
 	uint32_t memory_mask = 0;
 	int mem_count_per_opp = (segment_width + 2559) / 2560;
@@ -319,6 +320,8 @@ void optc31_read_reg_state(struct timing_generator *optc, struct dcn_optc_reg_st
 {
 	struct optc *optc1 = DCN10TG_FROM_TG(optc);
 
+	optc_reg_state->otg_drr_v_total_reach_range = REG_READ(OTG_DRR_V_TOTAL_REACH_RANGE);
+
 	optc_reg_state->optc_bytes_per_pixel = REG_READ(OPTC_BYTES_PER_PIXEL);
 	optc_reg_state->optc_data_format_control = REG_READ(OPTC_DATA_FORMAT_CONTROL);
 	optc_reg_state->optc_data_source_select = REG_READ(OPTC_DATA_SOURCE_SELECT);
@@ -363,7 +366,7 @@ void optc31_read_reg_state(struct timing_generator *optc, struct dcn_optc_reg_st
 	optc_reg_state->otg_crc3_data_rg = REG_READ(OTG_CRC3_DATA_RG);
 	optc_reg_state->otg_dlpc_control = REG_READ(OTG_DLPC_CONTROL);
 	optc_reg_state->otg_double_buffer_control = REG_READ(OTG_DOUBLE_BUFFER_CONTROL);
-	optc_reg_state->otg_drr_control2 = REG_READ(OTG_DRR_CONTROL2);
+	optc_reg_state->otg_drr_control2 = REG_READ(OTG_DRR_CONTOL2);
 	optc_reg_state->otg_drr_control = REG_READ(OTG_DRR_CONTROL);
 	optc_reg_state->otg_drr_timing_int_status = REG_READ(OTG_DRR_TIMING_INT_STATUS);
 	optc_reg_state->otg_drr_trigger_window = REG_READ(OTG_DRR_TRIGGER_WINDOW);

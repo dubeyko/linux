@@ -134,6 +134,11 @@ enum pt_features {
 	 * significant amount of page table.
 	 */
 	PT_FEAT_FLUSH_RANGE_NO_GAPS,
+	/**
+	 * @PT_FEAT_DETAILED_GATHER: Fill in the struct iommu_iotlb_gather pt
+	 * sub structure with information about which levels were changed.
+	 */
+	PT_FEAT_DETAILED_GATHER,
 	/* private: */
 	PT_FEAT_FMT_START,
 };
@@ -173,6 +178,26 @@ enum {
 	 * ERRATA_772415_SPR17.
 	 */
 	PT_FEAT_VTDSS_FORCE_WRITEABLE,
+};
+
+struct pt_riscv_32 {
+	struct pt_common common;
+};
+
+struct pt_riscv_64 {
+	struct pt_common common;
+};
+
+enum {
+	/*
+	 * Support the 64k contiguous page size following the Svnapot extension.
+	 */
+	PT_FEAT_RISCV_SVNAPOT_64K = PT_FEAT_FMT_START,
+	/*
+	 * Support Svpbmt extension: encode page-based memory type (PBMT) in PTEs.
+	 */
+	PT_FEAT_RISCV_SVPBMT,
+
 };
 
 struct pt_x86_64 {

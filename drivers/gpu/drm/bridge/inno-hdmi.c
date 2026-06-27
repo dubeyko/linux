@@ -31,8 +31,6 @@
 #include <drm/display/drm_hdmi_helper.h>
 #include <drm/display/drm_hdmi_state_helper.h>
 
-#define INNO_HDMI_MIN_TMDS_CLOCK  25000000U
-
 #define DDC_SEGMENT_ADDR		0x30
 
 #define HDMI_SCL_RATE			(100 * 1000)
@@ -653,7 +651,7 @@ static int inno_hdmi_config_video_csc(struct inno_hdmi *hdmi,
 		v_VIDEO_INPUT_CSP(0);
 	hdmi_writeb(hdmi, HDMI_VIDEO_CONTRL2, value);
 
-	if (conn_state->hdmi.output_format == HDMI_COLORSPACE_RGB) {
+	if (conn_state->hdmi.output_format == DRM_OUTPUT_COLOR_FORMAT_RGB444) {
 		if (conn_state->hdmi.is_limited_range) {
 			csc_mode = CSC_RGB_0_255_TO_RGB_16_235_8BIT;
 			auto_csc = AUTO_CSC_DISABLE;
@@ -672,14 +670,14 @@ static int inno_hdmi_config_video_csc(struct inno_hdmi *hdmi,
 		}
 	} else {
 		if (colorimetry == HDMI_COLORIMETRY_ITU_601) {
-			if (conn_state->hdmi.output_format == HDMI_COLORSPACE_YUV444) {
+			if (conn_state->hdmi.output_format == DRM_OUTPUT_COLOR_FORMAT_YCBCR444) {
 				csc_mode = CSC_RGB_0_255_TO_ITU601_16_235_8BIT;
 				auto_csc = AUTO_CSC_DISABLE;
 				c0_c2_change = C0_C2_CHANGE_DISABLE;
 				csc_enable = v_CSC_ENABLE;
 			}
 		} else {
-			if (conn_state->hdmi.output_format == HDMI_COLORSPACE_YUV444) {
+			if (conn_state->hdmi.output_format == DRM_OUTPUT_COLOR_FORMAT_YCBCR444) {
 				csc_mode = CSC_RGB_0_255_TO_ITU709_16_235_8BIT;
 				auto_csc = AUTO_CSC_DISABLE;
 				c0_c2_change = C0_C2_CHANGE_DISABLE;
@@ -756,7 +754,7 @@ static int inno_hdmi_config_video_timing(struct inno_hdmi *hdmi,
 	return 0;
 }
 
-static int inno_hdmi_setup(struct inno_hdmi *hdmi, struct drm_atomic_state *state)
+static int inno_hdmi_setup(struct inno_hdmi *hdmi, struct drm_atomic_commit *state)
 {
 	struct drm_bridge *bridge = &hdmi->bridge;
 	struct drm_connector *connector;
@@ -820,7 +818,7 @@ static enum drm_mode_status inno_hdmi_bridge_mode_valid(struct drm_bridge *bridg
 
 	mpixelclk = mode->clock * 1000;
 
-	if (mpixelclk < INNO_HDMI_MIN_TMDS_CLOCK)
+	if (mpixelclk < HDMI_TMDS_CHAR_RATE_MIN_HZ)
 		return MODE_CLOCK_LOW;
 
 	if (inno_hdmi_find_phy_config(hdmi, mpixelclk) < 0)
@@ -863,7 +861,7 @@ inno_hdmi_bridge_edid_read(struct drm_bridge *bridge, struct drm_connector *conn
 }
 
 static void inno_hdmi_bridge_atomic_enable(struct drm_bridge *bridge,
-					   struct drm_atomic_state *state)
+					   struct drm_atomic_commit *state)
 {
 	struct inno_hdmi *hdmi = bridge_to_inno_hdmi(bridge);
 
@@ -871,7 +869,7 @@ static void inno_hdmi_bridge_atomic_enable(struct drm_bridge *bridge,
 }
 
 static void inno_hdmi_bridge_atomic_disable(struct drm_bridge *bridge,
-					    struct drm_atomic_state *state)
+					    struct drm_atomic_commit *state)
 {
 	struct inno_hdmi *hdmi = bridge_to_inno_hdmi(bridge);
 

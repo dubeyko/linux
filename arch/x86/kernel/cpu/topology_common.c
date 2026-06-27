@@ -6,6 +6,7 @@
 #include <asm/intel-family.h>
 #include <asm/apic.h>
 #include <asm/processor.h>
+#include <asm/cpuid/api.h>
 #include <asm/smp.h>
 
 #include "cpu.h"
@@ -157,8 +158,8 @@ static void parse_topology(struct topo_scan *tscan, bool early)
 
 	switch (c->x86_vendor) {
 	case X86_VENDOR_AMD:
-		if (IS_ENABLED(CONFIG_CPU_SUP_AMD))
-			cpu_parse_topology_amd(tscan);
+	case X86_VENDOR_HYGON:
+		cpu_parse_topology_amd(tscan);
 		break;
 	case X86_VENDOR_CENTAUR:
 	case X86_VENDOR_ZHAOXIN:
@@ -169,10 +170,6 @@ static void parse_topology(struct topo_scan *tscan, bool early)
 			parse_legacy(tscan);
 		if (c->cpuid_level >= 0x1a)
 			c->topo.cpu_type = cpuid_eax(0x1a);
-		break;
-	case X86_VENDOR_HYGON:
-		if (IS_ENABLED(CONFIG_CPU_SUP_HYGON))
-			cpu_parse_topology_amd(tscan);
 		break;
 	}
 }

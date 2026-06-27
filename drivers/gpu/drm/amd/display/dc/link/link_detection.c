@@ -41,6 +41,7 @@
 #include "protocols/link_dp_dpia.h"
 #include "protocols/link_dp_phy.h"
 #include "protocols/link_dp_training.h"
+#include "protocols/link_hdmi_frl.h"
 #include "protocols/link_dp_dpia_bw.h"
 #include "accessories/link_dp_trace.h"
 
@@ -78,6 +79,7 @@ static enum ddc_transaction_type get_ddc_transaction_type(enum signal_type sink_
 	case SIGNAL_TYPE_DVI_SINGLE_LINK:
 	case SIGNAL_TYPE_DVI_DUAL_LINK:
 	case SIGNAL_TYPE_HDMI_TYPE_A:
+	case SIGNAL_TYPE_HDMI_FRL:
 	case SIGNAL_TYPE_LVDS:
 	case SIGNAL_TYPE_RGB:
 		transaction_type = DDC_TRANSACTION_TYPE_I2C;
@@ -150,14 +152,6 @@ static enum signal_type get_basic_signal_type(struct graphics_object_id encoder,
 		default:
 			return SIGNAL_TYPE_NONE;
 		}
-	} else if (downstream.type == OBJECT_TYPE_ENCODER) {
-		switch (downstream.id) {
-		case ENCODER_ID_EXTERNAL_NUTMEG:
-		case ENCODER_ID_EXTERNAL_TRAVIS:
-			return SIGNAL_TYPE_DISPLAY_PORT;
-		default:
-			return SIGNAL_TYPE_NONE;
-		}
 	}
 
 	return SIGNAL_TYPE_NONE;
@@ -173,6 +167,10 @@ static enum signal_type link_detect_sink_signal_type(struct dc_link *link,
 	enum signal_type result;
 	struct audio_support *aud_support;
 	struct graphics_object_id enc_id;
+
+	/* External DP bridges should use DP signal regardless of connector type. */
+	if (link->ext_enc_id.id)
+		return SIGNAL_TYPE_DISPLAY_PORT;
 
 	if (link->is_dig_mapping_flexible)
 		enc_id = (struct graphics_object_id){.id = ENCODER_ID_UNKNOWN};
@@ -294,12 +292,12 @@ static bool i2c_read(
 	struct i2c_payload payloads[2] = {
 		{
 		.write = true,
-		.address = address,
+		.address = (uint8_t)address,
 		.length = 1,
 		.data = &offs_data },
 		{
 		.write = false,
-		.address = address,
+		.address = (uint8_t)address,
 		.length = len,
 		.data = buffer } };
 
@@ -356,7 +354,7 @@ static void query_dp_dual_mode_adaptor(
 			*dongle = DISPLAY_DONGLE_DP_DVI_DONGLE;
 			sink_cap->max_hdmi_pixel_clock = DP_ADAPTOR_DVI_MAX_TMDS_CLK;
 
-			CONN_DATA_DETECT(ddc->link, type2_dongle_buf, sizeof(type2_dongle_buf),
+			CONN_DATA_DETECT(link, type2_dongle_buf, sizeof(type2_dongle_buf),
 					"DP-DVI passive dongle %dMhz: ",
 					DP_ADAPTOR_DVI_MAX_TMDS_CLK / 1000);
 			return;
@@ -528,7 +526,7 @@ static void read_current_link_settings_on_detect(struct dc_link *link)
 	uint8_t link_rate_set = 0;
 	uint32_t read_dpcd_retry_cnt = 10;
 	enum dc_status status = DC_ERROR_UNEXPECTED;
-	int i;
+	unsigned int i;
 	union max_down_spread max_down_spread = {0};
 
 	// Read DPCD 00101h to find out the number of lanes currently set
@@ -620,6 +618,14 @@ static bool detect_dp(struct dc_link *link,
 		link->dpcd_caps.usb4_dp_tun_info.dp_tun_cap.raw = 0;
 	}
 
+	if (link->ext_enc_id.id) {
+		/* Fix number of connected sinks reported by external DP bridge */
+		link->dpcd_caps.sink_count.bits.SINK_COUNT = 1;
+		/* NUTMEG requires that we use HBR, doesn't work with RBR. */
+		if (link->dpcd_caps.branch_dev_id == DP_BRANCH_DEVICE_ID_00001A)
+			link->preferred_link_setting.link_rate = LINK_RATE_HIGH;
+	}
+
 	return true;
 }
 
@@ -651,9 +657,7 @@ static bool wait_for_entering_dp_alt_mode(struct dc_link *link)
 	unsigned long long enter_timestamp;
 	unsigned long long finish_timestamp;
 	unsigned long long time_taken_in_ns;
-	int tries_taken;
-
-	DC_LOGGER_INIT(link->ctx->logger);
+	unsigned int tries_taken;
 
 	/**
 	 * this function will only exist if we are on dcn21 (is_in_alt_mode is a
@@ -725,8 +729,6 @@ static void revert_dpia_mst_dsc_always_on_wa(struct dc_link *link)
 
 static bool discover_dp_mst_topology(struct dc_link *link, enum dc_detect_reason reason)
 {
-	DC_LOGGER_INIT(link->ctx->logger);
-
 	LINK_INFO("link=%d, mst branch is now Connected\n",
 		  link->link_index);
 
@@ -746,8 +748,6 @@ static bool discover_dp_mst_topology(struct dc_link *link, enum dc_detect_reason
 
 bool link_reset_cur_dp_mst_topology(struct dc_link *link)
 {
-	DC_LOGGER_INIT(link->ctx->logger);
-
 	LINK_INFO("link=%d, mst branch is now Disconnected\n",
 		  link->link_index);
 
@@ -771,6 +771,60 @@ static bool should_prepare_phy_clocks_for_link_verification(const struct dc *dc,
 	return !can_apply_seamless_boot && reason != DETECT_REASON_BOOT;
 }
 
+static bool is_hdmi_frl_in_use(struct dc_link *link)
+{
+	int i;
+	unsigned int hdmi_conn_count = 0;
+	unsigned int hdmi_stream_count = 0;
+	bool hdmi_frl_in_use = false;
+	bool incoming_link_identical = false;
+
+	/*Enumerate HDMI connector from all present links */
+	for (i = 0; i < link->dc->link_count; i++) {
+		if (link->dc->links[i] != NULL &&
+				dc_is_hdmi_signal(link->dc->links[i]->connector_signal))
+			hdmi_conn_count++;
+	}
+	/* If less than 2 HDMI Connector, assume HPO is always available*/
+	if (hdmi_conn_count < 2)
+		return false;
+
+	/*Enumerate existing HDMI stream count*/
+	for (i = 0; i < link->dc->current_state->stream_count; i++) {
+		if (dc_is_hdmi_signal(link->dc->current_state->streams[i]->signal))
+			hdmi_stream_count++;
+		if (link == link->dc->current_state->streams[i]->link &&
+				(dc_is_hdmi_frl_signal(link->dc->current_state->streams[i]->signal)))
+			incoming_link_identical = true;
+	}
+
+	if (hdmi_stream_count > 1 || (hdmi_stream_count == 1 && !incoming_link_identical)) {
+		for (i = 0; i < link->dc->current_state->stream_count; i++) {
+			if (dc_is_hdmi_frl_signal(
+					link->dc->current_state->streams[i]->signal)) {
+				hdmi_frl_in_use = true;
+				break;
+			}
+		}
+	}
+
+	/* Check if previous link already has been assigned with FRL*/
+	if (!hdmi_frl_in_use && !incoming_link_identical) {
+		for (i = 0; i < link->dc->link_count; i++) {
+			if (link->dc->links[i] != NULL &&
+					link->dc->links[i]->local_sink != NULL &&
+					link != link->dc->links[i] &&
+					dc_is_hdmi_frl_signal(
+							link->dc->links[i]->local_sink->sink_signal)) {
+				hdmi_frl_in_use = true;
+				break;
+			}
+		}
+	}
+
+	return hdmi_frl_in_use;
+}
+
 static void prepare_phy_clocks_for_destructive_link_verification(const struct dc *dc)
 {
 	dc_z10_restore(dc);
@@ -783,7 +837,6 @@ static void restore_phy_clocks_for_destructive_link_verification(const struct dc
 }
 
 static void verify_link_capability_destructive(struct dc_link *link,
-		struct dc_sink *sink,
 		enum dc_detect_reason reason)
 {
 	bool should_prepare_phy_clocks =
@@ -799,6 +852,16 @@ static void verify_link_capability_destructive(struct dc_link *link,
 		dp_verify_link_cap_with_retries(
 				link, &known_limit_link_setting,
 				LINK_TRAINING_MAX_VERIFY_RETRY);
+	} else if (dc_is_hdmi_signal(link->local_sink->sink_signal)) {
+		if (!is_hdmi_frl_in_use(link)) {
+			link_set_all_streams_dpms_off_for_link(link);
+			hdmi_frl_verify_link_cap(link, &link->frl_reported_link_cap);
+			link->local_sink->sink_signal = (link->frl_verified_link_cap.frl_link_rate != HDMI_FRL_LINK_RATE_DISABLE)
+												? SIGNAL_TYPE_HDMI_FRL : SIGNAL_TYPE_HDMI_TYPE_A;
+		} else {
+			link->local_sink->sink_signal = SIGNAL_TYPE_HDMI_TYPE_A;
+			link->frl_verified_link_cap.frl_link_rate = HDMI_FRL_LINK_RATE_DISABLE;
+		}
 	} else {
 		ASSERT(0);
 	}
@@ -818,12 +881,20 @@ static void verify_link_capability_non_destructive(struct dc_link *link)
 			link->verified_link_cap = link->reported_link_cap;
 		else
 			link->verified_link_cap = dp_get_max_link_cap(link);
+	} else if (dc_is_hdmi_signal(link->local_sink->sink_signal)) {
+		link->verified_link_cap = link->reported_link_cap;
+
+		if (is_hdmi_frl_in_use(link)) {
+			link->local_sink->sink_signal = SIGNAL_TYPE_HDMI_TYPE_A;
+			link->frl_verified_link_cap.frl_link_rate = HDMI_FRL_LINK_RATE_DISABLE;
+		}
 	}
 }
 
 static bool should_verify_link_capability_destructively(struct dc_link *link,
 		enum dc_detect_reason reason)
 {
+	(void)reason;
 	bool destrictive = false;
 	struct dc_link_settings max_link_cap;
 	bool is_link_enc_unavailable = false;
@@ -852,16 +923,37 @@ static bool should_verify_link_capability_destructively(struct dc_link *link,
 				destrictive = false;
 			}
 		}
+	} else if (dc_is_hdmi_signal(link->local_sink->sink_signal) && link->link_enc &&
+				link->link_enc->features.flags.bits.IS_HDMI_FRL_CAPABLE &&
+				link->local_sink->edid_caps.max_frl_rate != 0) {
+		int i = 0;
+		struct pipe_ctx *pipes =
+				link->dc->current_state->res_ctx.pipe_ctx;
+
+		destrictive = true;
+		if (is_hdmi_frl_in_use(link)) {
+			destrictive = false;
+		} else if (link->dc->config.skip_frl_pretraining) {
+			for (i = 0; i < MAX_PIPES; i++) {
+				if (pipes[i].stream != NULL &&
+					pipes[i].stream->link == link) {
+					/*If link is already active, skip PHY programming*/
+					if (link->link_status.link_active) {
+						destrictive = false;
+					}
+				}
+			}
+		}
 	}
 
 	return destrictive;
 }
 
-static void verify_link_capability(struct dc_link *link, struct dc_sink *sink,
+static void verify_link_capability(struct dc_link *link,
 		enum dc_detect_reason reason)
 {
 	if (should_verify_link_capability_destructively(link, reason))
-		verify_link_capability_destructive(link, sink, reason);
+		verify_link_capability_destructive(link, reason);
 	else
 		verify_link_capability_non_destructive(link);
 }
@@ -903,11 +995,21 @@ static bool link_detect_evaluate_edid_header(uint8_t edid_header[8])
  */
 static bool link_detect_ddc_probe(struct dc_link *link)
 {
+	enum signal_type signal = link_detect_sink_signal_type(link, DETECT_REASON_HPD);
+	enum ddc_transaction_type transaction_type = get_ddc_transaction_type(signal);
+	uint8_t edid_header[8] = {0};
+	uint8_t zero = 0;
+	bool ddc_probed;
+
 	if (!link->ddc)
 		return false;
 
-	uint8_t edid_header[8] = {0};
-	bool ddc_probed = i2c_read(link->ddc, 0x50, edid_header, sizeof(edid_header));
+	if (link->dc->hwss.prepare_ddc)
+		link->dc->hwss.prepare_ddc(link);
+
+	set_ddc_transaction_type(link->ddc, transaction_type);
+
+	ddc_probed = link_query_ddc_data(link->ddc, 0x50, &zero, 1, edid_header, sizeof(edid_header));
 
 	if (!ddc_probed)
 		return false;
@@ -932,28 +1034,10 @@ static bool link_detect_ddc_probe(struct dc_link *link)
  */
 static bool link_detect_dac_load_detect(struct dc_link *link)
 {
-	struct dc_bios *bios = link->ctx->dc_bios;
-	struct link_encoder *link_enc = link->link_enc;
-	enum engine_id engine_id = link_enc->preferred_engine;
-	enum dal_device_type device_type = DEVICE_TYPE_CRT;
-	enum bp_result bp_result = BP_RESULT_UNSUPPORTED;
-	uint32_t enum_id;
+	if (!link->dc->hwss.dac_load_detect)
+		return false;
 
-	switch (engine_id) {
-	case ENGINE_ID_DACB:
-		enum_id = 2;
-		break;
-	case ENGINE_ID_DACA:
-	default:
-		engine_id = ENGINE_ID_DACA;
-		enum_id = 1;
-		break;
-	}
-
-	if (bios->funcs->dac_load_detection)
-		bp_result = bios->funcs->dac_load_detection(bios, engine_id, device_type, enum_id);
-
-	return bp_result == BP_RESULT_OK;
+	return link->dc->hwss.dac_load_detect(link);
 }
 
 /*
@@ -980,8 +1064,6 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 	struct dpcd_caps prev_dpcd_caps;
 	enum dc_connection_type new_connection_type = dc_connection_none;
 	const uint32_t post_oui_delay = 30; // 30ms
-
-	DC_LOGGER_INIT(link->ctx->logger);
 
 	if (dc_is_virtual_signal(link->connector_signal))
 		return false;
@@ -1019,6 +1101,7 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 
 		/* From Disconnected-to-Connected. */
 		switch (link->connector_signal) {
+		case SIGNAL_TYPE_HDMI_FRL:
 		case SIGNAL_TYPE_HDMI_TYPE_A: {
 			sink_caps.transaction_type = DDC_TRANSACTION_TYPE_I2C;
 			if (aud_support->hdmi_audio_native)
@@ -1246,6 +1329,33 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 		if (dc_is_hdmi_signal(link->connector_signal))
 			read_scdc_caps(link->ddc, link->local_sink);
 
+		if (dc_is_hdmi_signal(link->connector_signal) && dc->debug.enable_hdmi_idcc) {
+			memset(&link->hdmi_cable_id, 0, sizeof(union hdmi_idcc_cable_id));
+			read_idcc_data(link->ddc, HDMI_IDCC_SCOPE_RW_CA,
+				link->hdmi_cable_id.raw, 0, 4);
+		}
+		if (sink->edid_caps.rr_capable)
+			hdmi_frl_write_read_request_enable(link->ddc);
+		/* When FreeSync is toggled through OSD,
+		 * we see same EDID no matter what. Check MCCS caps
+		 * to see if we should update FreeSync caps now.
+		 */
+		dm_helpers_read_mccs_caps(
+				link->ctx,
+				link,
+				sink);
+
+		if (prev_sink != NULL) {
+			if (memcmp(&sink->mccs_caps, &prev_sink->mccs_caps, sizeof(struct mccs_caps)))
+				same_edid = false;
+		}
+
+		if (reason != DETECT_REASON_FALLBACK && dc_is_hdmi_signal(link->connector_signal) &&
+				link->link_enc->features.flags.bits.IS_HDMI_FRL_CAPABLE && sink->edid_caps.max_frl_rate != 0) {
+			hdmi_frl_retrieve_link_cap(link, link->local_sink);
+		}
+		if (reason == DETECT_REASON_FALLBACK && sink->sink_signal == SIGNAL_TYPE_HDMI_FRL)
+			same_edid = false;
 		if (link->connector_signal == SIGNAL_TYPE_DISPLAY_PORT &&
 		    sink_caps.transaction_type ==
 		    DDC_TRANSACTION_TYPE_I2C_OVER_AUX) {
@@ -1260,6 +1370,8 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 				link_disconnect_remap(prev_sink, link);
 				sink = prev_sink;
 				prev_sink = NULL;
+				if (reason == DETECT_REASON_FALLBACK && sink->sink_signal == SIGNAL_TYPE_HDMI_FRL)
+						sink->sink_signal = SIGNAL_TYPE_HDMI_TYPE_A;
 			}
 
 			if (!sink->edid_caps.analog)
@@ -1463,12 +1575,11 @@ bool link_detect(struct dc_link *link, enum dc_detect_reason reason)
 	bool is_delegated_to_mst_top_mgr = false;
 	enum dc_connection_type pre_link_type = link->type;
 
-	DC_LOGGER_INIT(link->ctx->logger);
-
 	is_local_sink_detect_success = detect_link_and_local_sink(link, reason);
 
-	if (is_local_sink_detect_success && link->local_sink)
-		verify_link_capability(link, link->local_sink, reason);
+	if (is_local_sink_detect_success && link->local_sink) {
+		verify_link_capability(link, reason);
+	}
 
 	DC_LOG_DC("%s: link_index=%d is_local_sink_detect_success=%d pre_link_type=%d link_type=%d\n", __func__,
 				link->link_index, is_local_sink_detect_success, pre_link_type, link->type);
@@ -1528,6 +1639,7 @@ bool link_is_hdcp22(struct dc_link *link, enum signal_type signal)
 	case SIGNAL_TYPE_DVI_SINGLE_LINK:
 	case SIGNAL_TYPE_DVI_DUAL_LINK:
 	case SIGNAL_TYPE_HDMI_TYPE_A:
+	case SIGNAL_TYPE_HDMI_FRL:
 		ret = (link->hdcp_caps.rx_caps.fields.version == 0x4) ? 1:0;
 		break;
 	default:
@@ -1561,7 +1673,7 @@ static bool link_add_remote_sink_helper(struct dc_link *dc_link, struct dc_sink 
 struct dc_sink *link_add_remote_sink(
 		struct dc_link *link,
 		const uint8_t *edid,
-		int len,
+		unsigned int len,
 		struct dc_sink_init_data *init_data)
 {
 	struct dc_sink *dc_sink;
@@ -1618,7 +1730,7 @@ fail_add_sink:
 
 void link_remove_remote_sink(struct dc_link *link, struct dc_sink *sink)
 {
-	int i;
+	unsigned int i;
 
 	if (!link->sink_count) {
 		BREAK_TO_DEBUGGER();

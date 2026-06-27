@@ -107,7 +107,6 @@ bool inet_rcv_saddr_equal(const struct sock *sk, const struct sock *sk2,
 				    ipv6_only_sock(sk2), match_wildcard,
 				    match_wildcard);
 }
-EXPORT_SYMBOL(inet_rcv_saddr_equal);
 
 bool inet_rcv_saddr_any(const struct sock *sk)
 {
@@ -710,7 +709,6 @@ out_err:
 	arg->err = error;
 	return NULL;
 }
-EXPORT_SYMBOL(inet_csk_accept);
 
 /*
  * Using different timers for retransmit, delayed acks and probes
@@ -826,7 +824,6 @@ no_route:
 	__IP_INC_STATS(net, IPSTATS_MIB_OUTNOROUTES);
 	return NULL;
 }
-EXPORT_SYMBOL_GPL(inet_csk_route_child_sock);
 
 /* Decide when to expire the request and when to resend SYN-ACK */
 static void syn_ack_recalc(struct request_sock *req,
@@ -903,7 +900,6 @@ struct request_sock *inet_reqsk_alloc(const struct request_sock_ops *ops,
 
 	return req;
 }
-EXPORT_SYMBOL(inet_reqsk_alloc);
 
 void __reqsk_free(struct request_sock *req)
 {
@@ -913,7 +909,6 @@ void __reqsk_free(struct request_sock *req)
 	kfree(req->saved_syn);
 	kmem_cache_free(req->rsk_ops->slab, req);
 }
-EXPORT_SYMBOL_GPL(__reqsk_free);
 
 static struct request_sock *inet_reqsk_clone(struct request_sock *req,
 					     struct sock *sk)
@@ -1022,7 +1017,6 @@ void inet_csk_reqsk_queue_drop_and_put(struct sock *sk, struct request_sock *req
 	inet_csk_reqsk_queue_drop(sk, req);
 	reqsk_put(req);
 }
-EXPORT_IPV6_MOD(inet_csk_reqsk_queue_drop_and_put);
 
 static void reqsk_timer_handler(struct timer_list *t)
 {
@@ -1111,7 +1105,7 @@ static void reqsk_timer_handler(struct timer_list *t)
 
 		if (!inet_ehash_insert(req_to_sk(nreq), req_to_sk(oreq), NULL)) {
 			/* delete timer */
-			__inet_csk_reqsk_queue_drop(sk_listener, nreq, true);
+			__inet_csk_reqsk_queue_drop(sk_listener, nreq, false);
 			goto no_ownership;
 		}
 
@@ -1137,7 +1131,7 @@ no_ownership:
 	}
 
 drop:
-	__inet_csk_reqsk_queue_drop(sk_listener, oreq, true);
+	__inet_csk_reqsk_queue_drop(oreq->rsk_listener, oreq, true);
 	reqsk_put(oreq);
 }
 
@@ -1151,6 +1145,9 @@ static bool reqsk_queue_hash_req(struct request_sock *req)
 	/* The timer needs to be setup after a successful insertion. */
 	req->timeout = tcp_timeout_init((struct sock *)req);
 	timer_setup(&req->rsk_timer, reqsk_timer_handler, TIMER_PINNED);
+
+	preempt_disable_nested();
+
 	mod_timer(&req->rsk_timer, jiffies + req->timeout);
 
 	/* before letting lookups find us, make sure all req fields
@@ -1158,6 +1155,9 @@ static bool reqsk_queue_hash_req(struct request_sock *req)
 	 */
 	smp_wmb();
 	refcount_set(&req->rsk_refcnt, 2 + 1);
+
+	preempt_enable_nested();
+
 	return true;
 }
 
@@ -1277,11 +1277,11 @@ void inet_csk_destroy_sock(struct sock *sk)
 
 	sock_put(sk);
 }
-EXPORT_SYMBOL(inet_csk_destroy_sock);
 
 void inet_csk_prepare_for_destroy_sock(struct sock *sk)
 {
 	/* The below has to be done to allow calling inet_csk_destroy_sock */
+	tcp_clear_sock_ops_cb_flags(sk);
 	sock_set_flag(sk, SOCK_DEAD);
 	tcp_orphan_count_inc();
 }
@@ -1298,7 +1298,6 @@ void inet_csk_prepare_forced_close(struct sock *sk)
 	inet_csk_prepare_for_destroy_sock(sk);
 	inet_sk(sk)->inet_num = 0;
 }
-EXPORT_SYMBOL(inet_csk_prepare_forced_close);
 
 static int inet_ulp_can_listen(const struct sock *sk)
 {
@@ -1402,7 +1401,6 @@ struct sock *inet_csk_reqsk_queue_add(struct sock *sk,
 	spin_unlock(&queue->rskq_lock);
 	return child;
 }
-EXPORT_SYMBOL(inet_csk_reqsk_queue_add);
 
 struct sock *inet_csk_complete_hashdance(struct sock *sk, struct sock *child,
 					 struct request_sock *req, bool own_req)
@@ -1482,16 +1480,19 @@ void inet_csk_listen_stop(struct sock *sk)
 			if (nreq) {
 				refcount_set(&nreq->rsk_refcnt, 1);
 
+				rcu_read_lock();
 				if (inet_csk_reqsk_queue_add(nsk, nreq, child)) {
 					__NET_INC_STATS(sock_net(nsk),
 							LINUX_MIB_TCPMIGRATEREQSUCCESS);
 					reqsk_migrate_reset(req);
+					READ_ONCE(nsk->sk_data_ready)(nsk);
 				} else {
 					__NET_INC_STATS(sock_net(nsk),
 							LINUX_MIB_TCPMIGRATEREQFAILURE);
 					reqsk_migrate_reset(nreq);
 					__reqsk_free(nreq);
 				}
+				rcu_read_unlock();
 
 				/* inet_csk_reqsk_queue_add() has already
 				 * called inet_child_forget() on failure case.
@@ -1523,7 +1524,6 @@ skip_child_forget:
 	}
 	WARN_ON_ONCE(sk->sk_ack_backlog);
 }
-EXPORT_SYMBOL_GPL(inet_csk_listen_stop);
 
 static struct dst_entry *inet_csk_rebuild_route(struct sock *sk, struct flowi *fl)
 {

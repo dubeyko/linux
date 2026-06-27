@@ -35,7 +35,6 @@
 #include <drm/drm_print.h>
 #include <drm/display/drm_hdcp_helper.h>
 
-#include "i915_reg.h"
 #include "intel_de.h"
 #include "intel_display_regs.h"
 #include "intel_display_types.h"
@@ -49,7 +48,7 @@ struct intel_gmbus {
 #define GMBUS_FORCE_BIT_RETRY (1U << 31)
 	u32 force_bit;
 	u32 reg0;
-	i915_reg_t gpio_reg;
+	intel_reg_t gpio_reg;
 	struct i2c_algo_bit_data bit_algo;
 	struct intel_display *display;
 };
@@ -251,7 +250,7 @@ static u32 get_reserved(struct intel_gmbus *bus)
 	preserve_bits |= GPIO_DATA_PULLUP_DISABLE | GPIO_CLOCK_PULLUP_DISABLE;
 
 	/* Wa_16025573575: the masks bits need to be preserved through out */
-	if (intel_display_wa(display, 16025573575))
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_16025573575))
 		preserve_bits |= GPIO_CLOCK_DIR_MASK | GPIO_CLOCK_VAL_MASK |
 				 GPIO_DATA_DIR_MASK | GPIO_DATA_VAL_MASK;
 
@@ -343,7 +342,7 @@ intel_gpio_pre_xfer(struct i2c_adapter *adapter)
 	if (display->platform.pineview)
 		pnv_gmbus_clock_gating(display, false);
 
-	if (intel_display_wa(display, 16025573575))
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_16025573575))
 		ptl_handle_mask_bits(bus, true);
 
 	set_data(bus, 1);
@@ -364,12 +363,12 @@ intel_gpio_post_xfer(struct i2c_adapter *adapter)
 	if (display->platform.pineview)
 		pnv_gmbus_clock_gating(display, true);
 
-	if (intel_display_wa(display, 16025573575))
+	if (intel_display_wa(display, INTEL_DISPLAY_WA_16025573575))
 		ptl_handle_mask_bits(bus, false);
 }
 
 static void
-intel_gpio_setup(struct intel_gmbus *bus, i915_reg_t gpio_reg)
+intel_gpio_setup(struct intel_gmbus *bus, intel_reg_t gpio_reg)
 {
 	struct i2c_algo_bit_data *algo;
 
@@ -695,7 +694,7 @@ retry:
 			goto clear_err;
 	}
 
-	/* Generate a STOP condition on the bus. Note that gmbus can't generata
+	/* Generate a STOP condition on the bus. Note that gmbus can't generate
 	 * a STOP on the very first cycle. To simplify the code we
 	 * unconditionally generate the STOP condition with an additional gmbus
 	 * cycle. */

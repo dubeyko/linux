@@ -76,6 +76,7 @@
 #define MAX_LINK_ENCODERS (MAX_DIG_LINK_ENCODERS + MAX_DAC_LINK_ENCODERS)
 
 #define MAX_DWB_PIPES	1
+#define MAX_HDMI_FRL_ENCODERS	2
 #define MAX_HPO_DP2_ENCODERS	4
 #define MAX_HPO_DP2_LINK_ENCODERS	4
 
@@ -152,6 +153,13 @@ struct dc_rgb {
 	uint32_t blue;
 };
 
+struct tetrahedral_33x33x33 {
+	struct dc_rgb lut0[8985];
+	struct dc_rgb lut1[8984];
+	struct dc_rgb lut2[8984];
+	struct dc_rgb lut3[8984];
+};
+
 struct tetrahedral_17x17x17 {
 	struct dc_rgb lut0[1229];
 	struct dc_rgb lut1[1228];
@@ -165,14 +173,23 @@ struct tetrahedral_9x9x9 {
 	struct dc_rgb lut3[182];
 };
 
+enum lut_dimension {
+	LUT_DIM_INVALID = 0,
+	LUT_DIM_9 = 9,
+	LUT_DIM_17 = 17,
+	LUT_DIM_33 = 33,
+};
+
 struct tetrahedral_params {
 	union {
+//TODO: Uncomment when in use.
+//		struct tetrahedral_33x33x33 tetrahedral_33;
 		struct tetrahedral_17x17x17 tetrahedral_17;
 		struct tetrahedral_9x9x9 tetrahedral_9;
 	};
 	bool use_tetrahedral_9;
 	bool use_12bits;
-
+	enum lut_dimension lut_dim;
 };
 
 /* arr_curve_points - regamma regions/segments specification
@@ -240,7 +257,7 @@ struct default_adjustment {
 	enum dc_color_space out_color_space;
 	enum dc_color_space in_color_space;
 	enum dc_color_depth color_depth;
-	enum pixel_format surface_pixel_format;
+	enum dc_pixel_format surface_pixel_format;
 	enum graphics_csc_adjust_type csc_adjust_type;
 	bool force_hw_default;
 };

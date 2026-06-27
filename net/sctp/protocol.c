@@ -864,7 +864,7 @@ int sctp_udp_sock_start(struct net *net)
 	tuncfg.encap_type = 1;
 	tuncfg.encap_rcv = sctp_udp_rcv;
 	tuncfg.encap_err_lookup = sctp_udp_v4_err;
-	setup_udp_tunnel_sock(net, sock, &tuncfg);
+	setup_udp_tunnel_sock(net, sock->sk, &tuncfg);
 	net->sctp.udp4_sock = sock->sk;
 
 #if IS_ENABLED(CONFIG_IPV6)
@@ -878,7 +878,7 @@ int sctp_udp_sock_start(struct net *net)
 	err = udp_sock_create(net, &udp_conf, &sock);
 	if (err) {
 		pr_err("Failed to create the SCTP UDP tunneling v6 sock\n");
-		udp_tunnel_sock_release(net->sctp.udp4_sock->sk_socket);
+		udp_tunnel_sock_release(net->sctp.udp4_sock);
 		net->sctp.udp4_sock = NULL;
 		return err;
 	}
@@ -886,7 +886,7 @@ int sctp_udp_sock_start(struct net *net)
 	tuncfg.encap_type = 1;
 	tuncfg.encap_rcv = sctp_udp_rcv;
 	tuncfg.encap_err_lookup = sctp_udp_v6_err;
-	setup_udp_tunnel_sock(net, sock, &tuncfg);
+	setup_udp_tunnel_sock(net, sock->sk, &tuncfg);
 	net->sctp.udp6_sock = sock->sk;
 #endif
 
@@ -896,11 +896,11 @@ int sctp_udp_sock_start(struct net *net)
 void sctp_udp_sock_stop(struct net *net)
 {
 	if (net->sctp.udp4_sock) {
-		udp_tunnel_sock_release(net->sctp.udp4_sock->sk_socket);
+		udp_tunnel_sock_release(net->sctp.udp4_sock);
 		net->sctp.udp4_sock = NULL;
 	}
 	if (net->sctp.udp6_sock) {
-		udp_tunnel_sock_release(net->sctp.udp6_sock->sk_socket);
+		udp_tunnel_sock_release(net->sctp.udp6_sock);
 		net->sctp.udp6_sock = NULL;
 	}
 }
@@ -1070,10 +1070,12 @@ static inline int sctp_v4_xmit(struct sk_buff *skb, struct sctp_transport *t)
 	skb_reset_inner_mac_header(skb);
 	skb_reset_inner_transport_header(skb);
 	skb_set_inner_ipproto(skb, IPPROTO_SCTP);
+	local_bh_disable();
 	udp_tunnel_xmit_skb(dst_rtable(dst), sk, skb, fl4->saddr,
 			    fl4->daddr, dscp, ip4_dst_hoplimit(dst), df,
 			    sctp_sk(sk)->udp_port, t->encap_port, false, false,
 			    0);
+	local_bh_enable();
 	return 0;
 }
 
@@ -1261,12 +1263,18 @@ static void sctp_v4_protosw_exit(void)
 
 static int sctp_v4_add_protocol(void)
 {
+	int ret;
+
 	/* Register notifier for inet address additions/deletions. */
-	register_inetaddr_notifier(&sctp_inetaddr_notifier);
+	ret = register_inetaddr_notifier(&sctp_inetaddr_notifier);
+	if (ret)
+		return ret;
 
 	/* Register SCTP with inet layer.  */
-	if (inet_add_protocol(&sctp_protocol, IPPROTO_SCTP) < 0)
+	if (inet_add_protocol(&sctp_protocol, IPPROTO_SCTP) < 0) {
+		unregister_inetaddr_notifier(&sctp_inetaddr_notifier);
 		return -EAGAIN;
+	}
 
 	return 0;
 }

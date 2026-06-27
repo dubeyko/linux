@@ -187,7 +187,9 @@ static void bfs_evict_inode(struct inode *inode)
 	dprintf("ino=%08lx\n", ino);
 
 	truncate_inode_pages_final(&inode->i_data);
-	invalidate_inode_buffers(inode);
+	if (inode->i_nlink)
+		mmb_sync(&BFS_I(inode)->i_metadata_bhs);
+	mmb_invalidate(&BFS_I(inode)->i_metadata_bhs);
 	clear_inode(inode);
 
 	if (inode->i_nlink)
@@ -257,6 +259,8 @@ static struct inode *bfs_alloc_inode(struct super_block *sb)
 	bi = alloc_inode_sb(sb, bfs_inode_cachep, GFP_KERNEL);
 	if (!bi)
 		return NULL;
+	mmb_init(&bi->i_metadata_bhs, &bi->vfs_inode.i_data);
+
 	return &bi->vfs_inode;
 }
 
@@ -307,7 +311,7 @@ void bfs_dump_imap(const char *prefix, struct super_block *s)
 {
 #ifdef DEBUG
 	int i;
-	char *tmpbuf = (char *)get_zeroed_page(GFP_KERNEL);
+	char *tmpbuf = kzalloc(PAGE_SIZE, GFP_KERNEL);
 
 	if (!tmpbuf)
 		return;
@@ -319,7 +323,7 @@ void bfs_dump_imap(const char *prefix, struct super_block *s)
 			strcat(tmpbuf, "0");
 	}
 	printf("%s: lasti=%08lx <%s>\n", prefix, BFS_SB(s)->si_lasti, tmpbuf);
-	free_page((unsigned long)tmpbuf);
+	kfree(tmpbuf);
 #endif
 }
 
@@ -342,7 +346,8 @@ static int bfs_fill_super(struct super_block *s, struct fs_context *fc)
 	s->s_time_min = 0;
 	s->s_time_max = U32_MAX;
 
-	sb_set_blocksize(s, BFS_BSIZE);
+	if (!sb_set_blocksize(s, BFS_BSIZE))
+		goto out;
 
 	sbh = sb_bread(s, 0);
 	if (!sbh)

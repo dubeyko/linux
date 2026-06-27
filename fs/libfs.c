@@ -18,7 +18,6 @@
 #include <linux/exportfs.h>
 #include <linux/iversion.h>
 #include <linux/writeback.h>
-#include <linux/buffer_head.h> /* sync_mapping_buffers */
 #include <linux/fs_context.h>
 #include <linux/pseudo_fs.h>
 #include <linux/fsnotify.h>
@@ -79,8 +78,7 @@ struct dentry *simple_lookup(struct inode *dir, struct dentry *dentry, unsigned 
 	if (IS_ENABLED(CONFIG_UNICODE) && IS_CASEFOLDED(dir))
 		return NULL;
 
-	d_add(dentry, NULL);
-	return NULL;
+	return d_splice_alias(NULL, dentry);
 }
 EXPORT_SYMBOL(simple_lookup);
 
@@ -737,6 +735,7 @@ struct pseudo_fs_context *init_pseudo(struct fs_context *fc,
 		fc->fs_private = ctx;
 		fc->ops = &pseudo_fs_context_ops;
 		fc->sb_flags |= SB_NOUSER;
+		fc->s_iflags |= SB_I_NOEXEC | SB_I_NODEV;
 		fc->global = true;
 	}
 	return ctx;
@@ -1259,7 +1258,7 @@ char *simple_transaction_get(struct file *file, const char __user *buf, size_t s
 	if (size > SIMPLE_TRANSACTION_LIMIT - 1)
 		return ERR_PTR(-EFBIG);
 
-	ar = (struct simple_transaction_argresp *)get_zeroed_page(GFP_KERNEL);
+	ar = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!ar)
 		return ERR_PTR(-ENOMEM);
 
@@ -1268,7 +1267,7 @@ char *simple_transaction_get(struct file *file, const char __user *buf, size_t s
 	/* only one write allowed per open */
 	if (file->private_data) {
 		spin_unlock(&simple_transaction_lock);
-		free_page((unsigned long)ar);
+		kfree(ar);
 		return ERR_PTR(-EBUSY);
 	}
 
@@ -1295,7 +1294,7 @@ EXPORT_SYMBOL(simple_transaction_read);
 
 int simple_transaction_release(struct inode *inode, struct file *file)
 {
-	free_page((unsigned long)file->private_data);
+	kfree(file->private_data);
 	return 0;
 }
 EXPORT_SYMBOL(simple_transaction_release);
@@ -1539,71 +1538,63 @@ struct dentry *generic_fh_to_parent(struct super_block *sb, struct fid *fid,
 EXPORT_SYMBOL_GPL(generic_fh_to_parent);
 
 /**
- * __generic_file_fsync - generic fsync implementation for simple filesystems
+ * simple_fsync_noflush - generic fsync implementation for simple filesystems
  *
  * @file:	file to synchronize
  * @start:	start offset in bytes
  * @end:	end offset in bytes (inclusive)
  * @datasync:	only synchronize essential metadata if true
  *
- * This is a generic implementation of the fsync method for simple
- * filesystems which track all non-inode metadata in the buffers list
- * hanging off the address_space structure.
+ * This function is an fsync handler for simple filesystems. It writes out
+ * dirty data, inode (if dirty), but does not issue a cache flush.
  */
-int __generic_file_fsync(struct file *file, loff_t start, loff_t end,
-				 int datasync)
+int simple_fsync_noflush(struct file *file, loff_t start, loff_t end,
+			 int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
 	int err;
-	int ret;
+	int ret = 0;
 
 	err = file_write_and_wait_range(file, start, end);
 	if (err)
 		return err;
 
-	inode_lock(inode);
-	ret = sync_mapping_buffers(inode->i_mapping);
 	if (!(inode_state_read_once(inode) & I_DIRTY_ALL))
 		goto out;
 	if (datasync && !(inode_state_read_once(inode) & I_DIRTY_DATASYNC))
 		goto out;
 
-	err = sync_inode_metadata(inode, 1);
-	if (ret == 0)
-		ret = err;
-
+	ret = sync_inode_metadata(inode, 1);
 out:
-	inode_unlock(inode);
 	/* check and advance again to catch errors after syncing out buffers */
 	err = file_check_and_advance_wb_err(file);
 	if (ret == 0)
 		ret = err;
 	return ret;
 }
-EXPORT_SYMBOL(__generic_file_fsync);
+EXPORT_SYMBOL(simple_fsync_noflush);
 
 /**
- * generic_file_fsync - generic fsync implementation for simple filesystems
- *			with flush
+ * simple_fsync - fsync implementation for simple filesystems with flush
  * @file:	file to synchronize
  * @start:	start offset in bytes
  * @end:	end offset in bytes (inclusive)
  * @datasync:	only synchronize essential metadata if true
  *
+ * This function is an fsync handler for simple filesystems. It writes out
+ * dirty data, inode (if dirty), and issues a cache flush.
  */
-
-int generic_file_fsync(struct file *file, loff_t start, loff_t end,
-		       int datasync)
+int simple_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	struct inode *inode = file->f_mapping->host;
 	int err;
 
-	err = __generic_file_fsync(file, start, end, datasync);
+	err = simple_fsync_noflush(file, start, end, datasync);
 	if (err)
 		return err;
 	return blkdev_issue_flush(inode->i_sb->s_bdev);
 }
-EXPORT_SYMBOL(generic_file_fsync);
+EXPORT_SYMBOL(simple_fsync);
 
 /**
  * generic_check_addressable - Check addressability of file system
@@ -2318,7 +2309,6 @@ EXPORT_SYMBOL(simple_start_creating);
 /* parent must have been held exclusive since simple_start_creating() */
 void simple_done_creating(struct dentry *child)
 {
-	inode_unlock(child->d_parent->d_inode);
-	dput(child);
+	end_creating(child);
 }
 EXPORT_SYMBOL(simple_done_creating);

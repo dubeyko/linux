@@ -9,10 +9,22 @@ import subprocess
 import time
 
 
-class CmdExitFailure(Exception):
+class CmdInitFailure(Exception):
+    """ Command failed to start. Only raised by bkg(). """
     def __init__(self, msg, cmd_obj):
-        super().__init__(msg)
+        super().__init__(msg + "\n" + repr(cmd_obj))
         self.cmd = cmd_obj
+
+
+class CmdExitFailure(Exception):
+    """ Command failed (returned non-zero exit code). """
+    def __init__(self, msg, cmd_obj):
+        super().__init__(msg + "\n" + repr(cmd_obj))
+        self.cmd = cmd_obj
+
+
+class CmdExitZeroFailure(CmdExitFailure):
+    """ Command succeeded (returned zero exit code), but expected failure. """
 
 
 def fd_read_timeout(fd, timeout):
@@ -31,10 +43,16 @@ class cmd:
 
     Use bkg() instead to run a command in the background.
     """
-    def __init__(self, comm, shell=None, fail=True, ns=None, background=False,
-                 host=None, timeout=5, ksft_ready=None, ksft_wait=None):
+    def __init__(self, comm, shell=None, fail=True, expect_fail=False, ns=None,
+                 background=False, host=None, timeout=5, ksft_ready=None,
+                 ksft_wait=None):
         if ns:
-            comm = f'ip netns exec {ns} ' + comm
+            if hasattr(ns, 'user_ns_path'):
+                comm = (f'nsenter --user={ns.user_ns_path} '
+                        f'--net={ns.net_ns_path} --setuid=0 --setgid=0 -- '
+                        + comm)
+            else:
+                comm = f'ip netns exec {ns} ' + comm
 
         self.stdout = None
         self.stderr = None
@@ -76,30 +94,47 @@ class cmd:
                 msg = fd_read_timeout(rfd, ksft_wait)
                 os.close(rfd)
                 if not msg:
-                    raise Exception("Did not receive ready message")
+                    terminate = self.proc.poll() is None
+                    self._process_terminate(terminate=terminate, timeout=1)
+                    raise CmdInitFailure("Did not receive ready message", self)
         if not background:
-            self.process(terminate=False, fail=fail, timeout=timeout)
+            self.process(terminate=False, fail=fail, expect_fail=expect_fail,
+                         timeout=timeout)
 
-    def process(self, terminate=True, fail=None, timeout=5):
-        if fail is None:
-            fail = not terminate
-
-        if self.ksft_term_fd:
-            os.write(self.ksft_term_fd, b"1")
+    def _process_terminate(self, terminate, timeout):
         if terminate:
             self.proc.terminate()
-        stdout, stderr = self.proc.communicate(timeout)
+        stdout, stderr = self.proc.communicate(timeout=timeout)
         self.stdout = stdout.decode("utf-8")
         self.stderr = stderr.decode("utf-8")
         self.proc.stdout.close()
         self.proc.stderr.close()
         self.ret = self.proc.returncode
 
-        if self.proc.returncode != 0 and fail:
+        return stdout, stderr
+
+    def process(self, terminate=True, fail=None, expect_fail=False, timeout=5):
+        if fail is None:
+            fail = not terminate
+
+        if self.ksft_term_fd:
+            os.write(self.ksft_term_fd, b"1")
+
+        stdout, stderr = self._process_terminate(terminate=terminate,
+                                                 timeout=timeout)
+
+        # Fail on unexpected test failure if fail.
+        # Fail on unexpected test success if expect_fail.
+        # Fail on negative returncode if either:
+        # Set by subprocess on crash or signal, this is never expected failure.
+        if (self.proc.returncode != 0 and fail or
+            (self.proc.returncode < 0 and expect_fail)):
             if len(stderr) > 0 and stderr[-1] == "\n":
                 stderr = stderr[:-1]
-            raise CmdExitFailure("Command failed: %s\nSTDOUT: %s\nSTDERR: %s" %
-                                 (self.proc.args, stdout, stderr), self)
+            raise CmdExitFailure("Command failed", self)
+        elif self.proc.returncode == 0 and expect_fail:
+            raise CmdExitZeroFailure("Command succeeded (expected fail)", self)
+
 
     def __repr__(self):
         def str_fmt(name, s):
@@ -142,14 +177,17 @@ class bkg(cmd):
 
         with bkg("my_binary", ksft_wait=5):
     """
-    def __init__(self, comm, shell=None, fail=None, ns=None, host=None,
-                 exit_wait=False, ksft_ready=None, ksft_wait=None):
+    def __init__(self, comm, shell=None, fail=None, expect_fail=None,
+                 ns=None, host=None, exit_wait=False, ksft_ready=None,
+                 ksft_wait=None):
         super().__init__(comm, background=True,
-                         shell=shell, fail=fail, ns=ns, host=host,
-                         ksft_ready=ksft_ready, ksft_wait=ksft_wait)
+                         shell=shell, fail=fail, expect_fail=expect_fail,
+                         ns=ns, host=host, ksft_ready=ksft_ready,
+                         ksft_wait=ksft_wait)
         self.terminate = not exit_wait and not ksft_wait
         self._exit_wait = exit_wait
         self.check_fail = fail
+        self.expect_fail = expect_fail
 
         if shell and self.terminate:
             print("# Warning: combining shell and terminate is risky!")
@@ -159,9 +197,13 @@ class bkg(cmd):
         return self
 
     def __exit__(self, ex_type, ex_value, ex_tb):
-        # Force termination on exception
-        terminate = self.terminate or (self._exit_wait and ex_type is not None)
-        return self.process(terminate=terminate, fail=self.check_fail)
+        terminate = self.terminate
+        # Force termination on exception, but only if bkg() didn't already exit
+        # since forcing termination silences failures with fail=None
+        if self.proc.poll() is None:
+            terminate = terminate or (self._exit_wait and ex_type is not None)
+        return self.process(terminate=terminate, fail=self.check_fail,
+                            expect_fail=self.expect_fail)
 
 
 GLOBAL_DEFER_QUEUE = []
@@ -202,7 +244,10 @@ class defer:
 def tool(name, args, json=None, ns=None, host=None):
     cmd_str = name + ' '
     if json:
-        cmd_str += '--json '
+        if name == 'tc':
+            cmd_str += '-json '
+        else:
+            cmd_str += '--json '
     cmd_str += args
     cmd_obj = cmd(cmd_str, ns=ns, host=host)
     if json:
@@ -218,6 +263,13 @@ def ip(args, json=None, ns=None, host=None):
     if ns:
         args = f'-netns {ns} ' + args
     return tool('ip', args, json=json, host=host)
+
+
+def tc(args, json=None, ns=None, host=None):
+    """ Helper to call tc with standard set of optional args. """
+    if ns:
+        args = f'-netns {ns} ' + args
+    return tool('tc', args, json=json, host=host)
 
 
 def ethtool(args, json=None, ns=None, host=None):
@@ -240,8 +292,9 @@ def bpftrace(expr, json=None, ns=None, host=None, timeout=None):
         cmd_arr += ['-f', 'json', '-q']
     if timeout:
         expr += ' interval:s:' + str(timeout) + ' { exit(); }'
+        timeout += 20
     cmd_arr += ['-e', expr]
-    cmd_obj = cmd(cmd_arr, ns=ns, host=host, shell=False)
+    cmd_obj = cmd(cmd_arr, ns=ns, host=host, shell=False, timeout=timeout)
     if json:
         # bpftrace prints objects as lines
         ret = {}
@@ -263,9 +316,27 @@ def rand_port(stype=socket.SOCK_STREAM):
     """
     Get a random unprivileged port.
     """
-    with socket.socket(socket.AF_INET6, stype) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
+    return rand_ports(1, stype)[0]
+
+
+def rand_ports(count, stype=socket.SOCK_STREAM):
+    """
+    Get a unique set of random unprivileged ports.
+    """
+    sockets = []
+    ports = []
+
+    try:
+        for _ in range(count):
+            s = socket.socket(socket.AF_INET6, stype)
+            sockets.append(s)
+            s.bind(("", 0))
+            ports.append(s.getsockname()[1])
+    finally:
+        for s in sockets:
+            s.close()
+
+    return ports
 
 
 def wait_port_listen(port, proto="tcp", ns=None, host=None, sleep=0.005, deadline=5):

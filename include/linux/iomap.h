@@ -9,7 +9,7 @@
 #include <linux/types.h>
 #include <linux/mm_types.h>
 #include <linux/blkdev.h>
-#include <linux/pagevec.h>
+#include <linux/folio_batch.h>
 
 struct address_space;
 struct fiemap_extent_info;
@@ -65,6 +65,11 @@ struct vm_fault;
  *
  * IOMAP_F_ATOMIC_BIO indicates that (write) I/O will be issued as an atomic
  * bio, i.e. set REQ_ATOMIC.
+ *
+ * IOMAP_F_INTEGRITY indicates that the filesystems handles integrity metadata.
+ *
+ * IOMAP_F_ZERO_TAIL indicates the remainder of the block after the data
+ * written should be zeroed.
  */
 #define IOMAP_F_NEW		(1U << 0)
 #define IOMAP_F_DIRTY		(1U << 1)
@@ -79,6 +84,20 @@ struct vm_fault;
 #define IOMAP_F_BOUNDARY	(1U << 6)
 #define IOMAP_F_ANON_WRITE	(1U << 7)
 #define IOMAP_F_ATOMIC_BIO	(1U << 8)
+#ifdef CONFIG_BLK_DEV_INTEGRITY
+#define IOMAP_F_INTEGRITY	(1U << 9)
+#else
+#define IOMAP_F_INTEGRITY	0
+#endif /* CONFIG_BLK_DEV_INTEGRITY */
+#define IOMAP_F_ZERO_TAIL	(1U << 10)
+
+/*
+ * Indicates reads and writes of fsverity metadata.
+ *
+ * Fsverity metadata is stored after the regular file data and thus beyond
+ * i_size.
+ */
+#define IOMAP_F_FSVERITY	(1U << 11)
 
 /*
  * Flag reserved for file system specific usage
@@ -133,16 +152,6 @@ static inline sector_t iomap_sector(const struct iomap *iomap, loff_t pos)
 static inline void *iomap_inline_data(const struct iomap *iomap, loff_t pos)
 {
 	return iomap->inline_data + pos - iomap->offset;
-}
-
-/*
- * Check if the mapping's length is within the valid range for inline data.
- * This is used to guard against accessing data beyond the page inline_data
- * points at.
- */
-static inline bool iomap_inline_data_valid(const struct iomap *iomap)
-{
-	return iomap->length <= PAGE_SIZE - offset_in_page(iomap->inline_data);
 }
 
 /*
@@ -344,6 +353,9 @@ static inline bool iomap_want_unshare_iter(const struct iomap_iter *iter)
 ssize_t iomap_file_buffered_write(struct kiocb *iocb, struct iov_iter *from,
 		const struct iomap_ops *ops,
 		const struct iomap_write_ops *write_ops, void *private);
+int iomap_fsverity_write(struct file *file, loff_t pos, size_t length,
+		const void *buf, const struct iomap_ops *ops,
+		const struct iomap_write_ops *write_ops);
 void iomap_read_folio(const struct iomap_ops *ops,
 		struct iomap_read_folio_ctx *ctx, void *private);
 void iomap_readahead(const struct iomap_ops *ops,
@@ -420,6 +432,7 @@ struct iomap_ioend {
 	loff_t			io_offset;	/* offset in the file */
 	sector_t		io_sector;	/* start sector of ioend */
 	void			*io_private;	/* file system private data */
+	struct fsverity_info	*io_vi;		/* fsverity info */
 	struct bio		io_bio;		/* MUST BE LAST! */
 };
 
@@ -493,6 +506,8 @@ struct iomap_read_folio_ctx {
 	struct folio		*cur_folio;
 	struct readahead_control *rac;
 	void			*read_ctx;
+	loff_t			read_ctx_file_offset;
+	struct fsverity_info	*vi;
 };
 
 struct iomap_read_ops {
@@ -512,7 +527,14 @@ struct iomap_read_ops {
 	 *
 	 * This is optional.
 	 */
-	void (*submit_read)(struct iomap_read_folio_ctx *ctx);
+	void (*submit_read)(const struct iomap_iter *iter,
+			struct iomap_read_folio_ctx *ctx);
+
+	/*
+	 * Optional, allows filesystem to specify own bio_set, so new bio's
+	 * can be allocated from the provided bio_set.
+	 */
+	struct bio_set *bio_set;
 };
 
 /*
@@ -598,6 +620,9 @@ int iomap_swapfile_activate(struct swap_info_struct *sis,
 extern struct bio_set iomap_ioend_bioset;
 
 #ifdef CONFIG_BLOCK
+int iomap_bio_read_folio_range(const struct iomap_iter *iter,
+		struct iomap_read_folio_ctx *ctx, size_t plen);
+
 extern const struct iomap_read_ops iomap_bio_read_ops;
 
 static inline void iomap_bio_read_folio(struct folio *folio,

@@ -150,6 +150,8 @@ void rtw89_chan_create(struct rtw89_chan *chan, u8 center_chan, u8 primary_chan,
 						      primary_freq);
 	chan->pri_sb_idx = rtw89_get_primary_sb_idx(center_chan, primary_chan,
 						    bandwidth);
+	chan->rfsi_band = band == RTW89_BAND_2G ? RFSI_CTRL_BAND_2GHZ :
+						  RFSI_CTRL_BAND_5_6GHZ;
 }
 
 static void _rtw89_chan_update_punctured(struct rtw89_dev *rtwdev,
@@ -276,7 +278,6 @@ void rtw89_config_roc_chandef(struct rtw89_dev *rtwdev,
 		}
 
 		hal->roc_chandef = *chandef;
-		hal->roc_link_index = rtw89_vif_link_inst_get_index(rtwvif_link);
 	} else {
 		cur = atomic_cmpxchg(&hal->roc_chanctx_idx, idx,
 				     RTW89_CHANCTX_IDLE);
@@ -382,65 +383,22 @@ static void rtw89_normalize_link_chanctx(struct rtw89_dev *rtwdev,
 	rtw89_swap_chanctx(rtwdev, rtwvif_link->chanctx_idx, cur->chanctx_idx);
 }
 
-const struct rtw89_chan *__rtw89_mgnt_chan_get(struct rtw89_dev *rtwdev,
-					       const char *caller_message,
-					       u8 link_index, bool nullchk)
+static u8 rtw89_entity_role_get_index(struct rtw89_dev *rtwdev)
 {
-	struct rtw89_hal *hal = &rtwdev->hal;
-	struct rtw89_entity_mgnt *mgnt = &hal->entity_mgnt;
-	enum rtw89_chanctx_idx chanctx_idx;
-	enum rtw89_chanctx_idx roc_idx;
 	enum rtw89_entity_mode mode;
-	u8 role_index;
-
-	lockdep_assert_wiphy(rtwdev->hw->wiphy);
-
-	if (unlikely(link_index >= __RTW89_MLD_MAX_LINK_NUM)) {
-		WARN(1, "link index %u is invalid (max link inst num: %d)\n",
-		     link_index, __RTW89_MLD_MAX_LINK_NUM);
-		goto dflt;
-	}
 
 	mode = rtw89_get_entity_mode(rtwdev);
 	switch (mode) {
-	case RTW89_ENTITY_MODE_SCC_OR_SMLD:
-	case RTW89_ENTITY_MODE_MCC:
-		role_index = 0;
-		break;
-	case RTW89_ENTITY_MODE_MCC_PREPARE:
-		role_index = 1;
-		break;
 	default:
 		WARN(1, "Invalid ent mode: %d\n", mode);
-		goto dflt;
+		fallthrough;
+	case RTW89_ENTITY_MODE_SCC_OR_SMLD:
+	case RTW89_ENTITY_MODE_MCC:
+		return 0;
+	case RTW89_ENTITY_MODE_MCC_PREPARE:
+		return 1;
 	}
-
-	chanctx_idx = mgnt->chanctx_tbl[role_index][link_index];
-	if (chanctx_idx == RTW89_CHANCTX_IDLE)
-		goto dflt;
-
-	roc_idx = atomic_read(&hal->roc_chanctx_idx);
-	if (roc_idx != RTW89_CHANCTX_IDLE) {
-		/* ROC is ongoing (given ROC runs on @hal->roc_link_index).
-		 * If @link_index is the same, get the ongoing ROC chanctx.
-		 */
-		if (link_index == hal->roc_link_index)
-			chanctx_idx = roc_idx;
-	}
-
-	return rtw89_chan_get(rtwdev, chanctx_idx);
-
-dflt:
-	if (unlikely(nullchk))
-		return NULL;
-
-	rtw89_debug(rtwdev, RTW89_DBG_CHAN,
-		    "%s (%s): prefetch NULL on link index %u\n",
-		    __func__, caller_message ?: "", link_index);
-
-	return rtw89_chan_get(rtwdev, RTW89_CHANCTX_0);
 }
-EXPORT_SYMBOL(__rtw89_mgnt_chan_get);
 
 bool rtw89_entity_check_hw(struct rtw89_dev *rtwdev, enum rtw89_phy_idx phy_idx)
 {
@@ -463,6 +421,59 @@ void rtw89_entity_force_hw(struct rtw89_dev *rtwdev, enum rtw89_phy_idx phy_idx)
 	else
 		rtw89_debug(rtwdev, RTW89_DBG_CHAN, "%s: (none)\n", __func__);
 }
+
+void rtw89_entity_get_conf(struct rtw89_dev *rtwdev, struct rtw89_entity_conf *conf)
+{
+	struct rtw89_entity_mgnt *mgnt = &rtwdev->hal.entity_mgnt;
+	enum rtw89_chanctx_idx idxes[ARRAY_SIZE(conf->chans)];
+	struct rtw89_vif *role;
+	u8 ridx;
+	int i;
+
+	lockdep_assert_wiphy(rtwdev->hw->wiphy);
+
+	memset(conf, 0, sizeof(*conf));
+
+	ridx = rtw89_entity_role_get_index(rtwdev);
+	role = mgnt->active_roles[ridx];
+	if (role) {
+		struct ieee80211_vif *vif = rtwvif_to_vif(role);
+
+		conf->is_mld = ieee80211_vif_is_mld(vif);
+		conf->en_emlsr = role->mlo_mode == RTW89_MLO_MODE_EMLSR;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(idxes); i++)
+		idxes[i] = RTW89_CHANCTX_IDLE;
+
+	switch (rtwdev->mlo_dbcc_mode) {
+	default:
+	case MLO_2_PLUS_0_1RF:
+		set_bit(0, conf->hw_bitmap);
+		idxes[0] = mgnt->chanctx_tbl[ridx][0];
+		idxes[1] = idxes[0];
+		break;
+	case MLO_0_PLUS_2_1RF:
+		set_bit(1, conf->hw_bitmap);
+		idxes[1] = mgnt->chanctx_tbl[ridx][1];
+		idxes[0] = idxes[1];
+		break;
+	case MLO_1_PLUS_1_1RF:
+		set_bit(0, conf->hw_bitmap);
+		set_bit(1, conf->hw_bitmap);
+		idxes[0] = mgnt->chanctx_tbl[ridx][0];
+		idxes[1] = mgnt->chanctx_tbl[ridx][1];
+		break;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(idxes); i++) {
+		if (idxes[i] == RTW89_CHANCTX_IDLE)
+			idxes[i] = RTW89_CHANCTX_0;
+
+		conf->chans[i] = rtw89_chan_get(rtwdev, idxes[i]);
+	}
+}
+EXPORT_SYMBOL(rtw89_entity_get_conf);
 
 static enum rtw89_mlo_dbcc_mode
 rtw89_entity_sel_mlo_dbcc_mode(struct rtw89_dev *rtwdev, u8 active_hws)
@@ -490,10 +501,28 @@ rtw89_entity_sel_mlo_dbcc_mode(struct rtw89_dev *rtwdev, u8 active_hws)
 	}
 }
 
-static
-void rtw89_entity_recalc_mlo_dbcc_mode(struct rtw89_dev *rtwdev, u8 active_hws)
+static void rtw89_entity_recalc_mlo_dbcc_mode(struct rtw89_dev *rtwdev)
 {
+	struct rtw89_entity_mgnt *mgnt = &rtwdev->hal.entity_mgnt;
 	enum rtw89_mlo_dbcc_mode mode;
+	struct rtw89_vif *role;
+	u8 active_hws = 0;
+	u8 ridx;
+
+	ridx = rtw89_entity_role_get_index(rtwdev);
+	role = mgnt->active_roles[ridx];
+	if (role) {
+		struct rtw89_vif_link *link;
+		int i;
+
+		for (i = 0; i < role->links_inst_valid_num; i++) {
+			link = rtw89_vif_get_link_inst(role, i);
+			if (!link || !link->chanctx_assigned)
+				continue;
+
+			active_hws |= BIT(i);
+		}
+	}
 
 	mode = rtw89_entity_sel_mlo_dbcc_mode(rtwdev, active_hws);
 	rtwdev->mlo_dbcc_mode = mode;
@@ -507,7 +536,6 @@ static void rtw89_entity_recalc_mgnt_roles(struct rtw89_dev *rtwdev)
 	struct rtw89_entity_mgnt *mgnt = &hal->entity_mgnt;
 	struct rtw89_vif_link *link;
 	struct rtw89_vif *role;
-	u8 active_hws = 0;
 	u8 pos = 0;
 	int i, j;
 
@@ -556,13 +584,10 @@ fill:
 				continue;
 
 			mgnt->chanctx_tbl[pos][i] = link->chanctx_idx;
-			active_hws |= BIT(i);
 		}
 
 		mgnt->active_roles[pos++] = role;
 	}
-
-	rtw89_entity_recalc_mlo_dbcc_mode(rtwdev, active_hws);
 }
 
 enum rtw89_entity_mode rtw89_entity_recalc(struct rtw89_dev *rtwdev)
@@ -632,6 +657,9 @@ enum rtw89_entity_mode rtw89_entity_recalc(struct rtw89_dev *rtwdev)
 		return rtw89_get_entity_mode(rtwdev);
 
 	rtw89_set_entity_mode(rtwdev, mode);
+
+	rtw89_entity_recalc_mlo_dbcc_mode(rtwdev);
+
 	return mode;
 }
 

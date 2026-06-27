@@ -290,13 +290,12 @@ static int amdgpu_ras_mgr_sw_init(struct amdgpu_ip_block *ip_block)
 	/* Disabled by default */
 	con->uniras_enabled = false;
 
-	/* Enabled only in debug mode */
-	if (adev->debug_enable_ras_aca) {
+	if (amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 14) ||
+	    amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 12) ||
+	    amdgpu_ip_version(adev, MP0_HWIP, 0) == IP_VERSION(13, 0, 6) ||
+	    adev->debug_enable_ras_aca)
 		con->uniras_enabled = true;
-		RAS_DEV_INFO(adev, "Debug amdgpu uniras!");
-	}
-
-	if (!con->uniras_enabled)
+	else
 		return 0;
 
 	ras_mgr = kzalloc_obj(*ras_mgr);
@@ -310,13 +309,17 @@ static int amdgpu_ras_mgr_sw_init(struct amdgpu_ip_block *ip_block)
 	if (!ras_mgr->ras_core) {
 		RAS_DEV_ERR(adev, "Failed to create ras core!\n");
 		ret = -EINVAL;
-		goto err;
+		goto err1;
 	}
 
 	ras_mgr->ras_core->dev = adev;
 
 	amdgpu_ras_process_init(adev);
-	ras_core_sw_init(ras_mgr->ras_core);
+	ret = ras_core_sw_init(ras_mgr->ras_core);
+	if (ret) {
+		RAS_DEV_ERR(adev, "ras_core_sw_init failed! ret:%d\n", ret);
+		goto err2;
+	}
 	amdgpu_ras_mgr_init_event_mgr(ras_mgr->ras_core);
 
 	if (amdgpu_sriov_vf(adev)) {
@@ -324,14 +327,22 @@ static int amdgpu_ras_mgr_sw_init(struct amdgpu_ip_block *ip_block)
 		if (ret) {
 			RAS_DEV_ERR(adev,
 				"Virt ras sw_init failed! ret:%d\n", ret);
-			goto err;
+			goto err3;
 		}
 	}
 
 	return 0;
 
-err:
+err3:
+	if (ras_mgr->ras_core)
+		ras_core_sw_fini(ras_mgr->ras_core);
+err2:
+	amdgpu_ras_process_fini(adev);
+	if (ras_mgr->ras_core)
+		ras_core_destroy(ras_mgr->ras_core);
+err1:
 	kfree(ras_mgr);
+	con->ras_mgr = NULL;
 	return ret;
 }
 
@@ -499,8 +510,10 @@ uint64_t amdgpu_ras_mgr_gen_ras_event_seqno(struct amdgpu_device *adev,
 	if ((seqno_type == RAS_SEQNO_TYPE_DE) ||
 	    (seqno_type == RAS_SEQNO_TYPE_POISON_CONSUMPTION)) {
 		ret = ras_core_put_seqno(ras_mgr->ras_core, seqno_type, seq_no);
-		if (ret)
+		if (ret) {
 			RAS_DEV_WARN(adev, "There are too many ras interrupts!");
+			return 0;
+		}
 	}
 
 	return seq_no;
@@ -527,6 +540,37 @@ int amdgpu_ras_mgr_handle_controller_interrupt(struct amdgpu_device *adev, void 
 		ret = amdgpu_ras_process_handle_umc_interrupt(adev, ih_info);
 	} else if (ras_mgr->ras_core->poison_supported) {
 		ret = amdgpu_ras_process_handle_unexpected_interrupt(adev, ih_info);
+	} else {
+		RAS_DEV_WARN(adev,
+			"No RAS interrupt handler for non-UMC block with poison disabled.\n");
+	}
+
+	return ret;
+}
+
+int amdgpu_ras_mgr_dispatch_interrupt(struct amdgpu_device *adev, struct ras_ih_info *ih_info)
+{
+	struct amdgpu_ras_mgr *ras_mgr = amdgpu_ras_mgr_get_context(adev);
+	uint64_t seq_no = 0;
+	int ret = 0;
+
+	if (!amdgpu_ras_mgr_is_ready(adev))
+		return -EPERM;
+
+	if (!ih_info)
+		return 0;
+
+	if (ih_info->block == RAS_BLOCK_ID__UMC) {
+		if (ras_mgr->ras_core->poison_supported) {
+			seq_no = amdgpu_ras_mgr_gen_ras_event_seqno(adev, RAS_SEQNO_TYPE_DE);
+			RAS_DEV_INFO(adev,
+				"{%llu} RAS poison is created, no user action is needed.\n",
+				seq_no);
+		}
+
+		ret = amdgpu_ras_process_handle_umc_interrupt(adev, ih_info);
+	} else if (ras_mgr->ras_core->poison_supported) {
+		ret = amdgpu_ras_process_handle_consumption_interrupt(adev, ih_info);
 	} else {
 		RAS_DEV_WARN(adev,
 			"No RAS interrupt handler for non-UMC block with poison disabled.\n");
@@ -570,6 +614,9 @@ bool amdgpu_ras_mgr_check_eeprom_safety_watermark(struct amdgpu_device *adev)
 
 	if (!amdgpu_ras_mgr_is_ready(adev))
 		return false;
+
+	if (ras_fw_eeprom_supported(ras_mgr->ras_core))
+		return ras_fw_eeprom_check_safety_watermark(ras_mgr->ras_core);
 
 	return ras_eeprom_check_safety_watermark(ras_mgr->ras_core);
 }

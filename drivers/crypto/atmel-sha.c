@@ -305,12 +305,12 @@ static size_t atmel_sha_append_sg(struct atmel_sha_reqctx *ctx)
 	size_t count;
 
 	while ((ctx->bufcnt < ctx->buflen) && ctx->total) {
-		count = min(ctx->sg->length - ctx->offset, ctx->total);
-		count = min(count, ctx->buflen - ctx->bufcnt);
+		count = min3(ctx->sg->length - ctx->offset, ctx->total,
+			     ctx->buflen - ctx->bufcnt);
 
-		if (count <= 0) {
+		if (count == 0) {
 			/*
-			* Check if count <= 0 because the buffer is full or
+			* Check if count == 0 because the buffer is full or
 			* because the sg length is 0. In the latest case,
 			* check if there is another sg in the list, a 0 length
 			* sg doesn't necessarily mean the end of the sg list.
@@ -404,20 +404,13 @@ static void atmel_sha_fill_padding(struct atmel_sha_reqctx *ctx, int length)
 
 static struct atmel_sha_dev *atmel_sha_find_dev(struct atmel_sha_ctx *tctx)
 {
-	struct atmel_sha_dev *dd = NULL;
-	struct atmel_sha_dev *tmp;
+	struct atmel_sha_dev *dd;
 
 	spin_lock_bh(&atmel_sha.lock);
-	if (!tctx->dd) {
-		list_for_each_entry(tmp, &atmel_sha.dev_list, list) {
-			dd = tmp;
-			break;
-		}
-		tctx->dd = dd;
-	} else {
-		dd = tctx->dd;
-	}
-
+	if (!tctx->dd)
+		tctx->dd = list_first_entry_or_null(&atmel_sha.dev_list,
+						    struct atmel_sha_dev, list);
+	dd = tctx->dd;
 	spin_unlock_bh(&atmel_sha.lock);
 
 	return dd;
@@ -1731,8 +1724,7 @@ static int atmel_sha_hmac_setup(struct atmel_sha_dev *dd,
 		return atmel_sha_hmac_prehash_key(dd, key, keylen);
 
 	/* Prepare ipad. */
-	memcpy((u8 *)hmac->ipad, key, keylen);
-	memset((u8 *)hmac->ipad + keylen, 0, bs - keylen);
+	memcpy_and_pad(hmac->ipad, bs, key, keylen, 0);
 	return atmel_sha_hmac_compute_ipad_hash(dd);
 }
 

@@ -244,9 +244,9 @@ static bool assign_subvp_pipe(struct dml2_context *ctx, struct dc_state *context
 			continue;
 
 		// Round up
-		refresh_rate = (pipe->stream->timing.pix_clk_100hz * 100 +
+		refresh_rate = (unsigned int)((pipe->stream->timing.pix_clk_100hz * 100 +
 				pipe->stream->timing.v_total * pipe->stream->timing.h_total - 1)
-				/ (double)(pipe->stream->timing.v_total * pipe->stream->timing.h_total);
+				/ (double)(pipe->stream->timing.v_total * pipe->stream->timing.h_total));
 		/* SubVP pipe candidate requirements:
 		 * - Refresh rate < 120hz
 		 * - Not able to switch in vactive naturally (switching in active means the
@@ -264,8 +264,8 @@ static bool assign_subvp_pipe(struct dml2_context *ctx, struct dc_state *context
 			pipe = &context->res_ctx.pipe_ctx[i];
 			if (num_pipes <= free_pipes) {
 				struct dc_stream_state *stream = pipe->stream;
-				unsigned int frame_us = (stream->timing.v_total * stream->timing.h_total /
-						(double)(stream->timing.pix_clk_100hz * 100)) * 1000000;
+				unsigned int frame_us = (unsigned int)((stream->timing.v_total * stream->timing.h_total /
+						(double)(stream->timing.pix_clk_100hz * 100)) * 1000000);
 				if (frame_us > max_frame_time && !stream->ignore_msa_timing_param) {
 					*index = i;
 					max_frame_time = frame_us;
@@ -357,7 +357,7 @@ static bool enough_pipes_for_subvp(struct dml2_context *ctx, struct dc_state *st
  */
 static bool subvp_subvp_schedulable(struct dml2_context *ctx, struct dc_state *context)
 {
-	struct pipe_ctx *subvp_pipes[2];
+	struct pipe_ctx *subvp_pipes[2] = { NULL, NULL };
 	struct dc_stream_state *phantom = NULL;
 	uint32_t microschedule_lines = 0;
 	uint32_t index = 0;
@@ -369,6 +369,9 @@ static bool subvp_subvp_schedulable(struct dml2_context *ctx, struct dc_state *c
 		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
 		uint32_t time_us = 0;
 
+		if (pipe == NULL || pipe->stream == NULL)
+			continue;
+
 		/* Loop to calculate the maximum microschedule time between the two SubVP pipes,
 		 * and also to store the two main SubVP pipe pointers in subvp_pipes[2].
 		 */
@@ -379,31 +382,36 @@ static bool subvp_subvp_schedulable(struct dml2_context *ctx, struct dc_state *c
 					phantom->timing.v_addressable;
 
 			// Round up when calculating microschedule time (+ 1 at the end)
-			time_us = (microschedule_lines * phantom->timing.h_total) /
-					(double)(phantom->timing.pix_clk_100hz * 100) * 1000000 +
+			time_us = (uint32_t)((microschedule_lines * phantom->timing.h_total) /
+					(double)(phantom->timing.pix_clk_100hz * 100) * 1000000) +
 					ctx->config.svp_pstate.subvp_prefetch_end_to_mall_start_us +
 					ctx->config.svp_pstate.subvp_fw_processing_delay_us + 1;
 			if (time_us > max_microschedule_us)
 				max_microschedule_us = time_us;
 
-			subvp_pipes[index] = pipe;
-			index++;
+			if (index < 2)
+				subvp_pipes[index++] = pipe;
 
 			// Maximum 2 SubVP pipes
 			if (index == 2)
 				break;
 		}
 	}
-	vactive1_us = ((subvp_pipes[0]->stream->timing.v_addressable * subvp_pipes[0]->stream->timing.h_total) /
-			(double)(subvp_pipes[0]->stream->timing.pix_clk_100hz * 100)) * 1000000;
-	vactive2_us = ((subvp_pipes[1]->stream->timing.v_addressable * subvp_pipes[1]->stream->timing.h_total) /
-				(double)(subvp_pipes[1]->stream->timing.pix_clk_100hz * 100)) * 1000000;
-	vblank1_us = (((subvp_pipes[0]->stream->timing.v_total - subvp_pipes[0]->stream->timing.v_addressable) *
+
+	/* Minimal guard to avoid C6001 before subvp_pipes[0]/[1] dereference */
+	if (index < 2 || !subvp_pipes[0] || !subvp_pipes[1])
+		return false;
+
+	vactive1_us = (int32_t)(((subvp_pipes[0]->stream->timing.v_addressable * subvp_pipes[0]->stream->timing.h_total) /
+			(double)(subvp_pipes[0]->stream->timing.pix_clk_100hz * 100)) * 1000000);
+	vactive2_us = (int32_t)(((subvp_pipes[1]->stream->timing.v_addressable * subvp_pipes[1]->stream->timing.h_total) /
+				(double)(subvp_pipes[1]->stream->timing.pix_clk_100hz * 100)) * 1000000);
+	vblank1_us = (int32_t)(((subvp_pipes[0]->stream->timing.v_total - subvp_pipes[0]->stream->timing.v_addressable) *
 			subvp_pipes[0]->stream->timing.h_total) /
-			(double)(subvp_pipes[0]->stream->timing.pix_clk_100hz * 100)) * 1000000;
-	vblank2_us = (((subvp_pipes[1]->stream->timing.v_total - subvp_pipes[1]->stream->timing.v_addressable) *
+			(double)(subvp_pipes[0]->stream->timing.pix_clk_100hz * 100) * 1000000);
+	vblank2_us = (int32_t)(((subvp_pipes[1]->stream->timing.v_total - subvp_pipes[1]->stream->timing.v_addressable) *
 			subvp_pipes[1]->stream->timing.h_total) /
-			(double)(subvp_pipes[1]->stream->timing.pix_clk_100hz * 100)) * 1000000;
+			(double)(subvp_pipes[1]->stream->timing.pix_clk_100hz * 100) * 1000000);
 
 	if ((vactive1_us - vblank2_us) / 2 > max_microschedule_us &&
 	    (vactive2_us - vblank1_us) / 2 > max_microschedule_us)
@@ -437,13 +445,13 @@ bool dml2_svp_drr_schedulable(struct dml2_context *ctx, struct dc_state *context
 	struct dc_crtc_timing *main_timing = NULL;
 	struct dc_crtc_timing *phantom_timing = NULL;
 	struct dc_stream_state *phantom_stream;
-	int16_t prefetch_us = 0;
-	int16_t mall_region_us = 0;
-	int16_t drr_frame_us = 0;	// nominal frame time
-	int16_t subvp_active_us = 0;
-	int16_t stretched_drr_us = 0;
-	int16_t drr_stretched_vblank_us = 0;
-	int16_t max_vblank_mallregion = 0;
+	int32_t prefetch_us = 0;
+	int32_t mall_region_us = 0;
+	int32_t drr_frame_us = 0;	// nominal frame time
+	int32_t subvp_active_us = 0;
+	int32_t stretched_drr_us = 0;
+	int32_t drr_stretched_vblank_us = 0;
+	int32_t max_vblank_mallregion = 0;
 
 	// Find SubVP pipe
 	for (i = 0; i < ctx->config.dcn_pipe_count; i++) {
@@ -459,22 +467,27 @@ bool dml2_svp_drr_schedulable(struct dml2_context *ctx, struct dc_state *context
 			break;
 	}
 
+	if (pipe == NULL || pipe->stream == NULL) {
+		// Defensive: should never happen, try to catch in debug
+		ASSERT(0);
+		return false;
+	}
 	phantom_stream = ctx->config.svp_pstate.callbacks.get_paired_subvp_stream(context, pipe->stream);
 	main_timing = &pipe->stream->timing;
 	phantom_timing = &phantom_stream->timing;
-	prefetch_us = (phantom_timing->v_total - phantom_timing->v_front_porch) * phantom_timing->h_total /
+	prefetch_us = (int32_t)((phantom_timing->v_total - phantom_timing->v_front_porch) * phantom_timing->h_total /
 			(double)(phantom_timing->pix_clk_100hz * 100) * 1000000 +
-			ctx->config.svp_pstate.subvp_prefetch_end_to_mall_start_us;
-	subvp_active_us = main_timing->v_addressable * main_timing->h_total /
-			(double)(main_timing->pix_clk_100hz * 100) * 1000000;
-	drr_frame_us = drr_timing->v_total * drr_timing->h_total /
-			(double)(drr_timing->pix_clk_100hz * 100) * 1000000;
+			ctx->config.svp_pstate.subvp_prefetch_end_to_mall_start_us);
+	subvp_active_us = (int32_t)(main_timing->v_addressable * main_timing->h_total /
+			(double)(main_timing->pix_clk_100hz * 100) * 1000000);
+	drr_frame_us = (int32_t)(drr_timing->v_total * drr_timing->h_total /
+			(double)(drr_timing->pix_clk_100hz * 100) * 1000000);
 	// P-State allow width and FW delays already included phantom_timing->v_addressable
-	mall_region_us = phantom_timing->v_addressable * phantom_timing->h_total /
-			(double)(phantom_timing->pix_clk_100hz * 100) * 1000000;
+	mall_region_us = (int32_t)(phantom_timing->v_addressable * phantom_timing->h_total /
+			(double)(phantom_timing->pix_clk_100hz * 100) * 1000000);
 	stretched_drr_us = drr_frame_us + mall_region_us + SUBVP_DRR_MARGIN_US;
-	drr_stretched_vblank_us = (drr_timing->v_total - drr_timing->v_addressable) * drr_timing->h_total /
-			(double)(drr_timing->pix_clk_100hz * 100) * 1000000 + (stretched_drr_us - drr_frame_us);
+	drr_stretched_vblank_us = (int32_t)((drr_timing->v_total - drr_timing->v_addressable) * drr_timing->h_total /
+			(double)(drr_timing->pix_clk_100hz * 100) * 1000000 + (stretched_drr_us - drr_frame_us));
 	max_vblank_mallregion = drr_stretched_vblank_us > mall_region_us ? drr_stretched_vblank_us : mall_region_us;
 
 	/* We consider SubVP + DRR schedulable if the stretched frame duration of the DRR display (i.e. the
@@ -513,12 +526,12 @@ static bool subvp_vblank_schedulable(struct dml2_context *ctx, struct dc_state *
 	bool schedulable = false;
 	uint32_t i = 0;
 	uint8_t vblank_index = 0;
-	uint16_t prefetch_us = 0;
-	uint16_t mall_region_us = 0;
-	uint16_t vblank_frame_us = 0;
-	uint16_t subvp_active_us = 0;
-	uint16_t vblank_blank_us = 0;
-	uint16_t max_vblank_mallregion = 0;
+	uint32_t prefetch_us = 0;
+	uint32_t mall_region_us = 0;
+	uint32_t vblank_frame_us = 0;
+	uint32_t subvp_active_us = 0;
+	uint32_t vblank_blank_us = 0;
+	uint32_t max_vblank_mallregion = 0;
 	struct dc_crtc_timing *main_timing = NULL;
 	struct dc_crtc_timing *phantom_timing = NULL;
 	struct dc_crtc_timing *vblank_timing = NULL;
@@ -542,13 +555,21 @@ static bool subvp_vblank_schedulable(struct dml2_context *ctx, struct dc_state *
 
 		if (!found && pipe_mall_type == SUBVP_NONE) {
 			// Found pipe which is not SubVP or Phantom (i.e. the VBLANK pipe).
-			vblank_index = i;
+			ASSERT(i <= 0xFF);
+			vblank_index = (uint8_t)i;
 			found = true;
 		}
 
 		if (!subvp_pipe && pipe_mall_type == SUBVP_MAIN)
 			subvp_pipe = pipe;
 	}
+
+	if (subvp_pipe == NULL) {
+		// Defensive: should never happen, catch in debug
+		ASSERT(0);
+		return false;
+	}
+
 	// Use ignore_msa_timing_param flag to identify as DRR
 	if (found && context->res_ctx.pipe_ctx[vblank_index].stream->ignore_msa_timing_param) {
 		// SUBVP + DRR case
@@ -560,24 +581,27 @@ static bool subvp_vblank_schedulable(struct dml2_context *ctx, struct dc_state *
 		vblank_timing = &context->res_ctx.pipe_ctx[vblank_index].stream->timing;
 		// Prefetch time is equal to VACTIVE + BP + VSYNC of the phantom pipe
 		// Also include the prefetch end to mallstart delay time
-		prefetch_us = (phantom_timing->v_total - phantom_timing->v_front_porch) * phantom_timing->h_total /
+		prefetch_us = (uint32_t)((phantom_timing->v_total - phantom_timing->v_front_porch) * phantom_timing->h_total /
 				(double)(phantom_timing->pix_clk_100hz * 100) * 1000000 +
-				ctx->config.svp_pstate.subvp_prefetch_end_to_mall_start_us;
+				ctx->config.svp_pstate.subvp_prefetch_end_to_mall_start_us);
 		// P-State allow width and FW delays already included phantom_timing->v_addressable
-		mall_region_us = phantom_timing->v_addressable * phantom_timing->h_total /
-				(double)(phantom_timing->pix_clk_100hz * 100) * 1000000;
-		vblank_frame_us = vblank_timing->v_total * vblank_timing->h_total /
-				(double)(vblank_timing->pix_clk_100hz * 100) * 1000000;
-		vblank_blank_us =  (vblank_timing->v_total - vblank_timing->v_addressable) * vblank_timing->h_total /
-				(double)(vblank_timing->pix_clk_100hz * 100) * 1000000;
-		subvp_active_us = main_timing->v_addressable * main_timing->h_total /
-				(double)(main_timing->pix_clk_100hz * 100) * 1000000;
+		mall_region_us = (uint32_t)(phantom_timing->v_addressable * phantom_timing->h_total /
+				(double)(phantom_timing->pix_clk_100hz * 100) * 1000000);
+		vblank_frame_us = (uint32_t)(vblank_timing->v_total * vblank_timing->h_total /
+				(double)(vblank_timing->pix_clk_100hz * 100) * 1000000);
+		vblank_blank_us = (uint32_t)((vblank_timing->v_total - vblank_timing->v_addressable) * vblank_timing->h_total /
+				(double)(vblank_timing->pix_clk_100hz * 100) * 1000000);
+		subvp_active_us = (uint32_t)(main_timing->v_addressable * main_timing->h_total /
+				(double)(main_timing->pix_clk_100hz * 100) * 1000000);
 		max_vblank_mallregion = vblank_blank_us > mall_region_us ? vblank_blank_us : mall_region_us;
+		const uint64_t required_us = (uint64_t)prefetch_us +
+					     (uint64_t)vblank_frame_us +
+					     (uint64_t)max_vblank_mallregion;
 
 		// Schedulable if VACTIVE region of the SubVP pipe can fit the MALL prefetch, VBLANK frame time,
 		// and the max of (VBLANK blanking time, MALL region)
 		// TODO: Possibly add some margin (i.e. the below conditions should be [...] > X instead of [...] > 0)
-		if (subvp_active_us - prefetch_us - vblank_frame_us - max_vblank_mallregion > 0)
+		if ((uint64_t)subvp_active_us > required_us)
 			schedulable = true;
 	}
 	return schedulable;
@@ -673,10 +697,10 @@ static void set_phantom_stream_timing(struct dml2_context *ctx, struct dc_state 
 	}
 
 	// Calculate lines required for pstate allow width and FW processing delays
-	pstate_width_fw_delay_lines = ((double)(ctx->config.svp_pstate.subvp_fw_processing_delay_us +
+	pstate_width_fw_delay_lines = (uint32_t)(((double)(ctx->config.svp_pstate.subvp_fw_processing_delay_us +
 			ctx->config.svp_pstate.subvp_pstate_allow_width_us) / 1000000) *
 			(ref_pipe->stream->timing.pix_clk_100hz * 100) /
-			(double)ref_pipe->stream->timing.h_total;
+			(double)ref_pipe->stream->timing.h_total);
 
 	// DML calculation for MALL region doesn't take into account FW delay
 	// and required pstate allow width for multi-display cases
@@ -691,7 +715,7 @@ static void set_phantom_stream_timing(struct dml2_context *ctx, struct dc_state 
 	fp_and_sync_width_time = (phantom_stream->timing.v_front_porch + phantom_stream->timing.v_sync_width) * line_time;
 
 	if ((svp_vstartup * line_time) + fp_and_sync_width_time > cvt_rb_vblank_max) {
-		svp_vstartup = (cvt_rb_vblank_max - fp_and_sync_width_time) / line_time;
+		svp_vstartup = (unsigned int)((cvt_rb_vblank_max - fp_and_sync_width_time) / line_time);
 	}
 
 	// For backporch of phantom pipe, use vstartup of the main pipe
@@ -751,6 +775,12 @@ static void enable_phantom_plane(struct dml2_context *ctx,
 					curr_pipe->plane_state);
 			if (!phantom_plane)
 				return;
+		}
+
+		/* Minimal NULL guard for C6011 */
+		if (!phantom_plane) {
+			ASSERT(0);
+			continue;
 		}
 
 		memcpy(&phantom_plane->address, &curr_pipe->plane_state->address, sizeof(phantom_plane->address));
@@ -880,6 +910,11 @@ bool dml2_svp_add_phantom_pipe_to_dc_state(struct dml2_context *ctx, struct dc_s
 	if (ctx->config.svp_pstate.force_disable_subvp)
 		return false;
 
+	if (!state) {
+		ASSERT(0);
+		return false;
+	}
+
 	if (!all_pipes_have_stream_and_plane(ctx, state))
 		return false;
 
@@ -898,6 +933,10 @@ bool dml2_svp_add_phantom_pipe_to_dc_state(struct dml2_context *ctx, struct dc_s
 	}
 
 	if (enough_pipes_for_subvp(ctx, state) && assign_subvp_pipe(ctx, state, &dc_pipe_idx)) {
+		if (state->res_ctx.pipe_ctx[dc_pipe_idx].stream == NULL) {
+			ASSERT(0);
+			return false;
+		}
 		dml_pipe_idx = dml2_helper_find_dml_pipe_idx_by_stream_id(ctx, state->res_ctx.pipe_ctx[dc_pipe_idx].stream->stream_id);
 		svp_height = mode_support_info->SubViewportLinesNeededInMALL[dml_pipe_idx];
 		vstartup = dml_get_vstartup_calculated(&ctx->v20.dml_core_ctx, dml_pipe_idx);

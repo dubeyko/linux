@@ -223,7 +223,7 @@ struct drm_i915_private *mock_gem_device(void)
 	if (!i915->wq)
 		goto err_drv;
 
-	i915->unordered_wq = alloc_workqueue("mock-unordered", 0, 0);
+	i915->unordered_wq = alloc_workqueue("mock-unordered", WQ_PERCPU, 0);
 	if (!i915->unordered_wq)
 		goto err_wq;
 
@@ -277,6 +277,7 @@ void mock_destroy_device(struct drm_i915_private *i915)
 	struct device *dev = i915->drm.dev;
 
 	intel_display_device_remove(i915->display);
+	i915->display = NULL;
 
 	devres_release_group(dev, NULL);
 	put_device(dev);

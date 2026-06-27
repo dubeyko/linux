@@ -115,9 +115,32 @@ static void ionic_get_link_ext_stats(struct net_device *netdev,
 				     struct ethtool_link_ext_stats *stats)
 {
 	struct ionic_lif *lif = netdev_priv(netdev);
+	struct ionic *ionic = lif->ionic;
+	u64 link_down_count_total;
+	u16 link_down_count_fw;
 
-	if (lif->ionic->pdev->is_physfn)
-		stats->link_down_events = lif->link_down_count;
+	if (ionic->pdev->is_virtfn)
+		return;
+
+	if (!ionic->idev.port_info) {
+		netdev_err_once(netdev, "port_info not initialized\n");
+		return;
+	}
+
+	link_down_count_fw =
+	    le16_to_cpu(ionic->idev.port_info->status.link_down_count);
+	link_down_count_total = ionic->idev.link_down_count_total +
+				link_down_count_fw -
+				ionic->idev.link_down_count_last;
+
+	/* The firmware counter is only 16 bits and can wraparound */
+	if (link_down_count_fw < ionic->idev.link_down_count_last)
+		link_down_count_total += BIT(16);
+
+	ionic->idev.link_down_count_last = link_down_count_fw;
+	ionic->idev.link_down_count_total = link_down_count_total;
+
+	stats->link_down_events = link_down_count_total;
 }
 
 static int ionic_get_link_ksettings(struct net_device *netdev,
@@ -188,10 +211,9 @@ static int ionic_get_link_ksettings(struct net_device *netdev,
 	case IONIC_XCVR_PID_QSFP_100G_CWDM4:
 	case IONIC_XCVR_PID_QSFP_100G_PSM4:
 	case IONIC_XCVR_PID_QSFP_100G_LR4:
-		ethtool_link_ksettings_add_link_mode(ks, supported,
-						     100000baseLR4_ER4_Full);
-		break;
 	case IONIC_XCVR_PID_QSFP_100G_ER4:
+	case IONIC_XCVR_PID_QSFP_100G_FR4:
+	case IONIC_XCVR_PID_QSFP_100G_DR4:
 		ethtool_link_ksettings_add_link_mode(ks, supported,
 						     100000baseLR4_ER4_Full);
 		break;
@@ -212,6 +234,7 @@ static int ionic_get_link_ksettings(struct net_device *netdev,
 		break;
 	case IONIC_XCVR_PID_QSFP_200G_AOC:
 	case IONIC_XCVR_PID_QSFP_200G_SR4:
+	case IONIC_XCVR_PID_QSFP_200G_AEC:
 		ethtool_link_ksettings_add_link_mode(ks, supported,
 						     200000baseSR4_Full);
 		break;
@@ -232,6 +255,9 @@ static int ionic_get_link_ksettings(struct net_device *netdev,
 						     400000baseDR4_Full);
 		break;
 	case IONIC_XCVR_PID_QSFP_400G_SR4:
+	case IONIC_XCVR_PID_QSFP_400G_AOC:
+	case IONIC_XCVR_PID_QSFP_400G_AEC:
+	case IONIC_XCVR_PID_QSFP_400G_LPO:
 		ethtool_link_ksettings_add_link_mode(ks, supported,
 						     400000baseSR4_Full);
 		break;
